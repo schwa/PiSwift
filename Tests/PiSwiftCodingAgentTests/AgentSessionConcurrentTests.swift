@@ -1,0 +1,177 @@
+import Foundation
+import Testing
+import PiSwiftAI
+import PiSwiftAgent
+import PiSwiftCodingAgent
+
+private func createAssistantMessage(_ text: String, stopReason: StopReason = .stop) -> AssistantMessage {
+    AssistantMessage(
+        content: [.text(TextContent(text: text))],
+        api: .anthropicMessages,
+        provider: "anthropic",
+        model: "mock",
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: stopReason,
+        errorMessage: stopReason == .error ? "error" : nil,
+        timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+    )
+}
+
+@Test func promptThrowsWhileStreaming() async throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-concurrent-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(systemPrompt: "Test", model: model, tools: []),
+        streamFn: { _model, _context, options in
+            let stream = AssistantMessageEventStream()
+            Task {
+                stream.push(.start(partial: createAssistantMessage("")))
+                while true {
+                    if options.signal?.isCancelled == true {
+                        stream.push(.error(reason: .aborted, error: createAssistantMessage("Aborted", stopReason: .aborted)))
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 5_000_000)
+                }
+            }
+            return stream
+        },
+        getApiKey: { _ in "test-key" }
+    ))
+
+    let sessionManager = SessionManager.inMemory()
+    let settingsManager = SettingsManager.create(tempDir, tempDir)
+    let authStorage = AuthStorage(URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path)
+    let modelRegistry = ModelRegistry(authStorage, tempDir)
+    authStorage.setRuntimeApiKey("anthropic", "test-key")
+
+    let session = AgentSession(config: AgentSessionConfig(
+        agent: agent,
+        sessionManager: sessionManager,
+        settingsManager: settingsManager,
+        modelRegistry: modelRegistry
+    ))
+    defer { session.dispose() }
+
+    let firstPrompt = Task {
+        try await session.prompt("First message")
+    }
+
+    try? await Task.sleep(nanoseconds: 10_000_000)
+    #expect(session.isStreaming == true)
+
+    do {
+        try await session.prompt("Second message")
+        #expect(Bool(false), "Expected prompt to throw while streaming")
+    } catch {
+        #expect(error.localizedDescription.contains("Agent is already processing. Use steer() or followUp()"))
+    }
+
+    await session.abort()
+    _ = try? await firstPrompt.value
+}
+
+@Test func steerWhileStreaming() async throws {
+    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(systemPrompt: "Test", model: model, tools: []),
+        streamFn: { _model, _context, options in
+            let stream = AssistantMessageEventStream()
+            Task {
+                stream.push(.start(partial: createAssistantMessage("")))
+                while options.signal?.isCancelled != true {
+                    try? await Task.sleep(nanoseconds: 5_000_000)
+                }
+                stream.push(.error(reason: .aborted, error: createAssistantMessage("Aborted", stopReason: .aborted)))
+            }
+            return stream
+        },
+        getApiKey: { _ in "test-key" }
+    ))
+
+    let session = AgentSession(config: AgentSessionConfig(
+        agent: agent,
+        sessionManager: SessionManager.inMemory(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: ModelRegistry(AuthStorage(":memory:"))
+    ))
+    defer { session.dispose() }
+
+    let firstPrompt = Task { try await session.prompt("First message") }
+    try? await Task.sleep(nanoseconds: 10_000_000)
+
+    session.steer("Steering message")
+    #expect(session.pendingMessageCount == 1)
+
+    await session.abort()
+    _ = try? await firstPrompt.value
+}
+
+@Test func followUpWhileStreaming() async throws {
+    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(systemPrompt: "Test", model: model, tools: []),
+        streamFn: { _model, _context, options in
+            let stream = AssistantMessageEventStream()
+            Task {
+                stream.push(.start(partial: createAssistantMessage("")))
+                while options.signal?.isCancelled != true {
+                    try? await Task.sleep(nanoseconds: 5_000_000)
+                }
+                stream.push(.error(reason: .aborted, error: createAssistantMessage("Aborted", stopReason: .aborted)))
+            }
+            return stream
+        },
+        getApiKey: { _ in "test-key" }
+    ))
+
+    let session = AgentSession(config: AgentSessionConfig(
+        agent: agent,
+        sessionManager: SessionManager.inMemory(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: ModelRegistry(AuthStorage(":memory:"))
+    ))
+    defer { session.dispose() }
+
+    let firstPrompt = Task { try await session.prompt("First message") }
+    try? await Task.sleep(nanoseconds: 10_000_000)
+
+    session.followUp("Follow-up message")
+    #expect(session.pendingMessageCount == 1)
+
+    await session.abort()
+    _ = try? await firstPrompt.value
+}
+
+@Test func promptAfterCompletion() async throws {
+    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(systemPrompt: "Test", model: model, tools: []),
+        streamFn: { _model, _context, _options in
+            let stream = AssistantMessageEventStream()
+            Task {
+                stream.push(.start(partial: createAssistantMessage("")))
+                stream.push(.done(reason: .stop, message: createAssistantMessage("Done")))
+            }
+            return stream
+        },
+        getApiKey: { _ in "test-key" }
+    ))
+
+    let session = AgentSession(config: AgentSessionConfig(
+        agent: agent,
+        sessionManager: SessionManager.inMemory(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: ModelRegistry(AuthStorage(":memory:"))
+    ))
+    defer { session.dispose() }
+
+    try await session.prompt("First message")
+    try await session.prompt("Second message")
+}

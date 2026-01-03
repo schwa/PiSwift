@@ -64,6 +64,18 @@ internal let ModelsData: [String: [String: Model]] = [
         ),
     ],
     "anthropic": [
+        "claude-sonnet-4-5": Model(
+            id: "claude-sonnet-4-5",
+            name: "Claude Sonnet 4.5",
+            api: .anthropicMessages,
+            provider: "anthropic",
+            baseUrl: "https://api.anthropic.com",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3),
+            contextWindow: 200000,
+            maxTokens: 8192
+        ),
         "claude-3-5-haiku-20241022": Model(
             id: "claude-3-5-haiku-20241022",
             name: "Claude Haiku 3.5",

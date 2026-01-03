@@ -16,15 +16,28 @@ let package = Package(
             name: "PiSwiftAI",
             targets: ["PiSwiftAI"]
         ),
+        .library(
+            name: "PiSwiftAgent",
+            targets: ["PiSwiftAgent"]
+        ),
+        .library(
+            name: "PiSwiftCodingAgent",
+            targets: ["PiSwiftCodingAgent"]
+        ),
         .executable(
             name: "pi-ai",
             targets: ["PiSwiftAICLI"]
+        ),
+        .executable(
+            name: "pi-coding-agent",
+            targets: ["PiSwiftCodingAgentCLI"]
         ),
     ],
     dependencies: [
         .package(url: "https://github.com/MacPaw/OpenAI.git", branch: "main"),
         .package(url: "https://github.com/jamesrochabrun/SwiftAnthropic.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
+        .package(path: "../MiniTui"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -39,6 +52,21 @@ let package = Package(
                 .product(name: "SwiftAnthropic", package: "SwiftAnthropic"),
             ]
         ),
+        .target(
+            name: "PiSwiftAgent",
+            dependencies: ["PiSwiftAI"]
+        ),
+        .target(
+            name: "PiSwiftCodingAgent",
+            dependencies: [
+                "PiSwiftAI",
+                "PiSwiftAgent",
+                .product(name: "MiniTui", package: "MiniTui"),
+            ],
+            resources: [
+                .process("Resources")
+            ]
+        ),
         .executableTarget(
             name: "PiSwiftAICLI",
             dependencies: [
@@ -46,9 +74,27 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
+        .executableTarget(
+            name: "PiSwiftCodingAgentCLI",
+            dependencies: [
+                "PiSwiftCodingAgent",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
         .testTarget(
             name: "PiSwiftAITests",
             dependencies: ["PiSwiftAI"]
+        ),
+        .testTarget(
+            name: "PiSwiftAgentTests",
+            dependencies: ["PiSwiftAgent"]
+        ),
+        .testTarget(
+            name: "PiSwiftCodingAgentTests",
+            dependencies: ["PiSwiftCodingAgent"],
+            resources: [
+                .copy("fixtures")
+            ]
         ),
         .testTarget(
             name: "PiSwiftTests",

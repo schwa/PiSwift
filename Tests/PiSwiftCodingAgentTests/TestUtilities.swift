@@ -1,0 +1,102 @@
+import Foundation
+import PiSwiftAI
+import PiSwiftAgent
+import PiSwiftCodingAgent
+
+let API_KEY: String? = {
+    let env = ProcessInfo.processInfo.environment
+    return env["ANTHROPIC_OAUTH_TOKEN"] ?? env["ANTHROPIC_API_KEY"]
+}()
+
+func userMsg(_ text: String, timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) -> AgentMessage {
+    .user(UserMessage(content: .text(text), timestamp: timestamp))
+}
+
+func assistantMsg(_ text: String, timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) -> AgentMessage {
+    let usage = Usage(input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2)
+    let msg = AssistantMessage(
+        content: [.text(TextContent(text: text))],
+        api: .anthropicMessages,
+        provider: "anthropic",
+        model: "test",
+        usage: usage,
+        stopReason: .stop,
+        timestamp: timestamp
+    )
+    return .assistant(msg)
+}
+
+struct TestSessionOptions {
+    var inMemory: Bool = false
+    var systemPrompt: String?
+    var settingsOverrides: Settings?
+}
+
+struct TestSessionContext {
+    var session: AgentSession
+    var sessionManager: SessionManager
+    var tempDir: String
+    var cleanup: () -> Void
+}
+
+func createTestSession(options: TestSessionOptions = TestSessionOptions()) -> TestSessionContext {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-test-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+
+    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(systemPrompt: options.systemPrompt ?? "You are a helpful assistant.", model: model),
+        convertToLlm: { messages in
+            convertToLlm(messages)
+        },
+        getApiKey: { _ in API_KEY }
+    ))
+
+    let sessionManager = options.inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir, tempDir)
+    let settingsManager = SettingsManager.create(tempDir, tempDir)
+    if let overrides = options.settingsOverrides {
+        settingsManager.applyOverrides(overrides)
+    }
+    let authStorage = AuthStorage(URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path)
+    let modelRegistry = ModelRegistry(authStorage, tempDir)
+
+    if let apiKey = API_KEY {
+        authStorage.setRuntimeApiKey("anthropic", apiKey)
+    }
+
+    let session = AgentSession(config: AgentSessionConfig(
+        agent: agent,
+        sessionManager: sessionManager,
+        settingsManager: settingsManager,
+        modelRegistry: modelRegistry
+    ))
+
+    _ = session.subscribe { _ in }
+
+    let cleanup = {
+        session.dispose()
+        try? FileManager.default.removeItem(atPath: tempDir)
+    }
+
+    return TestSessionContext(session: session, sessionManager: sessionManager, tempDir: tempDir, cleanup: cleanup)
+}
+
+func buildTestTree(session: SessionManager, messages: [(role: String, text: String, branchFrom: String?)]) -> [String: String] {
+    var ids: [String: String] = [:]
+    for message in messages {
+        if let branchFrom = message.branchFrom, let branchId = ids[branchFrom] {
+            session.branch(branchId)
+        }
+
+        let id: String
+        if message.role == "user" {
+            id = session.appendMessage(userMsg(message.text))
+        } else {
+            id = session.appendMessage(assistantMsg(message.text))
+        }
+        ids[message.text] = id
+    }
+    return ids
+}

@@ -1,0 +1,78 @@
+import Foundation
+
+public let APP_NAME = "pi"
+public let CONFIG_DIR_NAME = ".pi"
+public let VERSION = "0.0.0"
+public let ENV_AGENT_DIR = "\(APP_NAME.uppercased())_CODING_AGENT_DIR"
+
+public func getPackageDir() -> String {
+    FileManager.default.currentDirectoryPath
+}
+
+public func getThemesDir() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("theme")
+}
+
+public func getExportTemplateDir() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("export-html")
+}
+
+public func getPackageJsonPath() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("package.json")
+}
+
+public func getReadmePath() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("README.md")
+}
+
+public func getDocsPath() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("docs")
+}
+
+public func getExamplesPath() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("examples")
+}
+
+public func getChangelogPath() -> String {
+    (getPackageDir() as NSString).appendingPathComponent("CHANGELOG.md")
+}
+
+public func getAgentDir() -> String {
+    if let override = ProcessInfo.processInfo.environment[ENV_AGENT_DIR], !override.isEmpty {
+        return override
+    }
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    return home.appendingPathComponent(CONFIG_DIR_NAME).appendingPathComponent("agent").path
+}
+
+public func getCustomThemesDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("themes")
+}
+
+public func getModelsPath() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("models.json")
+}
+
+public func getAuthPath() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("auth.json")
+}
+
+public func getSettingsPath() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("settings.json")
+}
+
+public func getToolsDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("tools")
+}
+
+public func getCommandsDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("commands")
+}
+
+public func getSessionsDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("sessions")
+}
+
+public func getDebugLogPath() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("\(APP_NAME)-debug.log")
+}
