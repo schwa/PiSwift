@@ -1,5 +1,6 @@
 import Foundation
 import PiSwiftAI
+import PiSwiftAgent
 
 public final class HookRunner: @unchecked Sendable {
     private var hooks: [LoadedHook]
@@ -194,6 +195,9 @@ public final class HookRunner: @unchecked Sendable {
                         if let result = result as? SessionBeforeBranchResult, result.cancel {
                             return result
                         }
+                        if let result = result as? SessionBeforeSwitchResult, result.cancel {
+                            return result
+                        }
                     }
                 } catch {
                     emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription))
@@ -225,5 +229,49 @@ public final class HookRunner: @unchecked Sendable {
         }
 
         return lastResult
+    }
+
+    public func emitContext(_ messages: [AgentMessage], signal: CancellationToken? = nil) async -> [AgentMessage] {
+        _ = signal
+        let context = createContext()
+        var currentMessages = messages
+
+        for hook in hooks {
+            guard let handlers = hook.handlers["context"] else { continue }
+            for handler in handlers {
+                do {
+                    if let result = try await handler(ContextEvent(messages: currentMessages), context) as? ContextEventResult,
+                       let replacement = result.messages {
+                        currentMessages = replacement
+                    }
+                } catch {
+                    emitError(HookError(hookPath: hook.path, event: "context", error: error.localizedDescription))
+                }
+            }
+        }
+
+        return currentMessages
+    }
+
+    public func emitBeforeAgentStart(_ prompt: String, _ images: [ImageContent]?) async -> BeforeAgentStartEventResult? {
+        let context = createContext()
+        var result: BeforeAgentStartEventResult?
+
+        for hook in hooks {
+            guard let handlers = hook.handlers["before_agent_start"] else { continue }
+            for handler in handlers {
+                do {
+                    if let handlerResult = try await handler(BeforeAgentStartEvent(prompt: prompt, images: images), context) as? BeforeAgentStartEventResult {
+                        if result == nil, handlerResult.message != nil {
+                            result = handlerResult
+                        }
+                    }
+                } catch {
+                    emitError(HookError(hookPath: hook.path, event: "before_agent_start", error: error.localizedDescription))
+                }
+            }
+        }
+
+        return result
     }
 }

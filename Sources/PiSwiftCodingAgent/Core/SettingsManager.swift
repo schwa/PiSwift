@@ -204,6 +204,12 @@ public final class SettingsManager: @unchecked Sendable {
         )
     }
 
+    public func setRetryEnabled(_ enabled: Bool) {
+        if globalSettings.retry == nil { globalSettings.retry = RetrySettings() }
+        globalSettings.retry?.enabled = enabled
+        save()
+    }
+
     public func getHideThinkingBlock() -> Bool {
         settings.hideThinkingBlock ?? false
     }

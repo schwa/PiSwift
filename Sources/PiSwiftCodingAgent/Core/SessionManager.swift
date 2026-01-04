@@ -663,6 +663,14 @@ public final class SessionManager: @unchecked Sendable {
         entries
     }
 
+    public func setSessionFile(_ path: String) {
+        sessionDir = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        loadFromFile(path)
+        if let header {
+            cwd = header.cwd
+        }
+    }
+
     public func getBranch(_ leafId: String? = nil) -> [SessionEntry] {
         guard let targetId = leafId ?? self.leafId else { return [] }
         guard let leaf = byId[targetId] else { return [] }

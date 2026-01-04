@@ -24,19 +24,23 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - CLI orchestration + TUI: `pi-mono/packages/coding-agent/src/main.ts` + `cli.ts` -> `Sources/PiSwiftCodingAgentCLI/main.swift` (interactive mode wiring)
 - SDK: `pi-mono/packages/coding-agent/src/core/sdk.ts` -> `Sources/PiSwiftCodingAgent/Core/SDK.swift` (custom tools discovery + wrapping, hook discovery supports bundles)
 - Hook loader + tool wrapper: `pi-mono/packages/coding-agent/src/core/hooks/loader.ts`, `pi-mono/packages/coding-agent/src/core/hooks/tool-wrapper.ts` -> `Sources/PiSwiftCodingAgent/Core/Hooks/HookLoader.swift`, `Sources/PiSwiftCodingAgent/Core/Hooks/ToolWrapper.swift` (bundle-based hooks)
+- Hook runtime: `pi-mono/packages/coding-agent/src/core/hooks/runner.ts` -> `Sources/PiSwiftCodingAgent/Core/Hooks/HookRunner.swift` (context/before_agent_start/session/agent/turn events)
 - Custom tools pipeline: `pi-mono/packages/coding-agent/src/core/custom-tools/*` -> `Sources/PiSwiftCodingAgent/Core/CustomTools/*` + CLI/TUI wiring
+- RPC mode: `pi-mono/packages/coding-agent/src/modes/rpc/*` -> `Sources/PiSwiftCodingAgent/Modes/RpcMode.swift` (JSON protocol + hook UI + command handling)
 
 ## Partial / stubs (implemented but missing JS behavior)
-- Config + package detection/versioning: `pi-mono/packages/coding-agent/src/config.ts` -> `Sources/PiSwiftCodingAgent/Config.swift` (no package.json-driven name/version, bun/tsx detection, theme/export path resolution logic)
-- Hooks: `pi-mono/packages/coding-agent/src/core/hooks/types.ts` + `runner.ts` -> `Sources/PiSwiftCodingAgent/Core/Hooks/HookTypes.swift` + `HookRunner.swift` (missing JS hook runtime)
-- CLI orchestration: `pi-mono/packages/coding-agent/src/main.ts` + `cli.ts` -> `Sources/PiSwiftCodingAgentCLI/main.swift` (RPC/print mode parity incomplete)
 - Print mode: `pi-mono/packages/coding-agent/src/modes/print-mode.ts` -> `Sources/PiSwiftCodingAgent/Modes/PrintMode.swift` (JSON event stream + assistant-only text output, no rich formatting)
-- RPC mode: `pi-mono/packages/coding-agent/src/modes/rpc/*` -> `Sources/PiSwiftCodingAgent/Modes/RpcMode.swift` (stub)
 - Export HTML: `pi-mono/packages/coding-agent/src/core/export-html/*` -> `Sources/PiSwiftCodingAgent/Core/ExportHtml.swift` (simple HTML stub)
 - CLI args parsing: `pi-mono/packages/coding-agent/src/cli/args.ts` -> `Sources/PiSwiftCodingAgent/CLI/Args.swift` (parsing exists; wiring is minimal)
+
+## Not required
+- Config + package detection/versioning: `pi-mono/packages/coding-agent/src/config.ts` -> `Sources/PiSwiftCodingAgent/Config.swift` (no package.json-driven name/version, bun/tsx detection, theme/export path resolution logic)
 
 ## Task Queue (next in order)
 - [x] Hook UI context + commands: expose `HookUIContext` in interactive mode (select/confirm/input/custom/editor/status), register slash commands, and route hook message renderers.
 - [x] Wire hook discovery into CLI runtime (load bundles from hook paths; surface load errors).
 - [x] Custom tools pipeline: loader + wrapping tools with `CustomToolContext` and UI context bridge.
-- [ ] Config/version parity: package.json-driven name/version, bun/tsx detection, theme/export path resolution.
+- [x] RPC mode: JSON protocol support + hook UI + command handling.
+- [ ] Export HTML: parity with JS formatting + assets.
+- [ ] Print mode: richer formatting parity (colors/format) and output flushing.
+- [ ] CLI args: finish wiring for remaining flags and behaviors.

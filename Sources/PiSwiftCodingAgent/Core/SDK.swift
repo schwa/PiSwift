@@ -470,6 +470,9 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         convertToLlm: { messages in
             convertToLlm(messages)
         },
+        transformContext: hookRunner == nil ? nil : { messages, signal in
+            await hookRunner?.emitContext(messages, signal: signal) ?? messages
+        },
         steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
         followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
         getApiKey: { provider in

@@ -84,6 +84,73 @@ public struct BranchableMessage: Sendable {
     }
 }
 
+public struct SessionStats: Sendable {
+    public var sessionFile: String?
+    public var sessionId: String
+    public var userMessages: Int
+    public var assistantMessages: Int
+    public var toolCalls: Int
+    public var toolResults: Int
+    public var totalMessages: Int
+    public var tokens: TokenStats
+    public var cost: Double
+
+    public struct TokenStats: Sendable {
+        public var input: Int
+        public var output: Int
+        public var cacheRead: Int
+        public var cacheWrite: Int
+        public var total: Int
+
+        public init(input: Int, output: Int, cacheRead: Int, cacheWrite: Int, total: Int) {
+            self.input = input
+            self.output = output
+            self.cacheRead = cacheRead
+            self.cacheWrite = cacheWrite
+            self.total = total
+        }
+    }
+
+    public init(
+        sessionFile: String?,
+        sessionId: String,
+        userMessages: Int,
+        assistantMessages: Int,
+        toolCalls: Int,
+        toolResults: Int,
+        totalMessages: Int,
+        tokens: TokenStats,
+        cost: Double
+    ) {
+        self.sessionFile = sessionFile
+        self.sessionId = sessionId
+        self.userMessages = userMessages
+        self.assistantMessages = assistantMessages
+        self.toolCalls = toolCalls
+        self.toolResults = toolResults
+        self.totalMessages = totalMessages
+        self.tokens = tokens
+        self.cost = cost
+    }
+}
+
+public enum ModelCycleDirection: String, Sendable {
+    case forward
+    case backward
+}
+
+public struct ModelCycleResult: Sendable {
+    public var model: Model
+    public var thinkingLevel: ThinkingLevel
+    public var isScoped: Bool
+
+    public init(model: Model, thinkingLevel: ThinkingLevel, isScoped: Bool) {
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+        self.isScoped = isScoped
+    }
+}
+
 public final class AgentSession: @unchecked Sendable {
     public let agent: Agent
     public let sessionManager: SessionManager
@@ -102,6 +169,10 @@ public final class AgentSession: @unchecked Sendable {
 
     private var compactionAbort: CancellationToken?
     private var branchSummaryAbort: CancellationToken?
+    private var bashAbort: CancellationToken?
+    private var pendingBashMessages: [BashExecutionMessage] = []
+    private var isCompactingInternal = false
+    private var turnIndex = 0
 
     public init(config: AgentSessionConfig) {
         self.agent = config.agent
@@ -214,6 +285,30 @@ public final class AgentSession: @unchecked Sendable {
             }
         }
 
+        if case .agentEnd = event {
+            flushPendingBashMessages()
+        }
+
+        if let hookRunner = _hookRunner {
+            switch event {
+            case .agentStart:
+                turnIndex = 0
+                Task { _ = await hookRunner.emit(AgentStartEvent()) }
+            case .agentEnd(let messages):
+                Task { _ = await hookRunner.emit(AgentEndEvent(messages: messages)) }
+            case .turnStart:
+                let currentIndex = turnIndex
+                let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+                Task { _ = await hookRunner.emit(TurnStartEvent(turnIndex: currentIndex, timestamp: timestamp)) }
+            case .turnEnd(let message, let toolResults):
+                let currentIndex = turnIndex
+                turnIndex += 1
+                Task { _ = await hookRunner.emit(TurnEndEvent(turnIndex: currentIndex, message: message, toolResults: toolResults)) }
+            default:
+                break
+            }
+        }
+
         emit(.agent(event))
     }
 
@@ -252,8 +347,21 @@ public final class AgentSession: @unchecked Sendable {
         } else {
             expandedText = text
         }
-        let userMessage = buildUserMessage(text: expandedText, images: options?.images)
-        try await agent.prompt(userMessage)
+        var messages: [AgentMessage] = [buildUserMessage(text: expandedText, images: options?.images)]
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("before_agent_start") {
+            if let result = await hookRunner.emitBeforeAgentStart(expandedText, options?.images),
+               let message = result.message {
+                let hookMessage = HookMessage(
+                    customType: message.customType,
+                    content: message.content,
+                    display: message.display,
+                    details: message.details,
+                    timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                )
+                messages.append(makeHookAgentMessage(hookMessage))
+            }
+        }
+        try await agent.prompt(messages)
     }
 
     public func `continue`() async throws {
@@ -321,6 +429,273 @@ public final class AgentSession: @unchecked Sendable {
         agent.abort()
         compactionAbort?.cancel()
         branchSummaryAbort?.cancel()
+        bashAbort?.cancel()
+    }
+
+    public var isBashRunning: Bool {
+        bashAbort != nil
+    }
+
+    public func executeBash(_ command: String, onChunk: (@Sendable (String) -> Void)? = nil) async throws -> BashResult {
+        let abortToken = CancellationToken()
+        bashAbort = abortToken
+        defer { bashAbort = nil }
+
+        let result = try await PiSwiftCodingAgent.executeBash(command, options: BashExecutorOptions(onChunk: onChunk, signal: abortToken))
+        let message = BashExecutionMessage(
+            command: command,
+            output: result.output,
+            exitCode: result.exitCode,
+            cancelled: result.cancelled,
+            truncated: result.truncated,
+            fullOutputPath: result.fullOutputPath
+        )
+
+        if isStreaming {
+            pendingBashMessages.append(message)
+        } else {
+            let agentMessage = makeBashExecutionAgentMessage(message)
+            agent.appendMessage(agentMessage)
+            _ = sessionManager.appendMessage(agentMessage)
+        }
+
+        return result
+    }
+
+    public func abortBash() {
+        bashAbort?.cancel()
+    }
+
+    private func flushPendingBashMessages() {
+        guard !pendingBashMessages.isEmpty else { return }
+        for message in pendingBashMessages {
+            let agentMessage = makeBashExecutionAgentMessage(message)
+            agent.appendMessage(agentMessage)
+            _ = sessionManager.appendMessage(agentMessage)
+        }
+        pendingBashMessages.removeAll()
+    }
+
+    public var autoCompactionEnabled: Bool {
+        settingsManager.getCompactionEnabled()
+    }
+
+    public var isCompacting: Bool {
+        isCompactingInternal
+    }
+
+    public var steeringMode: String {
+        agent.getSteeringMode().rawValue
+    }
+
+    public var followUpMode: String {
+        agent.getFollowUpMode().rawValue
+    }
+
+    public func setAutoCompactionEnabled(_ enabled: Bool) {
+        settingsManager.setCompactionEnabled(enabled)
+    }
+
+    public func setAutoRetryEnabled(_ enabled: Bool) {
+        settingsManager.setRetryEnabled(enabled)
+    }
+
+    public func abortRetry() {
+        // Auto-retry is not implemented in the Swift port yet.
+    }
+
+    public func newSession(_ options: NewSessionOptions? = nil) async -> Bool {
+        let previousSession = sessionFile
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_switch") {
+            if let result = await hookRunner.emit(SessionBeforeSwitchEvent(reason: .new)) as? SessionBeforeSwitchResult,
+               result.cancel {
+                return false
+            }
+        }
+        await abort()
+        agent.reset()
+        _ = sessionManager.newSession(options)
+        steeringMessages.removeAll()
+        followUpMessages.removeAll()
+        if let hookRunner = _hookRunner {
+            _ = await hookRunner.emit(SessionSwitchEvent(reason: .new, previousSessionFile: previousSession))
+        }
+        await emitCustomToolSessionEvent(.switch, previousSessionFile: previousSession)
+        return true
+    }
+
+    public func switchSession(_ sessionPath: String) async -> Bool {
+        let previousSession = sessionFile
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_switch") {
+            if let result = await hookRunner.emit(SessionBeforeSwitchEvent(reason: .resume, targetSessionFile: sessionPath)) as? SessionBeforeSwitchResult,
+               result.cancel {
+                return false
+            }
+        }
+        await abort()
+        agent.reset()
+        steeringMessages.removeAll()
+        followUpMessages.removeAll()
+        sessionManager.setSessionFile(sessionPath)
+        if let hookRunner = _hookRunner {
+            _ = await hookRunner.emit(SessionSwitchEvent(reason: .resume, previousSessionFile: previousSession))
+        }
+        syncAgentContext()
+        await emitCustomToolSessionEvent(.switch, previousSessionFile: previousSession)
+        return true
+    }
+
+    public func getAvailableModels() async -> [Model] {
+        await modelRegistry.getAvailable()
+    }
+
+    public func setModel(_ model: Model) async throws {
+        guard await modelRegistry.getApiKey(model.provider) != nil else {
+            throw NSError(domain: "AgentSession", code: 10, userInfo: [NSLocalizedDescriptionKey: "No API key for \(model.provider)/\(model.id)"])
+        }
+        agent.setModel(model)
+        sessionManager.appendModelChange(model.provider, model.id)
+        settingsManager.setDefaultModelAndProvider(model.provider, model.id)
+        setThinkingLevel(agent.state.thinkingLevel)
+    }
+
+    public func cycleModel(direction: ModelCycleDirection = .forward) async throws -> ModelCycleResult? {
+        if !scopedModels.isEmpty {
+            return try await cycleScopedModel(direction)
+        }
+        return try await cycleAvailableModel(direction)
+    }
+
+    private func cycleScopedModel(_ direction: ModelCycleDirection) async throws -> ModelCycleResult? {
+        guard scopedModels.count > 1 else { return nil }
+        let current = agent.state.model
+        let currentIndex = scopedModels.firstIndex { modelsAreEqual($0.model, current) } ?? 0
+        let count = scopedModels.count
+        let nextIndex = direction == .forward ? (currentIndex + 1) % count : (currentIndex - 1 + count) % count
+        let next = scopedModels[nextIndex]
+        guard await modelRegistry.getApiKey(next.model.provider) != nil else {
+            throw NSError(domain: "AgentSession", code: 11, userInfo: [NSLocalizedDescriptionKey: "No API key for \(next.model.provider)/\(next.model.id)"])
+        }
+        agent.setModel(next.model)
+        sessionManager.appendModelChange(next.model.provider, next.model.id)
+        settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id)
+        setThinkingLevel(next.thinkingLevel)
+        return ModelCycleResult(model: next.model, thinkingLevel: agent.state.thinkingLevel, isScoped: true)
+    }
+
+    private func cycleAvailableModel(_ direction: ModelCycleDirection) async throws -> ModelCycleResult? {
+        let models = await modelRegistry.getAvailable()
+        guard models.count > 1 else { return nil }
+        let current = agent.state.model
+        let currentIndex = models.firstIndex { modelsAreEqual($0, current) } ?? 0
+        let count = models.count
+        let nextIndex = direction == .forward ? (currentIndex + 1) % count : (currentIndex - 1 + count) % count
+        let next = models[nextIndex]
+        guard await modelRegistry.getApiKey(next.provider) != nil else {
+            throw NSError(domain: "AgentSession", code: 12, userInfo: [NSLocalizedDescriptionKey: "No API key for \(next.provider)/\(next.id)"])
+        }
+        agent.setModel(next)
+        sessionManager.appendModelChange(next.provider, next.id)
+        settingsManager.setDefaultModelAndProvider(next.provider, next.id)
+        setThinkingLevel(agent.state.thinkingLevel)
+        return ModelCycleResult(model: next, thinkingLevel: agent.state.thinkingLevel, isScoped: false)
+    }
+
+    public func setThinkingLevel(_ level: ThinkingLevel) {
+        var effective = level
+        if !agent.state.model.reasoning {
+            effective = .off
+        } else if level == .xhigh && !supportsXhigh(model: agent.state.model) {
+            effective = .high
+        }
+        agent.setThinkingLevel(effective)
+        sessionManager.appendThinkingLevelChange(effective.rawValue)
+        settingsManager.setDefaultThinkingLevel(effective.rawValue)
+    }
+
+    public func cycleThinkingLevel() -> ThinkingLevel? {
+        guard agent.state.model.reasoning else { return nil }
+        let levels: [ThinkingLevel] = supportsXhigh(model: agent.state.model)
+            ? [.off, .minimal, .low, .medium, .high, .xhigh]
+            : [.off, .minimal, .low, .medium, .high]
+        let currentIndex = levels.firstIndex(of: agent.state.thinkingLevel) ?? 0
+        let next = levels[(currentIndex + 1) % levels.count]
+        setThinkingLevel(next)
+        return next
+    }
+
+    public func setSteeringMode(_ mode: AgentSteeringMode) {
+        agent.setSteeringMode(mode)
+        settingsManager.setSteeringMode(mode.rawValue)
+    }
+
+    public func setFollowUpMode(_ mode: AgentFollowUpMode) {
+        agent.setFollowUpMode(mode)
+        settingsManager.setFollowUpMode(mode.rawValue)
+    }
+
+    public func getSessionStats() -> SessionStats {
+        let state = agent.state
+        let userMessages = state.messages.filter { $0.role == "user" }.count
+        let assistantMessages = state.messages.filter { $0.role == "assistant" }.count
+        let toolResults = state.messages.filter { $0.role == "toolResult" }.count
+
+        var toolCalls = 0
+        var totalInput = 0
+        var totalOutput = 0
+        var totalCacheRead = 0
+        var totalCacheWrite = 0
+        var totalCost: Double = 0
+
+        for message in state.messages {
+            if case .assistant(let assistant) = message {
+                toolCalls += assistant.content.filter {
+                    if case .toolCall = $0 { return true }
+                    return false
+                }.count
+                totalInput += assistant.usage.input
+                totalOutput += assistant.usage.output
+                totalCacheRead += assistant.usage.cacheRead
+                totalCacheWrite += assistant.usage.cacheWrite
+                totalCost += assistant.usage.cost.total
+            }
+        }
+
+        let tokens = SessionStats.TokenStats(
+            input: totalInput,
+            output: totalOutput,
+            cacheRead: totalCacheRead,
+            cacheWrite: totalCacheWrite,
+            total: totalInput + totalOutput + totalCacheRead + totalCacheWrite
+        )
+        return SessionStats(
+            sessionFile: sessionFile,
+            sessionId: sessionId,
+            userMessages: userMessages,
+            assistantMessages: assistantMessages,
+            toolCalls: toolCalls,
+            toolResults: toolResults,
+            totalMessages: state.messages.count,
+            tokens: tokens,
+            cost: totalCost
+        )
+    }
+
+    public func getLastAssistantText() -> String? {
+        let lastAssistant = agent.state.messages.reversed().first { message in
+            if case .assistant(let assistant) = message {
+                return !(assistant.stopReason == .aborted && assistant.content.isEmpty)
+            }
+            return false
+        }
+        guard case .assistant(let assistant)? = lastAssistant else { return nil }
+        let text = assistant.content.compactMap { block -> String? in
+            if case .text(let text) = block {
+                return text.text
+            }
+            return nil
+        }.joined()
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
     }
 
     public func getUserMessagesForBranching() -> [BranchableMessage] {
@@ -343,12 +718,14 @@ public final class AgentSession: @unchecked Sendable {
 
         let selectedText = extractUserContentText(user.content)
         let previousSession = sessionFile
+        var skipConversationRestore = false
 
         if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_branch") {
             if let result = await hookRunner.emit(SessionBeforeBranchEvent(entryId: entryId)) as? SessionBeforeBranchResult {
                 if result.cancel {
                     return (selectedText, true)
                 }
+                skipConversationRestore = result.skipConversationRestore
             }
         }
 
@@ -358,13 +735,15 @@ public final class AgentSession: @unchecked Sendable {
             _ = sessionManager.createBranchedSession(parentId)
         }
 
-        syncAgentContext()
-
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionBranchEvent(previousSessionFile: previousSession))
         }
 
         await emitCustomToolSessionEvent(.branch, previousSessionFile: previousSession)
+
+        if !skipConversationRestore {
+            syncAgentContext()
+        }
 
         return (selectedText, false)
     }
@@ -496,6 +875,8 @@ public final class AgentSession: @unchecked Sendable {
     }
 
     public func compact(customInstructions: String? = nil) async throws -> CompactionResult {
+        isCompactingInternal = true
+        defer { isCompactingInternal = false }
         compactionAbort = CancellationToken()
         defer { compactionAbort = nil }
 

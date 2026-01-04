@@ -237,6 +237,104 @@ public protocol HookEvent: Sendable {
     var type: String { get }
 }
 
+public enum SessionSwitchReason: String, Sendable {
+    case new
+    case resume
+}
+
+public struct SessionStartEvent: HookEvent, Sendable {
+    public let type: String = "session_start"
+
+    public init() {}
+}
+
+public struct SessionBeforeSwitchEvent: HookEvent, Sendable {
+    public let type: String = "session_before_switch"
+    public var reason: SessionSwitchReason
+    public var targetSessionFile: String?
+
+    public init(reason: SessionSwitchReason, targetSessionFile: String? = nil) {
+        self.reason = reason
+        self.targetSessionFile = targetSessionFile
+    }
+}
+
+public struct SessionSwitchEvent: HookEvent, Sendable {
+    public let type: String = "session_switch"
+    public var reason: SessionSwitchReason
+    public var previousSessionFile: String?
+
+    public init(reason: SessionSwitchReason, previousSessionFile: String?) {
+        self.reason = reason
+        self.previousSessionFile = previousSessionFile
+    }
+}
+
+public struct SessionShutdownEvent: HookEvent, Sendable {
+    public let type: String = "session_shutdown"
+
+    public init() {}
+}
+
+public struct ContextEvent: HookEvent, Sendable {
+    public let type: String = "context"
+    public var messages: [AgentMessage]
+
+    public init(messages: [AgentMessage]) {
+        self.messages = messages
+    }
+}
+
+public struct BeforeAgentStartEvent: HookEvent, Sendable {
+    public let type: String = "before_agent_start"
+    public var prompt: String
+    public var images: [ImageContent]?
+
+    public init(prompt: String, images: [ImageContent]?) {
+        self.prompt = prompt
+        self.images = images
+    }
+}
+
+public struct AgentStartEvent: HookEvent, Sendable {
+    public let type: String = "agent_start"
+
+    public init() {}
+}
+
+public struct AgentEndEvent: HookEvent, Sendable {
+    public let type: String = "agent_end"
+    public var messages: [AgentMessage]
+
+    public init(messages: [AgentMessage]) {
+        self.messages = messages
+    }
+}
+
+public struct TurnStartEvent: HookEvent, Sendable {
+    public let type: String = "turn_start"
+    public var turnIndex: Int
+    public var timestamp: Int64
+
+    public init(turnIndex: Int, timestamp: Int64) {
+        self.turnIndex = turnIndex
+        self.timestamp = timestamp
+    }
+}
+
+public struct TurnEndEvent: HookEvent, Sendable {
+    public let type: String = "turn_end"
+    public var turnIndex: Int
+    public var message: AgentMessage
+    public var toolResults: [ToolResultMessage]
+
+    public init(turnIndex: Int, message: AgentMessage, toolResults: [ToolResultMessage]) {
+        self.turnIndex = turnIndex
+        self.message = message
+        self.toolResults = toolResults
+    }
+}
+
 public struct SessionBeforeCompactEvent: HookEvent, Sendable {
     public let type: String = "session_before_compact"
     public var preparation: CompactionPreparation
@@ -376,6 +474,22 @@ public struct SessionBeforeCompactResult: Sendable {
     }
 }
 
+public struct BeforeAgentStartEventResult: Sendable {
+    public var message: HookMessageInput?
+
+    public init(message: HookMessageInput? = nil) {
+        self.message = message
+    }
+}
+
+public struct SessionBeforeSwitchResult: Sendable {
+    public var cancel: Bool
+
+    public init(cancel: Bool = false) {
+        self.cancel = cancel
+    }
+}
+
 public struct SessionBeforeBranchResult: Sendable {
     public var cancel: Bool
     public var skipConversationRestore: Bool
@@ -393,6 +507,14 @@ public struct SessionBeforeTreeResult: Sendable {
     public init(cancel: Bool = false, summary: BranchSummaryResult? = nil) {
         self.cancel = cancel
         self.summary = summary
+    }
+}
+
+public struct ContextEventResult: Sendable {
+    public var messages: [AgentMessage]?
+
+    public init(messages: [AgentMessage]? = nil) {
+        self.messages = messages
     }
 }
 

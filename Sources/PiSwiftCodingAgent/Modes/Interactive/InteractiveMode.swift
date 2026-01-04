@@ -421,6 +421,8 @@ public final class InteractiveMode {
             }
         }
 
+        _ = await hookRunner.emit(SessionStartEvent())
+
         let hookCommands = hookRunner.getRegisteredCommands().map { command in
             SlashCommand(name: command.name, description: command.description ?? "(hook command)")
         }
@@ -1193,7 +1195,10 @@ public final class InteractiveMode {
     @MainActor
     private func shutdown() {
         if let session {
-            Task {
+            Task { [session] in
+                if let hookRunner = session.hookRunner {
+                    _ = await hookRunner.emit(SessionShutdownEvent())
+                }
                 await session.emitCustomToolSessionEvent(.shutdown)
             }
         }
