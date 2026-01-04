@@ -29,9 +29,9 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - RPC mode: `pi-mono/packages/coding-agent/src/modes/rpc/*` -> `Sources/PiSwiftCodingAgent/Modes/RpcMode.swift` (JSON protocol + hook UI + command handling)
 - Export HTML: `pi-mono/packages/coding-agent/src/core/export-html/*` -> `Sources/PiSwiftCodingAgent/Core/ExportHtml.swift` + `Sources/PiSwiftCodingAgent/Resources/export-html/*`
 - Print mode: `pi-mono/packages/coding-agent/src/modes/print-mode.ts` -> `Sources/PiSwiftCodingAgent/Modes/PrintMode.swift` (JSON event stream + ANSI markdown rendering + output flush)
+- CLI args parsing + wiring: `pi-mono/packages/coding-agent/src/cli/args.ts` -> `Sources/PiSwiftCodingAgent/CLI/Args.swift` + `Sources/PiSwiftCodingAgentCLI/main.swift`
 
 ## Partial / stubs (implemented but missing JS behavior)
-- CLI args parsing: `pi-mono/packages/coding-agent/src/cli/args.ts` -> `Sources/PiSwiftCodingAgent/CLI/Args.swift` (parsing exists; wiring is minimal)
 
 ## Not required
 - Config + package detection/versioning: `pi-mono/packages/coding-agent/src/config.ts` -> `Sources/PiSwiftCodingAgent/Config.swift` (no package.json-driven name/version, bun/tsx detection, theme/export path resolution logic)
@@ -41,4 +41,4 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - [x] Wire hook discovery into CLI runtime (load bundles from hook paths; surface load errors).
 - [x] Custom tools pipeline: loader + wrapping tools with `CustomToolContext` and UI context bridge.
 - [x] RPC mode: JSON protocol support + hook UI + command handling.
-- [ ] CLI args: finish wiring for remaining flags and behaviors.
+- [x] CLI args: finish wiring for remaining flags and behaviors.

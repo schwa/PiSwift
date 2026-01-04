@@ -46,6 +46,7 @@ public struct Args: Sendable {
 }
 
 private let validThinkingLevels: Set<String> = ["off", "minimal", "low", "medium", "high", "xhigh"]
+private let toolNames = ToolName.allCases.map { $0.rawValue }
 
 public func isValidThinkingLevel(_ level: String) -> Bool {
     validThinkingLevels.contains(level)
@@ -120,7 +121,14 @@ public func parseArgs(_ args: [String]) -> Args {
         case "--tools":
             if i + 1 < args.count {
                 let toolNames = args[i + 1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                let valid = toolNames.compactMap { ToolName(rawValue: $0) }
+                var valid: [ToolName] = []
+                for name in toolNames {
+                    if let tool = ToolName(rawValue: name) {
+                        valid.append(tool)
+                    } else {
+                        warn("Warning: Unknown tool \"\(name)\". Valid tools: \(ToolName.allCases.map { $0.rawValue }.joined(separator: ", "))")
+                    }
+                }
                 result.tools = valid
                 i += 1
             }
@@ -129,6 +137,8 @@ public func parseArgs(_ args: [String]) -> Args {
                 let level = args[i + 1]
                 if isValidThinkingLevel(level) {
                     result.thinking = ThinkingLevel(rawValue: level)
+                } else {
+                    warn("Warning: Invalid thinking level \"\(level)\". Valid values: \(validThinkingLevels.sorted().joined(separator: ", "))")
                 }
                 i += 1
             }
@@ -180,6 +190,105 @@ public func parseArgs(_ args: [String]) -> Args {
 }
 
 public func printHelp() {
-    print("\(APP_NAME) - AI coding assistant\n")
-    print("Usage:\n  \(APP_NAME) [options] [@files...] [messages...]\n")
+    let toolsList = ToolName.allCases.map { $0.rawValue }.joined(separator: ", ")
+    let help = """
+\(APP_NAME) - AI coding assistant
+
+Usage:
+  \(APP_NAME) [options] [@files...] [messages...]
+
+Options:
+  --provider <name>              Provider name
+  --model <id>                   Model ID
+  --api-key <key>                API key (defaults to env vars)
+  --system-prompt <text>         System prompt
+  --append-system-prompt <text>  Append text or file contents to the system prompt
+  --mode <mode>                  Output mode: text (default), json, or rpc
+  --print, -p                    Non-interactive mode: process prompt and exit
+  --continue, -c                 Continue previous session
+  --resume, -r                   Select a session to resume
+  --session <path>               Use specific session file
+  --session-dir <dir>            Directory for session storage and lookup
+  --no-session                   Don't save session (ephemeral)
+  --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
+                                 Supports globs (anthropic/*, *sonnet*) and fuzzy matching
+  --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write)
+                                 Available: \(toolsList)
+  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
+  --hook <path>                  Load a hook file (can be used multiple times)
+  --tool <path>                  Load a custom tool file (can be used multiple times)
+  --no-skills                    Disable skills discovery and loading
+  --skills <patterns>            Comma-separated glob patterns to filter skills (e.g., git-*,docker)
+  --export <file>                Export session file to HTML and exit
+  --list-models [search]         List available models (with optional fuzzy search)
+  --help, -h                     Show this help
+  --version, -v                  Show version number
+
+Examples:
+  # Interactive mode
+  \(APP_NAME)
+
+  # Interactive mode with initial prompt
+  \(APP_NAME) "List all .ts files in src/"
+
+  # Include files in initial message
+  \(APP_NAME) @prompt.md @image.png "What color is the sky?"
+
+  # Non-interactive mode (process and exit)
+  \(APP_NAME) -p "List all .ts files in src/"
+
+  # Multiple messages (interactive)
+  \(APP_NAME) "Read package.json" "What dependencies do we have?"
+
+  # Continue previous session
+  \(APP_NAME) --continue "What did we discuss?"
+
+  # Use different model
+  \(APP_NAME) --provider openai --model gpt-4o-mini "Help me refactor this code"
+
+  # Limit model cycling to specific models
+  \(APP_NAME) --models claude-sonnet,claude-haiku,gpt-4o
+
+  # Limit to a specific provider with glob pattern
+  \(APP_NAME) --models "github-copilot/*"
+
+  # Cycle models with fixed thinking levels
+  \(APP_NAME) --models sonnet:high,haiku:low
+
+  # Start with a specific thinking level
+  \(APP_NAME) --thinking high "Solve this complex problem"
+
+  # Read-only mode (no file modifications possible)
+  \(APP_NAME) --tools read,grep,find,ls -p "Review the code in src/"
+
+  # Export a session file to HTML
+  \(APP_NAME) --export ~/\(CONFIG_DIR_NAME)/agent/sessions/--path--/session.jsonl
+  \(APP_NAME) --export session.jsonl output.html
+
+Environment Variables:
+  ANTHROPIC_API_KEY       - Anthropic Claude API key
+  ANTHROPIC_OAUTH_TOKEN   - Anthropic OAuth token (alternative to API key)
+  OPENAI_API_KEY          - OpenAI GPT API key
+  GEMINI_API_KEY          - Google Gemini API key
+  GROQ_API_KEY            - Groq API key
+  CEREBRAS_API_KEY        - Cerebras API key
+  XAI_API_KEY             - xAI Grok API key
+  OPENROUTER_API_KEY      - OpenRouter API key
+  ZAI_API_KEY             - ZAI API key
+  \(ENV_AGENT_DIR) - Session storage directory (default: ~/\(CONFIG_DIR_NAME)/agent)
+
+Available Tools (default: read, bash, edit, write):
+  read   - Read file contents
+  bash   - Execute bash commands
+  edit   - Edit files with find/replace
+  write  - Write files (creates/overwrites)
+  grep   - Search file contents (read-only, off by default)
+  find   - Find files by glob pattern (read-only, off by default)
+  ls     - List directory contents (read-only, off by default)
+"""
+    print(help)
+}
+
+private func warn(_ message: String) {
+    fputs("\(message)\n", stderr)
 }

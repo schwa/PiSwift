@@ -10,11 +10,11 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "pi-coding-agent",
         abstract: "AI coding assistant",
-        helpNames: []
+        discussion: Self.helpDiscussion(),
+        version: VERSION
     )
 
-    @Argument(parsing: .captureForPassthrough)
-    var rawArgs: [String] = []
+    @OptionGroup var cli: CLIOptions
 
     mutating func run() async throws {
         time("start")
@@ -22,17 +22,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let migratedProviders = migrationResult.migratedAuthProviders
         time("runMigrations")
 
-        var parsed = parseArgs(rawArgs)
+        var parsed = cli.toArgs()
         time("parseArgs")
-
-        if parsed.help == true {
-            printHelp()
-            return
-        }
-        if parsed.version == true {
-            print("\(APP_NAME) \(VERSION)")
-            return
-        }
 
         let cwd = FileManager.default.currentDirectoryPath
         let authStorage = AuthStorage(getAuthPath())
@@ -116,13 +107,27 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             Darwin.exit(1)
         }
 
-        if !isInteractive, let model = initialModel {
-            let apiKey: String?
-            if let override = parsed.apiKey {
-                apiKey = override
-            } else {
-                apiKey = await authStorage.getApiKey(model.provider)
+        if let apiKey = parsed.apiKey {
+            let apiKeyModel: Model? = {
+                if let provider = parsed.provider, let modelId = parsed.model {
+                    return modelRegistry.find(provider, modelId)
+                }
+                if !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true {
+                    return scopedModels[0].model
+                }
+                return nil
+            }()
+
+            guard let apiKeyModel else {
+                fputs("--api-key requires a model to be specified via --provider/--model or -m/--models\n", stderr)
+                Darwin.exit(1)
             }
+
+            authStorage.setRuntimeApiKey(apiKeyModel.provider, apiKey)
+        }
+
+        if !isInteractive, let model = initialModel {
+            let apiKey = await authStorage.getApiKey(model.provider)
             if apiKey == nil {
                 fputs("No API key found for \(model.provider)\n", stderr)
                 Darwin.exit(1)
@@ -212,9 +217,6 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
             followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
             getApiKey: { provider in
-                if let override = parsed.apiKey {
-                    return override
-                }
                 return await authStorage.getApiKey(provider)
             }
         ))
@@ -306,6 +308,104 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 initialMessageResult.images
             )
         }
+    }
+
+    static func main() async {
+        let processed = Self.preprocessArguments(Array(CommandLine.arguments.dropFirst()))
+        await self.main(processed)
+    }
+
+    private static func helpDiscussion() -> String {
+        let toolNames = ToolName.allCases.map { $0.rawValue }.joined(separator: ", ")
+        return """
+Examples:
+  # Interactive mode
+  \(APP_NAME)
+
+  # Interactive mode with initial prompt
+  \(APP_NAME) "List all .ts files in src/"
+
+  # Include files in initial message
+  \(APP_NAME) @prompt.md @image.png "What color is the sky?"
+
+  # Non-interactive mode (process and exit)
+  \(APP_NAME) -p "List all .ts files in src/"
+
+  # Continue previous session
+  \(APP_NAME) --continue "What did we discuss?"
+
+  # Use different model
+  \(APP_NAME) --provider openai --model gpt-4o-mini "Help me refactor this code"
+
+  # Limit model cycling to specific models
+  \(APP_NAME) --models claude-sonnet,claude-haiku,gpt-4o
+
+  # Limit to a specific provider with glob pattern
+  \(APP_NAME) --models "github-copilot/*"
+
+  # Cycle models with fixed thinking levels
+  \(APP_NAME) --models sonnet:high,haiku:low
+
+  # Start with a specific thinking level
+  \(APP_NAME) --thinking high "Solve this complex problem"
+
+  # Read-only mode (no file modifications possible)
+  \(APP_NAME) --tools read,grep,find,ls -p "Review the code in src/"
+
+  # Export a session file to HTML
+  \(APP_NAME) --export ~/\(CONFIG_DIR_NAME)/agent/sessions/--path--/session.jsonl
+  \(APP_NAME) --export session.jsonl output.html
+
+Environment Variables:
+  ANTHROPIC_API_KEY       - Anthropic Claude API key
+  ANTHROPIC_OAUTH_TOKEN   - Anthropic OAuth token (alternative to API key)
+  OPENAI_API_KEY          - OpenAI GPT API key
+  GEMINI_API_KEY          - Google Gemini API key
+  GROQ_API_KEY            - Groq API key
+  CEREBRAS_API_KEY        - Cerebras API key
+  XAI_API_KEY             - xAI Grok API key
+  OPENROUTER_API_KEY      - OpenRouter API key
+  ZAI_API_KEY             - ZAI API key
+  \(ENV_AGENT_DIR) - Session storage directory (default: ~/\(CONFIG_DIR_NAME)/agent)
+
+Available Tools (default: read, bash, edit, write):
+  \(toolNames)
+"""
+    }
+
+    private static func preprocessArguments(_ args: [String]) -> [String] {
+        var result: [String] = []
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            if arg == "--list-models" {
+                result.append(arg)
+                if i + 1 < args.count {
+                    let next = args[i + 1]
+                    if !next.hasPrefix("-") && !next.hasPrefix("@") {
+                        result.append("--list-models-search")
+                        result.append(next)
+                        i += 2
+                        continue
+                    }
+                }
+                i += 1
+                continue
+            }
+            if arg.hasPrefix("--list-models=") {
+                let value = String(arg.dropFirst("--list-models=".count))
+                result.append("--list-models")
+                if !value.isEmpty {
+                    result.append("--list-models-search")
+                    result.append(value)
+                }
+                i += 1
+                continue
+            }
+            result.append(arg)
+            i += 1
+        }
+        return result
     }
 }
 
