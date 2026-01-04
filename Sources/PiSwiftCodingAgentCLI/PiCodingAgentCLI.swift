@@ -373,7 +373,7 @@ Available Tools (default: read, bash, edit, write):
 """
     }
 
-    private static func preprocessArguments(_ args: [String]) -> [String] {
+    static func preprocessArguments(_ args: [String]) -> [String] {
         var result: [String] = []
         var i = 0
         while i < args.count {

@@ -1,96 +1,106 @@
 import Testing
 import PiSwiftCodingAgent
+@testable import PiSwiftCodingAgentCLI
 
-@Test func parseArgsVersionFlag() {
-    let result = parseArgs(["--version"])
-    #expect(result.version == true)
-
-    let shortResult = parseArgs(["-v"])
-    #expect(shortResult.version == true)
-
-    let mixed = parseArgs(["--version", "--help", "some message"])
-    #expect(mixed.version == true)
-    #expect(mixed.help == true)
-    #expect(mixed.messages.contains("some message"))
+private func parseCLI(_ args: [String]) throws -> Args {
+    let processed = PiCodingAgentCLI.preprocessArguments(args)
+    let options = try CLIOptions.parse(processed)
+    return options.toArgs()
 }
 
-@Test func parseArgsHelpFlag() {
-    let result = parseArgs(["--help"])
-    #expect(result.help == true)
-
-    let shortResult = parseArgs(["-h"])
-    #expect(shortResult.help == true)
-}
-
-@Test func parseArgsPrintFlag() {
-    let result = parseArgs(["--print"])
+@Test func parseArgsPrintFlag() throws {
+    let result = try parseCLI(["--print"])
     #expect(result.print == true)
 
-    let shortResult = parseArgs(["-p"])
+    let shortResult = try parseCLI(["-p"])
     #expect(shortResult.print == true)
 }
 
-@Test func parseArgsContinueFlag() {
-    let result = parseArgs(["--continue"])
+@Test func parseArgsContinueFlag() throws {
+    let result = try parseCLI(["--continue"])
     #expect(result.continue == true)
 
-    let shortResult = parseArgs(["-c"])
+    let shortResult = try parseCLI(["-c"])
     #expect(shortResult.continue == true)
 }
 
-@Test func parseArgsResumeFlag() {
-    let result = parseArgs(["--resume"])
+@Test func parseArgsResumeFlag() throws {
+    let result = try parseCLI(["--resume"])
     #expect(result.resume == true)
 
-    let shortResult = parseArgs(["-r"])
+    let shortResult = try parseCLI(["-r"])
     #expect(shortResult.resume == true)
 }
 
-@Test func parseArgsWithValues() {
-    #expect(parseArgs(["--provider", "openai"]).provider == "openai")
-    #expect(parseArgs(["--model", "gpt-4o"]).model == "gpt-4o")
-    #expect(parseArgs(["--api-key", "sk-test-key"]).apiKey == "sk-test-key")
-    #expect(parseArgs(["--system-prompt", "You are helpful"]).systemPrompt == "You are helpful")
-    #expect(parseArgs(["--append-system-prompt", "More"]).appendSystemPrompt == "More")
-    #expect(parseArgs(["--mode", "json"]).mode == .json)
-    #expect(parseArgs(["--mode", "rpc"]).mode == .rpc)
-    #expect(parseArgs(["--session", "/path/session.jsonl"]).session == "/path/session.jsonl")
-    #expect(parseArgs(["--export", "session.jsonl"]).export == "session.jsonl")
-    #expect(parseArgs(["--thinking", "high"]).thinking == .high)
+@Test func parseArgsWithValues() throws {
+    #expect(try parseCLI(["--provider", "openai"]).provider == "openai")
+    #expect(try parseCLI(["--model", "gpt-4o"]).model == "gpt-4o")
+    #expect(try parseCLI(["--api-key", "sk-test-key"]).apiKey == "sk-test-key")
+    #expect(try parseCLI(["--system-prompt", "You are helpful"]).systemPrompt == "You are helpful")
+    #expect(try parseCLI(["--append-system-prompt", "More"]).appendSystemPrompt == "More")
+    #expect(try parseCLI(["--mode", "json"]).mode == .json)
+    #expect(try parseCLI(["--mode", "rpc"]).mode == .rpc)
+    #expect(try parseCLI(["--session", "/path/session.jsonl"]).session == "/path/session.jsonl")
+    #expect(try parseCLI(["--export", "session.jsonl"]).export == "session.jsonl")
+    #expect(try parseCLI(["--thinking", "high"]).thinking == .high)
 
-    let models = parseArgs(["--models", "gpt-4o,claude-sonnet,gemini-pro"]).models
+    let models = try parseCLI(["--models", "gpt-4o,claude-sonnet,gemini-pro"]).models
     #expect(models == ["gpt-4o", "claude-sonnet", "gemini-pro"])
 }
 
-@Test func parseArgsNoSessionFlag() {
-    #expect(parseArgs(["--no-session"]).noSession == true)
+@Test func parseArgsListModels() throws {
+    let all = try parseCLI(["--list-models"])
+    #expect(all.listModels == .all)
+
+    let search = try parseCLI(["--list-models", "haiku"])
+    #expect(search.listModels == .search("haiku"))
+
+    let equalsSearch = try parseCLI(["--list-models=sonnet"])
+    #expect(equalsSearch.listModels == .search("sonnet"))
 }
 
-@Test func parseArgsHookFlags() {
-    let single = parseArgs(["--hook", "./my-hook.ts"])
+@Test func parseArgsNoSessionFlag() throws {
+    #expect(try parseCLI(["--no-session"]).noSession == true)
+}
+
+@Test func parseArgsHookFlags() throws {
+    let single = try parseCLI(["--hook", "./my-hook.ts"])
     #expect(single.hooks == ["./my-hook.ts"])
 
-    let multiple = parseArgs(["--hook", "./hook1.ts", "--hook", "./hook2.ts"])
+    let multiple = try parseCLI(["--hook", "./hook1.ts", "--hook", "./hook2.ts"])
     #expect(multiple.hooks == ["./hook1.ts", "./hook2.ts"])
 }
 
-@Test func parseArgsMessagesAndFiles() {
-    let text = parseArgs(["hello", "world"])
+@Test func parseArgsMessagesAndFiles() throws {
+    let text = try parseCLI(["hello", "world"])
     #expect(text.messages == ["hello", "world"])
 
-    let files = parseArgs(["@README.md", "@src/main.ts"])
+    let files = try parseCLI(["@README.md", "@src/main.ts"])
     #expect(files.fileArgs == ["README.md", "src/main.ts"])
 
-    let mixed = parseArgs(["@file.txt", "explain this", "@image.png"])
+    let mixed = try parseCLI(["@file.txt", "explain this", "@image.png"])
     #expect(mixed.fileArgs == ["file.txt", "image.png"])
     #expect(mixed.messages == ["explain this"])
 
-    let unknown = parseArgs(["--unknown-flag", "message"])
-    #expect(unknown.messages == ["message"])
+    var didThrow = false
+    do {
+        _ = try CLIOptions.parse(["--unknown-flag", "message"])
+    } catch {
+        didThrow = true
+    }
+    #expect(didThrow)
 }
 
-@Test func parseArgsComplex() {
-    let result = parseArgs([
+@Test func parseArgsToolsAndSkills() throws {
+    let tools = try parseCLI(["--tools", "read,grep"])
+    #expect(tools.tools == [.read, .grep])
+
+    let skills = try parseCLI(["--skills", "git-*,docker"])
+    #expect(skills.skills == ["git-*", "docker"])
+}
+
+@Test func parseArgsComplex() throws {
+    let result = try parseCLI([
         "--provider", "anthropic",
         "--model", "claude-sonnet",
         "--print",

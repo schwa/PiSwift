@@ -91,7 +91,11 @@ let package = Package(
         ),
         .testTarget(
             name: "PiSwiftCodingAgentTests",
-            dependencies: ["PiSwiftCodingAgent"],
+            dependencies: [
+                "PiSwiftCodingAgent",
+                "PiSwiftCodingAgentCLI",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
             resources: [
                 .copy("fixtures")
             ]
