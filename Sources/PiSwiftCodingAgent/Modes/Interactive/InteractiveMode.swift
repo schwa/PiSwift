@@ -1820,13 +1820,8 @@ public final class InteractiveMode {
         let parts = text.split(separator: " ").map(String.init)
         let outputPath = parts.count > 1 ? parts[1] : nil
 
-        guard let sessionFile = session.sessionManager.getSessionFile() else {
-            showError("No session file to export")
-            return
-        }
-
         do {
-            let exported = try exportFromFile(sessionFile, outputPath)
+            let exported = try session.exportToHtml(outputPath)
             showStatus("Exported to: \(exported)")
         } catch {
             showError("Export failed: \(error.localizedDescription)")

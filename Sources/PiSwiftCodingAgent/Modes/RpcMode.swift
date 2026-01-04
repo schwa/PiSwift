@@ -439,10 +439,7 @@ private func handleRpcCommand(
 
     case "export_html":
         let outputPath = dict["outputPath"] as? String
-        guard let sessionFile = session.sessionFile else {
-            return makeErrorResponse(idValue, "export_html", "No session file available")
-        }
-        let path = try exportFromFile(sessionFile, outputPath)
+        let path = try session.exportToHtml(outputPath)
         return makeSuccessResponse(idValue, "export_html", ["path": path])
 
     case "switch_session":

@@ -681,6 +681,15 @@ public final class AgentSession: @unchecked Sendable {
         )
     }
 
+    public func exportToHtml(_ outputPath: String? = nil) throws -> String {
+        let themeName = settingsManager.getTheme()
+        return try exportSessionToHtml(
+            sessionManager,
+            agent.state,
+            ExportOptions(outputPath: outputPath, themeName: themeName)
+        )
+    }
+
     public func getLastAssistantText() -> String? {
         let lastAssistant = agent.state.messages.reversed().first { message in
             if case .assistant(let assistant) = message {
