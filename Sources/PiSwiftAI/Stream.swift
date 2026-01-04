@@ -1,5 +1,26 @@
 import Foundation
 
+private func shouldLogApiKeyDebug() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let flag = (env["PI_DEBUG_API_KEYS"] ?? env["PI_DEBUG_LIVE_TESTS"])?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes"
+}
+
+private func apiKeyInfo(_ key: String?) -> String {
+    guard let key else { return "missing" }
+    let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hasWhitespace = trimmed.count != key.count
+    return "present length=\(key.count) trimmedLength=\(trimmed.count) whitespace=\(hasWhitespace)"
+}
+
+private func logApiKeyDebug(_ message: String) {
+    guard shouldLogApiKeyDebug() else { return }
+    let line = "PI_DEBUG: \(message)\n"
+    if let data = line.data(using: .utf8) {
+        FileHandle.standardError.write(data)
+    }
+}
+
 public func getEnvApiKey(provider: KnownProvider) -> String? {
     getEnvApiKey(provider: provider.rawValue)
 }
@@ -8,11 +29,25 @@ public func getEnvApiKey(provider: String) -> String? {
     let env = ProcessInfo.processInfo.environment
 
     if provider == "anthropic" {
-        return env["ANTHROPIC_OAUTH_TOKEN"] ?? env["ANTHROPIC_API_KEY"]
+        let oauth = env["ANTHROPIC_OAUTH_TOKEN"]
+        let apiKey = env["ANTHROPIC_API_KEY"]
+        let selected = oauth ?? apiKey
+        let source: String
+        if oauth != nil {
+            source = "ANTHROPIC_OAUTH_TOKEN"
+        } else if apiKey != nil {
+            source = "ANTHROPIC_API_KEY"
+        } else {
+            source = "none"
+        }
+        logApiKeyDebug("provider=anthropic env apiKey=\(apiKeyInfo(apiKey)) oauth=\(apiKeyInfo(oauth)) selected=\(source)")
+        return selected
     }
 
     if provider == "openai" {
-        return env["OPENAI_API_KEY"]
+        let apiKey = env["OPENAI_API_KEY"]
+        logApiKeyDebug("provider=openai env apiKey=\(apiKeyInfo(apiKey))")
+        return apiKey
     }
 
     return nil
@@ -23,6 +58,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
     guard let apiKey else {
         throw StreamError.missingApiKey(model.provider)
     }
+    let source = options?.apiKey != nil ? "options" : "env"
+    logApiKeyDebug("provider=\(model.provider) source=\(source) \(apiKeyInfo(apiKey))")
 
     switch model.api {
     case .openAICompletions:
@@ -62,6 +99,8 @@ public func streamSimple(model: Model, context: Context, options: SimpleStreamOp
     guard let apiKey else {
         throw StreamError.missingApiKey(model.provider)
     }
+    let source = options?.apiKey != nil ? "options" : "env"
+    logApiKeyDebug("provider=\(model.provider) source=\(source) \(apiKeyInfo(apiKey))")
 
     switch model.api {
     case .anthropicMessages:

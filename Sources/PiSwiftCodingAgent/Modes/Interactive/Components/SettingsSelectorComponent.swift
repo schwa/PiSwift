@@ -128,7 +128,7 @@ private final class SelectSubmenu: Container {
         addChild(Text(theme.fg(.dim, "  Enter to select · Esc to go back"), paddingX: 0, paddingY: 0))
     }
 
-    func handleInput(_ data: String) {
+    override func handleInput(_ data: String) {
         selectList.handleInput(data)
     }
 }

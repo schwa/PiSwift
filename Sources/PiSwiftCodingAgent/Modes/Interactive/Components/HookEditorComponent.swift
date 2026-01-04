@@ -42,7 +42,7 @@ public final class HookEditorComponent: Container {
         addChild(DynamicBorder())
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if keyData == "\u{001B}[13;5u" || keyData == "\u{001B}[27;5;13~" {
             onSubmitCallback(editor.getText())
             return

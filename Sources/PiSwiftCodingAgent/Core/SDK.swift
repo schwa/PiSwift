@@ -3,7 +3,6 @@ import PiSwiftAI
 import PiSwiftAgent
 
 public typealias HookFactory = @Sendable (HookAPI) -> Void
-public typealias CustomTool = Tool
 
 public struct HookDefinition: Sendable {
     public var path: String?
@@ -15,53 +14,6 @@ public struct HookDefinition: Sendable {
     }
 }
 
-public struct CustomToolDefinition: Sendable {
-    public var path: String?
-    public var tool: Tool
-
-    public init(path: String? = nil, tool: Tool) {
-        self.path = path
-        self.tool = tool
-    }
-}
-
-public struct LoadedCustomTool: Sendable {
-    public var path: String
-    public var resolvedPath: String
-    public var tool: Tool
-
-    public init(path: String, resolvedPath: String, tool: Tool) {
-        self.path = path
-        self.resolvedPath = resolvedPath
-        self.tool = tool
-    }
-}
-
-public struct CustomToolLoadError: Sendable {
-    public var path: String
-    public var error: String
-
-    public init(path: String, error: String) {
-        self.path = path
-        self.error = error
-    }
-}
-
-public struct CustomToolsLoadResult: @unchecked Sendable {
-    public var tools: [LoadedCustomTool]
-    public var errors: [CustomToolLoadError]
-    public var setUIContext: (@Sendable (_ hasUI: Bool) -> Void)
-
-    public init(
-        tools: [LoadedCustomTool],
-        errors: [CustomToolLoadError],
-        setUIContext: @escaping @Sendable (_ hasUI: Bool) -> Void = { _ in }
-    ) {
-        self.tools = tools
-        self.errors = errors
-        self.setUIContext = setUIContext
-    }
-}
 
 public enum SystemPromptInput: @unchecked Sendable {
     case text(String)
@@ -202,6 +154,35 @@ private func writeStderr(_ message: String) {
     }
 }
 
+private final class CustomToolContextProvider: @unchecked Sendable {
+    weak var agent: Agent?
+    weak var session: AgentSession?
+    private let sessionManager: SessionManager
+    private let modelRegistry: ModelRegistry
+
+    init(sessionManager: SessionManager, modelRegistry: ModelRegistry) {
+        self.sessionManager = sessionManager
+        self.modelRegistry = modelRegistry
+    }
+
+    func buildContext() -> CustomToolContext {
+        CustomToolContext(
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            model: agent?.state.model,
+            isIdle: { [weak self] in
+                !(self?.session?.isStreaming ?? true)
+            },
+            hasPendingMessages: { [weak self] in
+                (self?.session?.pendingMessageCount ?? 0) > 0
+            },
+            abort: { [weak self] in
+                Task { await self?.session?.abort() }
+            }
+        )
+    }
+}
+
 public func discoverAuthStorage(agentDir: String = getAgentDir()) -> AuthStorage {
     AuthStorage((agentDir as NSString).appendingPathComponent("auth.json"))
 }
@@ -211,15 +192,30 @@ public func discoverModels(authStorage: AuthStorage, agentDir: String = getAgent
 }
 
 public func discoverHooks(cwd: String? = nil, agentDir: String? = nil) async -> [HookDefinition] {
-    let _ = cwd
-    let _ = agentDir
-    return []
+    let resolvedCwd = cwd ?? FileManager.default.currentDirectoryPath
+    let resolvedAgentDir = agentDir ?? getAgentDir()
+
+    let result = discoverAndLoadHooks([], resolvedCwd, resolvedAgentDir)
+    for error in result.errors {
+        writeStderr("Failed to load hook \"\(error.path)\": \(error.error)\n")
+    }
+
+    return result.hooks.map { loaded in
+        HookDefinition(path: loaded.path, factory: createFactoryFromLoadedHook(loaded))
+    }
 }
 
 public func discoverCustomTools(cwd: String? = nil, agentDir: String? = nil) async -> [CustomToolDefinition] {
-    let _ = cwd
-    let _ = agentDir
-    return []
+    let resolvedCwd = cwd ?? FileManager.default.currentDirectoryPath
+    let resolvedAgentDir = agentDir ?? getAgentDir()
+
+    let builtInToolNames = createAllTools(cwd: resolvedCwd).keys.map { $0.rawValue }
+    let result = discoverAndLoadCustomTools([], resolvedCwd, builtInToolNames, resolvedAgentDir)
+    for error in result.errors {
+        writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
+    }
+
+    return result.tools.map { CustomToolDefinition(path: $0.path, tool: $0.tool) }
 }
 
 public func discoverSkills(cwd: String? = nil, agentDir: String? = nil, settings: SkillsSettings? = nil) -> [Skill] {
@@ -279,15 +275,34 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
 private func createLoadedHooksFromDefinitions(_ definitions: [HookDefinition]) -> [LoadedHook] {
     definitions.map { definition in
         let api = HookAPI()
+        api.setExecCwd(FileManager.default.currentDirectoryPath)
         definition.factory(api)
         let path = definition.path ?? "<inline>"
-        return LoadedHook(path: path, resolvedPath: path, handlers: api.handlers)
+        return LoadedHook(
+            path: path,
+            resolvedPath: path,
+            handlers: api.handlers,
+            messageRenderers: api.messageRenderers,
+            commands: api.commands,
+            setSendMessageHandler: api.setSendMessageHandler,
+            setAppendEntryHandler: api.setAppendEntryHandler
+        )
     }
 }
 
-private func customToolsNotImplementedErrors(_ paths: [String]) -> [CustomToolLoadError] {
-    paths.map { path in
-        CustomToolLoadError(path: path, error: "Custom tool loading is not implemented in Swift yet")
+private func createFactoryFromLoadedHook(_ loaded: LoadedHook) -> HookFactory {
+    { api in
+        for (eventType, handlers) in loaded.handlers {
+            for handler in handlers {
+                api.onAny(eventType, handler)
+            }
+        }
+        for (customType, renderer) in loaded.messageRenderers {
+            api.registerMessageRenderer(customType, renderer)
+        }
+        for command in loaded.commands.values {
+            api.registerCommand(command.name, description: command.description, handler: command.handler)
+        }
     }
 }
 
@@ -375,18 +390,15 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     var customToolsResult: CustomToolsLoadResult
     if let customTools = options.customTools {
         let loadedTools = customTools.map { definition in
-            LoadedCustomTool(
-                path: definition.path ?? "<inline>",
-                resolvedPath: definition.path ?? "<inline>",
-                tool: definition.tool
-            )
+            let path = definition.path ?? "<inline>"
+            return LoadedCustomTool(path: path, resolvedPath: path, tool: definition.tool)
         }
         customToolsResult = CustomToolsLoadResult(tools: loadedTools, errors: [])
     } else {
         let configuredPaths = settingsManager.getCustomTools() + (options.additionalCustomToolPaths ?? [])
-        let errors = customToolsNotImplementedErrors(configuredPaths)
-        customToolsResult = CustomToolsLoadResult(tools: [], errors: errors)
-        for error in errors {
+        let builtInToolNames = createAllTools(cwd: cwd).keys.map { $0.rawValue }
+        customToolsResult = discoverAndLoadCustomTools(configuredPaths, cwd, builtInToolNames, agentDir)
+        for error in customToolsResult.errors {
             writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
         }
     }
@@ -399,16 +411,25 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     } else {
         let hookPaths = settingsManager.getHooks() + (options.additionalHookPaths ?? [])
-        if !hookPaths.isEmpty {
-            for path in hookPaths {
-                writeStderr("Failed to load hook \"\(path)\": hook loading is not implemented in Swift yet\n")
-            }
+        let loadResult = discoverAndLoadHooks(hookPaths, cwd, agentDir)
+        time("discoverAndLoadHooks")
+        for error in loadResult.errors {
+            writeStderr("Failed to load hook \"\(error.path)\": \(error.error)\n")
+        }
+        if !loadResult.hooks.isEmpty {
+            hookRunner = HookRunner(loadResult.hooks, cwd, sessionManager, modelRegistry)
         }
     }
 
-    let customTools = customToolsResult.tools.map { $0.tool }
-    let allTools = builtInTools + customTools
+    let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry)
+    let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
+        contextProvider.buildContext()
+    }
+    var allTools = builtInTools + wrappedCustomTools
     time("combineTools")
+    if let hookRunner {
+        allTools = wrapToolsWithHooks(allTools, hookRunner)
+    }
 
     let defaultPrompt = buildSystemPrompt(BuildSystemPromptOptions(
         cwd: cwd,
@@ -439,7 +460,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let slashCommands = options.slashCommands ?? discoverSlashCommands(cwd: cwd, agentDir: agentDir)
     time("discoverSlashCommands")
 
-    let agent = Agent(AgentOptions(
+    let createdAgent = Agent(AgentOptions(
         initialState: AgentState(
             systemPrompt: systemPrompt,
             model: resolvedModel,
@@ -456,25 +477,28 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     ))
     time("createAgent")
+    contextProvider.agent = createdAgent
 
     if hasExistingSession {
-        agent.replaceMessages(existingSession.messages)
+        createdAgent.replaceMessages(existingSession.messages)
     } else {
         sessionManager.appendModelChange(resolvedModel.provider, resolvedModel.id)
         sessionManager.appendThinkingLevelChange((thinkingLevel ?? .off).rawValue)
     }
 
-    let session = AgentSession(config: AgentSessionConfig(
-        agent: agent,
+    let createdSession = AgentSession(config: AgentSessionConfig(
+        agent: createdAgent,
         sessionManager: sessionManager,
         settingsManager: settingsManager,
         scopedModels: options.scopedModels,
         fileCommands: slashCommands,
         hookRunner: hookRunner,
+        customTools: customToolsResult.tools,
         modelRegistry: modelRegistry,
         skillsSettings: settingsManager.getSkillsSettings()
     ))
     time("createAgentSession")
+    contextProvider.session = createdSession
 
-    return CreateAgentSessionResult(session: session, customToolsResult: customToolsResult, modelFallbackMessage: modelFallbackMessage)
+    return CreateAgentSessionResult(session: createdSession, customToolsResult: customToolsResult, modelFallbackMessage: modelFallbackMessage)
 }

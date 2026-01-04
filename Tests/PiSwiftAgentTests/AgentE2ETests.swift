@@ -3,6 +3,12 @@ import Testing
 import PiSwiftAI
 import PiSwiftAgent
 
+private let RUN_ANTHROPIC_TESTS: Bool = {
+    let env = ProcessInfo.processInfo.environment
+    let flag = (env["PI_RUN_ANTHROPIC_TESTS"] ?? env["PI_RUN_LIVE_TESTS"])?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes"
+}()
+
 @Test func openAIE2E() async throws {
     guard ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil else {
         return
@@ -16,7 +22,7 @@ import PiSwiftAgent
 }
 
 @Test func anthropicE2E() async throws {
-    guard ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] != nil else {
+    guard RUN_ANTHROPIC_TESTS else {
         return
     }
     let model = getModel(provider: .anthropic, modelId: "claude-3-5-haiku-20241022")
@@ -46,7 +52,7 @@ import PiSwiftAgent
 }
 
 @Test func continueFromUserMessage() async throws {
-    guard ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] != nil else {
+    guard RUN_ANTHROPIC_TESTS else {
         return
     }
     let model = getModel(provider: .anthropic, modelId: "claude-3-5-haiku-20241022")

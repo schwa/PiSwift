@@ -11,6 +11,7 @@ public struct VisualTruncateResult: Sendable {
     }
 }
 
+@MainActor
 public func truncateToVisualLines(
     _ text: String,
     maxVisualLines: Int,

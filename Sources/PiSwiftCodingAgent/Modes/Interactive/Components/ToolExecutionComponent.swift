@@ -1,6 +1,7 @@
 import Foundation
 import MiniTui
 import PiSwiftAI
+import PiSwiftAgent
 
 private let bashPreviewLines = 5
 
@@ -23,6 +24,7 @@ public final class ToolExecutionComponent: Container {
     private var expanded = false
     private var showImages: Bool
     private var isPartial = true
+    private var customTool: CustomTool?
     private let ui: TUI
     private let cwd: String
     private var result: ToolResultMessage?
@@ -33,12 +35,14 @@ public final class ToolExecutionComponent: Container {
         toolName: String,
         args: [String: AnyCodable],
         options: ToolExecutionOptions = ToolExecutionOptions(),
+        customTool: CustomTool? = nil,
         ui: TUI,
         cwd: String = FileManager.default.currentDirectoryPath
     ) {
         self.toolName = toolName
         self.args = args
         self.showImages = options.showImages
+        self.customTool = customTool
         self.ui = ui
         self.cwd = cwd
 
@@ -48,7 +52,7 @@ public final class ToolExecutionComponent: Container {
         super.init()
 
         addChild(Spacer(1))
-        if toolName == "bash" {
+        if customTool != nil || toolName == "bash" {
             addChild(contentBox)
         } else {
             addChild(contentText)
@@ -92,7 +96,44 @@ public final class ToolExecutionComponent: Container {
             bgFn = { theme.bg(.toolSuccessBg, $0) }
         }
 
-        if toolName == "bash" {
+        if let customTool {
+            contentBox.setBgFn(bgFn)
+            contentBox.clear()
+
+            if let renderCall = customTool.renderCall {
+                do {
+                    if let component = try renderCall(args, theme) {
+                        contentBox.addChild(component)
+                    }
+                } catch {
+                    contentBox.addChild(Text(theme.fg(.toolTitle, theme.bold(toolName)), paddingX: 0, paddingY: 0))
+                }
+            } else {
+                contentBox.addChild(Text(theme.fg(.toolTitle, theme.bold(toolName)), paddingX: 0, paddingY: 0))
+            }
+
+            if let result {
+                if let renderResult = customTool.renderResult {
+                    do {
+                        let options = RenderResultOptions(expanded: expanded, isPartial: isPartial)
+                        let toolResult = AgentToolResult(content: result.content, details: result.details)
+                        if let component = try renderResult(toolResult, options, theme) {
+                            contentBox.addChild(component)
+                        }
+                    } catch {
+                        let output = getTextOutput()
+                        if !output.isEmpty {
+                            contentBox.addChild(Text(theme.fg(.toolOutput, output), paddingX: 0, paddingY: 0))
+                        }
+                    }
+                } else {
+                    let output = getTextOutput()
+                    if !output.isEmpty {
+                        contentBox.addChild(Text(theme.fg(.toolOutput, output), paddingX: 0, paddingY: 0))
+                    }
+                }
+            }
+        } else if toolName == "bash" {
             contentBox.setBgFn(bgFn)
             contentBox.clear()
             renderBashContent()

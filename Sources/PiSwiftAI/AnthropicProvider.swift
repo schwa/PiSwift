@@ -1,6 +1,34 @@
 import Foundation
 import SwiftAnthropic
 
+private func shouldLogAnthropicDebug() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let flag = (env["PI_DEBUG_ANTHROPIC"] ?? env["PI_DEBUG_LIVE_TESTS"] ?? env["PI_DEBUG_API_KEYS"])?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes"
+}
+
+private func logAnthropicDebug(_ message: String) {
+    guard shouldLogAnthropicDebug() else { return }
+    let line = "PI_DEBUG: \(message)\n"
+    if let data = line.data(using: .utf8) {
+        FileHandle.standardError.write(data)
+    }
+}
+
+private func debugNonStreamingError(_ service: AnthropicService, _ parameters: MessageParameter) async {
+    guard shouldLogAnthropicDebug() else { return }
+    do {
+        _ = try await service.createMessage(parameters)
+        logAnthropicDebug("anthropic debug non-streaming request succeeded")
+    } catch {
+        if let apiError = error as? APIError {
+            logAnthropicDebug("anthropic debug non-streaming apiError=\(apiError.displayDescription)")
+        } else {
+            logAnthropicDebug("anthropic debug non-streaming error=\(error.localizedDescription)")
+        }
+    }
+}
+
 public func streamAnthropic(
     model: Model,
     context: Context,
@@ -17,6 +45,8 @@ public func streamAnthropic(
             usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
             stopReason: .stop
         )
+        var debugService: AnthropicService?
+        var debugParameters: MessageParameter?
 
         do {
             let apiKey = options.apiKey ?? ""
@@ -25,13 +55,24 @@ public func streamAnthropic(
             }
 
             let betaHeaders = buildAnthropicBetaHeaders(apiKey: apiKey, interleavedThinking: options.interleavedThinking ?? true)
+            if let betaHeaders {
+                logAnthropicDebug("anthropic betaHeaders=\(betaHeaders.joined(separator: ","))")
+            } else {
+                logAnthropicDebug("anthropic betaHeaders=none")
+            }
             let service = AnthropicServiceFactory.service(
                 apiKey: apiKey,
                 basePath: model.baseUrl,
-                betaHeaders: betaHeaders
+                betaHeaders: betaHeaders,
+                httpClient: nil,
+                debugEnabled: false
             )
 
             let parameters = buildAnthropicParameters(model: model, context: context, options: options)
+            debugService = service
+            debugParameters = parameters
+            let toolCount = context.tools?.count ?? 0
+            logAnthropicDebug("anthropic request model=\(model.id) maxTokens=\(parameters.maxTokens) messages=\(parameters.messages.count) system=\(parameters.system != nil) tools=\(toolCount) thinking=\(parameters.thinking != nil)")
             let anthropicStream = try await service.streamMessage(parameters)
 
             stream.push(.start(partial: output))
@@ -170,6 +211,15 @@ public func streamAnthropic(
             stream.push(.done(reason: output.stopReason, message: output))
             stream.end()
         } catch {
+            logAnthropicDebug("anthropic error model=\(model.id) baseUrl=\(model.baseUrl ?? "default") type=\(String(describing: type(of: error)))")
+            if let apiError = error as? APIError {
+                logAnthropicDebug("anthropic apiError=\(apiError.displayDescription)")
+                if let debugService, let debugParameters {
+                    await debugNonStreamingError(debugService, debugParameters)
+                }
+            } else {
+                logAnthropicDebug("anthropic errorDescription=\(error.localizedDescription)")
+            }
             output.stopReason = options.signal?.isCancelled == true ? .aborted : .error
             output.errorMessage = error.localizedDescription
             stream.push(.error(reason: output.stopReason, error: output))
@@ -222,6 +272,20 @@ private func mapAnthropicModel(_ id: String) -> SwiftAnthropic.Model {
 }
 
 private func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool) -> [String]? {
+    let env = ProcessInfo.processInfo.environment
+    let disableFlag = (env["PI_DISABLE_ANTHROPIC_BETA"] ?? "").lowercased()
+    if disableFlag == "1" || disableFlag == "true" || disableFlag == "yes" {
+        return nil
+    }
+    if let override = env["PI_ANTHROPIC_BETA_HEADERS"] {
+        let trimmed = override.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.lowercased() == "none" {
+            return nil
+        }
+        let items = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return items.isEmpty ? nil : items
+    }
+
     var headers = ["fine-grained-tool-streaming-2025-05-14"]
     if interleavedThinking {
         headers.append("interleaved-thinking-2025-05-14")

@@ -32,7 +32,7 @@ public final class BorderedLoader: Container {
         set { loader.onAbort = newValue }
     }
 
-    public func handleInput(_ data: String) {
+    public override func handleInput(_ data: String) {
         loader.handleInput(data)
     }
 

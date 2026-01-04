@@ -141,6 +141,35 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
         let selectedTools = selectedToolNames.compactMap { toolMap[$0] }
 
+        var hookRunner: HookRunner? = nil
+        let hookPaths = settingsManager.getHooks() + (parsed.hooks ?? [])
+        let hookLoadResult = discoverAndLoadHooks(hookPaths, cwd, getAgentDir())
+        time("discoverAndLoadHooks")
+        for error in hookLoadResult.errors {
+            fputs("Failed to load hook \"\(error.path)\": \(error.error)\n", stderr)
+        }
+        if !hookLoadResult.hooks.isEmpty {
+            let runner = HookRunner(hookLoadResult.hooks, cwd, sessionManager, modelRegistry)
+            hookRunner = runner
+        }
+
+        let customToolPaths = settingsManager.getCustomTools() + (parsed.customTools ?? [])
+        let builtInToolNames = toolMap.keys.map { $0.rawValue }
+        let customToolsResult = discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir())
+        time("discoverAndLoadCustomTools")
+        for error in customToolsResult.errors {
+            fputs("Failed to load custom tool \"\(error.path)\": \(error.error)\n", stderr)
+        }
+
+        let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry)
+        let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
+            contextProvider.buildContext()
+        }
+        var allTools = selectedTools + wrappedCustomTools
+        if let hookRunner {
+            allTools = wrapToolsWithHooks(allTools, hookRunner)
+        }
+
         let systemPrompt = buildSystemPrompt(BuildSystemPromptOptions(
             customPrompt: parsed.systemPrompt,
             selectedTools: selectedToolNames,
@@ -170,12 +199,12 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let fallbackModel = initialModel ?? getModel(provider: .openai, modelId: "gpt-4o-mini")
-        let agent = Agent(AgentOptions(
+        let createdAgent = Agent(AgentOptions(
             initialState: AgentState(
                 systemPrompt: systemPrompt,
                 model: fallbackModel,
                 thinkingLevel: initialThinking,
-                tools: selectedTools
+                tools: allTools
             ),
             convertToLlm: { messages in
                 convertToLlm(messages)
@@ -189,17 +218,18 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 return await authStorage.getApiKey(provider)
             }
         ))
+        contextProvider.agent = createdAgent
 
-        if initialThinking != .off && !agent.state.model.reasoning {
-            agent.setThinkingLevel(.off)
-        } else if initialThinking == .xhigh && !supportsXhigh(model: agent.state.model) {
-            agent.setThinkingLevel(.high)
+        if initialThinking != .off && !createdAgent.state.model.reasoning {
+            createdAgent.setThinkingLevel(.off)
+        } else if initialThinking == .xhigh && !supportsXhigh(model: createdAgent.state.model) {
+            createdAgent.setThinkingLevel(.high)
         }
 
         if parsed.continue == true || parsed.resume == true {
             let context = sessionManager.buildSessionContext()
             if !context.messages.isEmpty {
-                agent.replaceMessages(context.messages)
+                createdAgent.replaceMessages(context.messages)
             }
         }
 
@@ -214,19 +244,21 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let fileCommands = loadSlashCommands(LoadSlashCommandsOptions(cwd: cwd, agentDir: getAgentDir()))
-        let session = AgentSession(config: AgentSessionConfig(
-            agent: agent,
+        let createdSession = AgentSession(config: AgentSessionConfig(
+            agent: createdAgent,
             sessionManager: sessionManager,
             settingsManager: settingsManager,
             scopedModels: scopedModels,
             fileCommands: fileCommands,
-            hookRunner: nil,
+            hookRunner: hookRunner,
+            customTools: customToolsResult.tools,
             modelRegistry: modelRegistry,
             skillsSettings: skillsSettings
         ))
+        contextProvider.session = createdSession
 
         if mode == .rpc {
-            await runRpcMode(session)
+            await runRpcMode(createdSession)
             return
         }
 
@@ -251,10 +283,12 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             printTimings()
             let interactiveMode = await MainActor.run {
                 InteractiveMode(
-                    session: session,
+                    session: createdSession,
                     version: VERSION,
                     changelogMarkdown: changelogMarkdown,
                     scopedModels: scopedModels,
+                    customTools: customToolsResult.tools,
+                    setToolUIContext: customToolsResult.setUIContext,
                     fdPath: fdPath
                 )
             }
@@ -265,7 +299,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             )
         } else {
             try await runPrintMode(
-                session,
+                createdSession,
                 mode,
                 parsed.messages,
                 initialMessageResult.message,
@@ -407,5 +441,34 @@ private func printAssistantOutput(_ session: AgentSession) {
                 print(text.text)
             }
         }
+    }
+}
+
+private final class CustomToolContextProvider: @unchecked Sendable {
+    weak var agent: Agent?
+    weak var session: AgentSession?
+    private let sessionManager: SessionManager
+    private let modelRegistry: ModelRegistry
+
+    init(sessionManager: SessionManager, modelRegistry: ModelRegistry) {
+        self.sessionManager = sessionManager
+        self.modelRegistry = modelRegistry
+    }
+
+    func buildContext() -> CustomToolContext {
+        CustomToolContext(
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            model: agent?.state.model,
+            isIdle: { [weak self] in
+                !(self?.session?.isStreaming ?? true)
+            },
+            hasPendingMessages: { [weak self] in
+                (self?.session?.pendingMessageCount ?? 0) > 0
+            },
+            abort: { [weak self] in
+                Task { await self?.session?.abort() }
+            }
+        )
     }
 }

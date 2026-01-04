@@ -36,7 +36,7 @@ public final class OAuthSelectorComponent: Container {
         listContainer.addChild(TruncatedText(theme.fg(.muted, "  OAuth providers not available in Swift port"), paddingX: 0, paddingY: 0))
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if isEnter(keyData) {
             onCancelCallback()
             return

@@ -158,7 +158,7 @@ public final class ModelSelectorComponent: Container {
         }
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if isArrowUp(keyData) {
             guard !filteredModels.isEmpty else { return }
             selectedIndex = selectedIndex == 0 ? filteredModels.count - 1 : selectedIndex - 1

@@ -1,18 +1,235 @@
 import Foundation
+import MiniTui
 import PiSwiftAI
 import PiSwiftAgent
 
+public enum HookNotificationType: String, Sendable {
+    case info
+    case warning
+    case error
+}
+
+public struct HookMessageRenderOptions: Sendable {
+    public var expanded: Bool
+
+    public init(expanded: Bool) {
+        self.expanded = expanded
+    }
+}
+
+public typealias HookMessageRenderer = @Sendable (HookMessage, HookMessageRenderOptions, Theme) -> Component?
+
+public enum HookDeliverAs: String, Sendable {
+    case steer
+    case followUp
+}
+
+public struct HookSendMessageOptions: Sendable {
+    public var triggerTurn: Bool
+    public var deliverAs: HookDeliverAs?
+
+    public init(triggerTurn: Bool = false, deliverAs: HookDeliverAs? = nil) {
+        self.triggerTurn = triggerTurn
+        self.deliverAs = deliverAs
+    }
+}
+
+public struct HookMessageInput: Sendable {
+    public var customType: String
+    public var content: HookMessageContent
+    public var display: Bool
+    public var details: AnyCodable?
+
+    public init(customType: String, content: HookMessageContent, display: Bool, details: AnyCodable? = nil) {
+        self.customType = customType
+        self.content = content
+        self.display = display
+        self.details = details
+    }
+}
+
+public typealias HookSendMessageHandler = @Sendable (_ message: HookMessageInput, _ options: HookSendMessageOptions?) -> Void
+public typealias HookAppendEntryHandler = @Sendable (_ customType: String, _ data: [String: Any]) -> Void
+public typealias HookSendMessageSetter = (@escaping HookSendMessageHandler) -> Void
+public typealias HookAppendEntrySetter = (@escaping HookAppendEntryHandler) -> Void
+
+public struct HookCommandResult: Sendable {
+    public var cancelled: Bool
+
+    public init(cancelled: Bool) {
+        self.cancelled = cancelled
+    }
+}
+
+public struct HookNewSessionOptions: Sendable {
+    public var parentSession: String?
+    public var setup: (@Sendable (SessionManager) async -> Void)?
+
+    public init(parentSession: String? = nil, setup: (@Sendable (SessionManager) async -> Void)? = nil) {
+        self.parentSession = parentSession
+        self.setup = setup
+    }
+}
+
+public struct HookNavigateTreeOptions: Sendable {
+    public var summarize: Bool
+
+    public init(summarize: Bool = false) {
+        self.summarize = summarize
+    }
+}
+
+public typealias HookNewSessionHandler = @Sendable (_ options: HookNewSessionOptions?) async -> HookCommandResult
+public typealias HookBranchHandler = @Sendable (_ entryId: String) async -> HookCommandResult
+public typealias HookNavigateTreeHandler = @Sendable (_ targetId: String, _ options: HookNavigateTreeOptions?) async -> HookCommandResult
+
+public struct RegisteredCommand: Sendable {
+    public var name: String
+    public var description: String?
+    public var handler: @Sendable (_ args: String, _ context: HookCommandContext) async throws -> Void
+
+    public init(name: String, description: String? = nil, handler: @escaping @Sendable (_ args: String, _ context: HookCommandContext) async throws -> Void) {
+        self.name = name
+        self.description = description
+        self.handler = handler
+    }
+}
+
+public protocol HookDisposableComponent: Component {
+    func dispose()
+}
+
+public struct HookCustomResult: @unchecked Sendable {
+    public var value: Any?
+
+    public init(_ value: Any?) {
+        self.value = value
+    }
+}
+
+public typealias HookCustomClose = @MainActor @Sendable (Any?) -> Void
+public typealias HookCustomFactory = @Sendable (_ tui: TUI, _ theme: Theme, _ done: @escaping HookCustomClose) async -> Component
+
+@MainActor
+public protocol HookUIContext: Sendable {
+    func select(_ title: String, _ options: [String]) async -> String?
+    func confirm(_ title: String, _ message: String) async -> Bool
+    func input(_ title: String, _ placeholder: String?) async -> String?
+    func notify(_ message: String, _ type: HookNotificationType?)
+    func setStatus(_ key: String, _ text: String?)
+    func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult?
+    func setEditorText(_ text: String)
+    func getEditorText() -> String
+    func editor(_ title: String, _ prefill: String?) async -> String?
+    var theme: Theme { get }
+}
+
+public final class NoOpHookUIContext: HookUIContext {
+    public nonisolated init() {}
+
+    public func select(_ title: String, _ options: [String]) async -> String? { nil }
+    public func confirm(_ title: String, _ message: String) async -> Bool { false }
+    public func input(_ title: String, _ placeholder: String?) async -> String? { nil }
+    public func notify(_ message: String, _ type: HookNotificationType?) {}
+    public func setStatus(_ key: String, _ text: String?) {}
+    public func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? { nil }
+    public func setEditorText(_ text: String) {}
+    public func getEditorText() -> String { "" }
+    public func editor(_ title: String, _ prefill: String?) async -> String? { nil }
+    public var theme: Theme { Theme.fallback() }
+}
+
 public struct HookContext: Sendable {
+    public var ui: HookUIContext
+    public var hasUI: Bool
+    public var cwd: String
     public var sessionManager: SessionManager
     public var modelRegistry: ModelRegistry
     public var model: Model?
-    public var hasUI: Bool
+    public var isIdle: @Sendable () -> Bool
+    public var abort: @Sendable () -> Void
+    public var hasPendingMessages: @Sendable () -> Bool
 
-    public init(sessionManager: SessionManager, modelRegistry: ModelRegistry, model: Model?, hasUI: Bool) {
+    public init(
+        ui: HookUIContext,
+        hasUI: Bool,
+        cwd: String,
+        sessionManager: SessionManager,
+        modelRegistry: ModelRegistry,
+        model: Model?,
+        isIdle: @escaping @Sendable () -> Bool,
+        abort: @escaping @Sendable () -> Void,
+        hasPendingMessages: @escaping @Sendable () -> Bool
+    ) {
+        self.ui = ui
+        self.hasUI = hasUI
+        self.cwd = cwd
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
         self.model = model
+        self.isIdle = isIdle
+        self.abort = abort
+        self.hasPendingMessages = hasPendingMessages
+    }
+
+    public init(sessionManager: SessionManager, modelRegistry: ModelRegistry, model: Model?, hasUI: Bool) {
+        self.init(
+            ui: NoOpHookUIContext(),
+            hasUI: hasUI,
+            cwd: FileManager.default.currentDirectoryPath,
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            model: model,
+            isIdle: { true },
+            abort: {},
+            hasPendingMessages: { false }
+        )
+    }
+}
+
+public struct HookCommandContext: Sendable {
+    public var ui: HookUIContext
+    public var hasUI: Bool
+    public var cwd: String
+    public var sessionManager: SessionManager
+    public var modelRegistry: ModelRegistry
+    public var model: Model?
+    public var isIdle: @Sendable () -> Bool
+    public var abort: @Sendable () -> Void
+    public var hasPendingMessages: @Sendable () -> Bool
+    public var waitForIdle: @Sendable () async -> Void
+    public var newSession: HookNewSessionHandler
+    public var branch: HookBranchHandler
+    public var navigateTree: HookNavigateTreeHandler
+
+    public init(
+        ui: HookUIContext,
+        hasUI: Bool,
+        cwd: String,
+        sessionManager: SessionManager,
+        modelRegistry: ModelRegistry,
+        model: Model?,
+        isIdle: @escaping @Sendable () -> Bool,
+        abort: @escaping @Sendable () -> Void,
+        hasPendingMessages: @escaping @Sendable () -> Bool,
+        waitForIdle: @escaping @Sendable () async -> Void,
+        newSession: @escaping HookNewSessionHandler,
+        branch: @escaping HookBranchHandler,
+        navigateTree: @escaping HookNavigateTreeHandler
+    ) {
+        self.ui = ui
         self.hasUI = hasUI
+        self.cwd = cwd
+        self.sessionManager = sessionManager
+        self.modelRegistry = modelRegistry
+        self.model = model
+        self.isIdle = isIdle
+        self.abort = abort
+        self.hasPendingMessages = hasPendingMessages
+        self.waitForIdle = waitForIdle
+        self.newSession = newSession
+        self.branch = branch
+        self.navigateTree = navigateTree
     }
 }
 
@@ -90,6 +307,65 @@ public struct SessionTreeEvent: HookEvent, Sendable {
     }
 }
 
+public struct ToolCallEvent: HookEvent, Sendable {
+    public let type: String = "tool_call"
+    public var toolName: String
+    public var toolCallId: String
+    public var input: [String: AnyCodable]
+
+    public init(toolName: String, toolCallId: String, input: [String: AnyCodable]) {
+        self.toolName = toolName
+        self.toolCallId = toolCallId
+        self.input = input
+    }
+}
+
+public struct ToolCallEventResult: Sendable {
+    public var block: Bool
+    public var reason: String?
+
+    public init(block: Bool = false, reason: String? = nil) {
+        self.block = block
+        self.reason = reason
+    }
+}
+
+public struct ToolResultEvent: HookEvent, Sendable {
+    public let type: String = "tool_result"
+    public var toolName: String
+    public var toolCallId: String
+    public var input: [String: AnyCodable]
+    public var content: [ContentBlock]
+    public var details: AnyCodable?
+    public var isError: Bool
+
+    public init(
+        toolName: String,
+        toolCallId: String,
+        input: [String: AnyCodable],
+        content: [ContentBlock],
+        details: AnyCodable?,
+        isError: Bool
+    ) {
+        self.toolName = toolName
+        self.toolCallId = toolCallId
+        self.input = input
+        self.content = content
+        self.details = details
+        self.isError = isError
+    }
+}
+
+public struct ToolResultEventResult: Sendable {
+    public var content: [ContentBlock]?
+    public var details: AnyCodable?
+
+    public init(content: [ContentBlock]? = nil, details: AnyCodable? = nil) {
+        self.content = content
+        self.details = details
+    }
+}
+
 public struct SessionBeforeCompactResult: Sendable {
     public var cancel: Bool
     public var compaction: CompactionResult?
@@ -122,15 +398,43 @@ public struct SessionBeforeTreeResult: Sendable {
 
 public typealias HookHandler = @Sendable (_ event: HookEvent, _ context: HookContext) async throws -> Any?
 
-public struct LoadedHook: Sendable {
+public struct HookError: Sendable {
+    public var hookPath: String
+    public var event: String
+    public var error: String
+
+    public init(hookPath: String, event: String, error: String) {
+        self.hookPath = hookPath
+        self.event = event
+        self.error = error
+    }
+}
+
+public struct LoadedHook: @unchecked Sendable {
     public var path: String
     public var resolvedPath: String
     public var handlers: [String: [HookHandler]]
+    public var messageRenderers: [String: HookMessageRenderer]
+    public var commands: [String: RegisteredCommand]
+    public var setSendMessageHandler: HookSendMessageSetter
+    public var setAppendEntryHandler: HookAppendEntrySetter
 
-    public init(path: String, resolvedPath: String, handlers: [String: [HookHandler]]) {
+    public init(
+        path: String,
+        resolvedPath: String,
+        handlers: [String: [HookHandler]],
+        messageRenderers: [String: HookMessageRenderer] = [:],
+        commands: [String: RegisteredCommand] = [:],
+        setSendMessageHandler: @escaping HookSendMessageSetter = { _ in },
+        setAppendEntryHandler: @escaping HookAppendEntrySetter = { _ in }
+    ) {
         self.path = path
         self.resolvedPath = resolvedPath
         self.handlers = handlers
+        self.messageRenderers = messageRenderers
+        self.commands = commands
+        self.setSendMessageHandler = setSendMessageHandler
+        self.setAppendEntryHandler = setAppendEntryHandler
     }
 }
 
@@ -152,8 +456,25 @@ public struct TreePreparation: Sendable {
 
 public final class HookAPI: @unchecked Sendable {
     public private(set) var handlers: [String: [HookHandler]] = [:]
+    public private(set) var messageRenderers: [String: HookMessageRenderer] = [:]
+    public private(set) var commands: [String: RegisteredCommand] = [:]
+    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
+    private var appendEntryHandler: HookAppendEntryHandler = { _, _ in }
+    private var execCwd: String?
 
     public init() {}
+
+    public func setExecCwd(_ cwd: String) {
+        execCwd = cwd
+    }
+
+    public func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
+        sendMessageHandler = handler
+    }
+
+    public func setAppendEntryHandler(_ handler: @escaping HookAppendEntryHandler) {
+        appendEntryHandler = handler
+    }
 
     public func on<T: HookEvent>(_ type: String, _ handler: @Sendable @escaping (T, HookContext) async throws -> Any?) {
         let wrapper: HookHandler = { event, context in
@@ -161,5 +482,30 @@ public final class HookAPI: @unchecked Sendable {
             return try await handler(typed, context)
         }
         handlers[type, default: []].append(wrapper)
+    }
+
+    public func onAny(_ type: String, _ handler: @Sendable @escaping (HookEvent, HookContext) async throws -> Any?) {
+        handlers[type, default: []].append(handler)
+    }
+
+    public func sendMessage(_ message: HookMessageInput, options: HookSendMessageOptions? = nil) {
+        sendMessageHandler(message, options)
+    }
+
+    public func appendEntry(_ customType: String, _ data: [String: Any]) {
+        appendEntryHandler(customType, data)
+    }
+
+    public func registerMessageRenderer(_ customType: String, _ renderer: @escaping HookMessageRenderer) {
+        messageRenderers[customType] = renderer
+    }
+
+    public func registerCommand(_ name: String, description: String? = nil, handler: @escaping @Sendable (_ args: String, _ context: HookCommandContext) async throws -> Void) {
+        commands[name] = RegisteredCommand(name: name, description: description, handler: handler)
+    }
+
+    public func exec(_ command: String, _ args: [String], _ options: ExecOptions? = nil) async -> ExecResult {
+        let cwd = options?.cwd ?? execCwd ?? FileManager.default.currentDirectoryPath
+        return await execCommand(command, args, cwd, options)
     }
 }

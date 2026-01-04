@@ -149,7 +149,7 @@ private final class LabelInput: Container {
         addChild(Text(theme.fg(.dim, "  enter: save  esc: cancel"), paddingX: 1, paddingY: 0))
     }
 
-    func handleInput(_ keyData: String) {
+    override func handleInput(_ keyData: String) {
         if isEnter(keyData) {
             let value = input.getValue().trimmingCharacters(in: .whitespacesAndNewlines)
             onSubmit?(entryId, value.isEmpty ? nil : value)
@@ -248,7 +248,7 @@ public final class TreeSelectorComponent: Container {
         treeContainer.addChild(treeList)
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if let labelInput {
             labelInput.handleInput(keyData)
         } else {

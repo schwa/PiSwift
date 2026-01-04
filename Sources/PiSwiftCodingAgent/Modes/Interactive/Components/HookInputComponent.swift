@@ -33,7 +33,7 @@ public final class HookInputComponent: Container {
         addChild(DynamicBorder())
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if isEnter(keyData) || keyData == "\n" {
             onSubmitCallback(input.getValue())
             return

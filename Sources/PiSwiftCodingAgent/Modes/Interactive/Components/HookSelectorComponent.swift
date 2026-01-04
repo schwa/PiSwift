@@ -46,7 +46,7 @@ public final class HookSelectorComponent: Container {
         }
     }
 
-    public func handleInput(_ keyData: String) {
+    public override func handleInput(_ keyData: String) {
         if isArrowUp(keyData) || keyData == "k" {
             selectedIndex = max(0, selectedIndex - 1)
             updateList()

@@ -2,16 +2,6 @@ import Foundation
 import MiniTui
 import PiSwiftAI
 
-public struct HookMessageRenderOptions: Sendable {
-    public let expanded: Bool
-
-    public init(expanded: Bool) {
-        self.expanded = expanded
-    }
-}
-
-public typealias HookMessageRenderer = @Sendable (HookMessage, HookMessageRenderOptions, Theme) -> Component?
-
 public final class HookMessageComponent: Container {
     private let message: HookMessage
     private let customRenderer: HookMessageRenderer?

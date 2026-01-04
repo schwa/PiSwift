@@ -2,6 +2,12 @@ import Foundation
 import Testing
 import PiSwiftAI
 
+private let RUN_ANTHROPIC_TESTS: Bool = {
+    let env = ProcessInfo.processInfo.environment
+    let flag = (env["PI_RUN_ANTHROPIC_TESTS"] ?? env["PI_RUN_LIVE_TESTS"])?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes"
+}()
+
 @Test func sanitizeSurrogatesRemovesUnpaired() {
     let unpaired = String(decoding: [0xD83D], as: UTF16.self)
     let input = "Hello \(unpaired) World"
@@ -70,7 +76,7 @@ import PiSwiftAI
 }
 
 @Test func anthropicSmoke() async throws {
-    guard ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] != nil else {
+    guard RUN_ANTHROPIC_TESTS else {
         return
     }
     let model = getModel(provider: .anthropic, modelId: "claude-3-5-haiku-20241022")

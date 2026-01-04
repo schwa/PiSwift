@@ -29,6 +29,84 @@ private final class NullRenderRequester: RenderRequesting {
 }
 
 @MainActor
+private struct InteractiveHookUIContext: HookUIContext {
+    private let selectHandler: (String, [String]) async -> String?
+    private let confirmHandler: (String, String) async -> Bool
+    private let inputHandler: (String, String?) async -> String?
+    private let notifyHandler: (String, HookNotificationType?) -> Void
+    private let setStatusHandler: (String, String?) -> Void
+    private let customHandler: (@escaping HookCustomFactory) async -> HookCustomResult?
+    private let setEditorTextHandler: (String) -> Void
+    private let getEditorTextHandler: () -> String
+    private let editorHandler: (String, String?) async -> String?
+    private let themeProvider: () -> Theme
+
+    init(
+        select: @escaping (String, [String]) async -> String?,
+        confirm: @escaping (String, String) async -> Bool,
+        input: @escaping (String, String?) async -> String?,
+        notify: @escaping (String, HookNotificationType?) -> Void,
+        setStatus: @escaping (String, String?) -> Void,
+        custom: @escaping (@escaping HookCustomFactory) async -> HookCustomResult?,
+        setEditorText: @escaping (String) -> Void,
+        getEditorText: @escaping () -> String,
+        editor: @escaping (String, String?) async -> String?,
+        themeProvider: @escaping () -> Theme
+    ) {
+        self.selectHandler = select
+        self.confirmHandler = confirm
+        self.inputHandler = input
+        self.notifyHandler = notify
+        self.setStatusHandler = setStatus
+        self.customHandler = custom
+        self.setEditorTextHandler = setEditorText
+        self.getEditorTextHandler = getEditorText
+        self.editorHandler = editor
+        self.themeProvider = themeProvider
+    }
+
+    func select(_ title: String, _ options: [String]) async -> String? {
+        await selectHandler(title, options)
+    }
+
+    func confirm(_ title: String, _ message: String) async -> Bool {
+        await confirmHandler(title, message)
+    }
+
+    func input(_ title: String, _ placeholder: String?) async -> String? {
+        await inputHandler(title, placeholder)
+    }
+
+    func notify(_ message: String, _ type: HookNotificationType?) {
+        notifyHandler(message, type)
+    }
+
+    func setStatus(_ key: String, _ text: String?) {
+        setStatusHandler(key, text)
+    }
+
+    func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
+        await customHandler(factory)
+    }
+
+    func setEditorText(_ text: String) {
+        setEditorTextHandler(text)
+    }
+
+    func getEditorText() -> String {
+        getEditorTextHandler()
+    }
+
+    func editor(_ title: String, _ prefill: String?) async -> String? {
+        await editorHandler(title, prefill)
+    }
+
+    var theme: Theme {
+        themeProvider()
+    }
+}
+
+@MainActor
 public final class InteractiveMode {
     public var chatContainer: Container
     public var ui: RenderRequesting
@@ -47,6 +125,12 @@ public final class InteractiveMode {
     private var editor: CustomEditor?
     private var editorContainer: Container?
     private var footer: FooterComponent?
+    private var hookSelector: HookSelectorComponent?
+    private var hookInput: HookInputComponent?
+    private var hookEditor: HookEditorComponent?
+    private var baseSlashCommands: [SlashCommand] = []
+    private var customTools: [String: LoadedCustomTool] = [:]
+    private var setToolUIContext: (HookUIContext, Bool) -> Void = { _, _ in }
 
     private var isInitialized = false
     private var loadingAnimation: Loader?
@@ -82,6 +166,8 @@ public final class InteractiveMode {
         version: String,
         changelogMarkdown: String? = nil,
         scopedModels: [ScopedModel] = [],
+        customTools: [LoadedCustomTool] = [],
+        setToolUIContext: @escaping (HookUIContext, Bool) -> Void = { _, _ in },
         fdPath: String? = nil
     ) {
         self.init(chatContainer: Container(), ui: NullRenderRequester())
@@ -89,6 +175,8 @@ public final class InteractiveMode {
         self.version = version
         self.changelogMarkdown = changelogMarkdown
         self.scopedModels = scopedModels
+        self.customTools = Dictionary(uniqueKeysWithValues: customTools.map { ($0.tool.name, $0) })
+        self.setToolUIContext = setToolUIContext
         self.fdPath = fdPath
     }
 
@@ -158,13 +246,8 @@ public final class InteractiveMode {
             SlashCommand(name: "resume", description: "Resume a session"),
         ]
 
-        let autocompleteProvider = CombinedAutocompleteProvider(
-            commands: slashCommands,
-            items: [],
-            basePath: FileManager.default.currentDirectoryPath,
-            fdPath: fdPath
-        )
-        editor.setAutocompleteProvider(autocompleteProvider)
+        baseSlashCommands = slashCommands
+        setAutocompleteCommands(slashCommands)
 
         tui.addChild(Spacer(1))
         tui.addChild(Text(header, paddingX: 1, paddingY: 0))
@@ -193,6 +276,7 @@ public final class InteractiveMode {
         tui.setFocus(editor)
         tui.start()
 
+        await initializeHooksAndCustomTools()
         configureKeyHandlers()
         subscribeToAgent()
 
@@ -209,6 +293,353 @@ public final class InteractiveMode {
         }
 
         isInitialized = true
+    }
+
+    @MainActor
+    private func setAutocompleteCommands(_ commands: [SlashCommand]) {
+        guard let editor else { return }
+        let autocompleteProvider = CombinedAutocompleteProvider(
+            commands: commands,
+            items: [],
+            basePath: FileManager.default.currentDirectoryPath,
+            fdPath: fdPath
+        )
+        editor.setAutocompleteProvider(autocompleteProvider)
+    }
+
+    @MainActor
+    private func initializeHooksAndCustomTools() async {
+        guard let session else { return }
+
+        let uiContext = InteractiveHookUIContext(
+            select: { [weak self] title, options in
+                guard let self else { return nil }
+                return await self.showHookSelector(title, options)
+            },
+            confirm: { [weak self] title, message in
+                guard let self else { return false }
+                return await self.showHookConfirm(title, message)
+            },
+            input: { [weak self] title, placeholder in
+                guard let self else { return nil }
+                return await self.showHookInput(title, placeholder)
+            },
+            notify: { [weak self] message, type in
+                Task { @MainActor in
+                    self?.showHookNotify(message, type)
+                }
+            },
+            setStatus: { [weak self] key, text in
+                Task { @MainActor in
+                    self?.setHookStatus(key, text)
+                }
+            },
+            custom: { [weak self] factory in
+                guard let self else { return nil }
+                return await self.showHookCustom(factory)
+            },
+            setEditorText: { [weak self] text in
+                Task { @MainActor in
+                    self?.editor?.setText(text)
+                }
+            },
+            getEditorText: { [weak self] in
+                guard let self else { return "" }
+                return self.editor?.getText() ?? ""
+            },
+            editor: { [weak self] title, prefill in
+                guard let self else { return nil }
+                return await self.showHookEditor(title, prefill)
+            },
+            themeProvider: { theme }
+        )
+
+        if !customTools.isEmpty {
+            let list = customTools.values.map { tool in
+                theme.fg(.dim, "  \(tool.tool.name) (\(tool.path))")
+            }.joined(separator: "\n")
+            chatContainer.addChild(Text(theme.fg(.muted, "Loaded custom tools:\n") + list, paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+            scheduleRender()
+        }
+
+        setToolUIContext(uiContext, true)
+        await session.emitCustomToolSessionEvent(.start, previousSessionFile: nil)
+
+        guard let hookRunner = session.hookRunner else { return }
+
+        hookRunner.initialize(
+            getModel: { [weak session] in session?.agent.state.model },
+            sendMessageHandler: { [weak session, weak self] message, options in
+                guard let session else { return }
+                let shouldRefresh = !session.isStreaming && options?.triggerTurn != true && message.display
+                Task {
+                    await session.sendHookMessage(message, options: options)
+                    if shouldRefresh {
+                        Task { @MainActor [weak self] in
+                            self?.renderInitialMessages()
+                        }
+                    }
+                }
+            },
+            appendEntryHandler: { [weak session] customType, data in
+                session?.sessionManager.appendCustomEntry(customType, data)
+            },
+            newSessionHandler: { [weak self] options in
+                guard let self else { return HookCommandResult(cancelled: true) }
+                return await self.handleHookNewSession(options)
+            },
+            branchHandler: { [weak self] entryId in
+                guard let self else { return HookCommandResult(cancelled: true) }
+                return await self.handleHookBranch(entryId)
+            },
+            navigateTreeHandler: { [weak self] targetId, options in
+                guard let self else { return HookCommandResult(cancelled: true) }
+                return await self.handleHookNavigateTree(targetId, options: options)
+            },
+            isIdle: { [weak session] in
+                !(session?.isStreaming ?? true)
+            },
+            waitForIdle: { [weak session] in
+                await session?.agent.waitForIdle()
+            },
+            abort: { [weak session] in
+                Task {
+                    await session?.abort()
+                }
+            },
+            hasPendingMessages: { [weak session] in
+                (session?.pendingMessageCount ?? 0) > 0
+            },
+            uiContext: uiContext,
+            hasUI: true
+        )
+
+        _ = hookRunner.onError { [weak self] error in
+            Task { @MainActor in
+                self?.showHookError(error.hookPath, error.error)
+            }
+        }
+
+        let hookCommands = hookRunner.getRegisteredCommands().map { command in
+            SlashCommand(name: command.name, description: command.description ?? "(hook command)")
+        }
+        setAutocompleteCommands(baseSlashCommands + hookCommands)
+
+        let hookPaths = hookRunner.getHookPaths()
+        if !hookPaths.isEmpty {
+            let list = hookPaths.map { theme.fg(.dim, "  \($0)") }.joined(separator: "\n")
+            chatContainer.addChild(Text(theme.fg(.muted, "Loaded hooks:\n") + list, paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+            scheduleRender()
+        }
+    }
+
+    @MainActor
+    private func handleHookNewSession(_ options: HookNewSessionOptions?) async -> HookCommandResult {
+        guard let session else { return HookCommandResult(cancelled: true) }
+
+        loadingAnimation?.stop()
+        loadingAnimation = nil
+        statusContainer?.clear()
+
+        _ = session.sessionManager.newSession(NewSessionOptions(parentSession: options?.parentSession))
+        session.agent.replaceMessages([])
+
+        if let setup = options?.setup {
+            await setup(session.sessionManager)
+        }
+
+        chatContainer.clear()
+        pendingMessagesContainer?.clear()
+        streamingComponent = nil
+        streamingMessage = nil
+        pendingTools.removeAll()
+
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Text(theme.fg(.accent, "✓ New session started"), paddingX: 1, paddingY: 0))
+        scheduleRender()
+
+        return HookCommandResult(cancelled: false)
+    }
+
+    @MainActor
+    private func handleHookBranch(_ entryId: String) async -> HookCommandResult {
+        guard let session else { return HookCommandResult(cancelled: true) }
+
+        do {
+            let result = try await session.branch(entryId)
+            if result.cancelled {
+                return HookCommandResult(cancelled: true)
+            }
+
+            chatContainer.clear()
+            renderInitialMessages()
+            editor?.setText(result.selectedText)
+            showStatus("Branched to new session")
+            return HookCommandResult(cancelled: false)
+        } catch {
+            showHookError("branch", error.localizedDescription)
+            return HookCommandResult(cancelled: true)
+        }
+    }
+
+    @MainActor
+    private func handleHookNavigateTree(_ targetId: String, options: HookNavigateTreeOptions?) async -> HookCommandResult {
+        guard let session else { return HookCommandResult(cancelled: true) }
+
+        let result = await session.navigateTree(targetId, summarize: options?.summarize ?? false)
+        if result.cancelled {
+            return HookCommandResult(cancelled: true)
+        }
+
+        chatContainer.clear()
+        renderInitialMessages()
+        if let editorText = result.editorText {
+            editor?.setText(editorText)
+        }
+        showStatus("Navigated to selected point")
+        return HookCommandResult(cancelled: false)
+    }
+
+    @MainActor
+    private func showHookSelector(_ title: String, _ options: [String]) async -> String? {
+        await withCheckedContinuation { continuation in
+            showSelector { done in
+                let selector = HookSelectorComponent(
+                    title: title,
+                    options: options,
+                    onSelect: { [weak self] option in
+                        self?.hookSelector = nil
+                        done()
+                        continuation.resume(returning: option)
+                    },
+                    onCancel: { [weak self] in
+                        self?.hookSelector = nil
+                        done()
+                        continuation.resume(returning: nil)
+                    }
+                )
+                self.hookSelector = selector
+                return (component: selector, focus: selector)
+            }
+        }
+    }
+
+    @MainActor
+    private func showHookConfirm(_ title: String, _ message: String) async -> Bool {
+        let choice = await showHookSelector("\(title)\n\(message)", ["Yes", "No"])
+        return choice == "Yes"
+    }
+
+    @MainActor
+    private func showHookInput(_ title: String, _ placeholder: String?) async -> String? {
+        await withCheckedContinuation { continuation in
+            showSelector { done in
+                let input = HookInputComponent(
+                    title: title,
+                    placeholder: placeholder,
+                    onSubmit: { [weak self] value in
+                        self?.hookInput = nil
+                        done()
+                        continuation.resume(returning: value)
+                    },
+                    onCancel: { [weak self] in
+                        self?.hookInput = nil
+                        done()
+                        continuation.resume(returning: nil)
+                    }
+                )
+                self.hookInput = input
+                return (component: input, focus: input)
+            }
+        }
+    }
+
+    @MainActor
+    private func showHookEditor(_ title: String, _ prefill: String?) async -> String? {
+        await withCheckedContinuation { continuation in
+            guard let tui else {
+                continuation.resume(returning: nil)
+                return
+            }
+            showSelector { done in
+                let editor = HookEditorComponent(
+                    tui: tui,
+                    title: title,
+                    prefill: prefill,
+                    onSubmit: { [weak self] value in
+                        self?.hookEditor = nil
+                        done()
+                        continuation.resume(returning: value)
+                    },
+                    onCancel: { [weak self] in
+                        self?.hookEditor = nil
+                        done()
+                        continuation.resume(returning: nil)
+                    }
+                )
+                self.hookEditor = editor
+                return (component: editor, focus: editor)
+            }
+        }
+    }
+
+    @MainActor
+    private func showHookCustom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
+        guard let tui, let editor, let editorContainer else { return nil }
+        let savedText = editor.getText()
+
+        return await withCheckedContinuation { continuation in
+            var component: Component?
+
+            let close: HookCustomClose = { result in
+                if let disposable = component as? HookDisposableComponent {
+                    disposable.dispose()
+                }
+                editorContainer.clear()
+                editorContainer.addChild(editor)
+                editor.setText(savedText)
+                tui.setFocus(editor)
+                tui.requestRender()
+                continuation.resume(returning: result.map(HookCustomResult.init))
+            }
+
+            Task { @MainActor in
+                component = await factory(tui, theme, close)
+                if let component {
+                    editorContainer.clear()
+                    editorContainer.addChild(component)
+                    tui.setFocus(component)
+                    tui.requestRender()
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func showHookNotify(_ message: String, _ type: HookNotificationType?) {
+        switch type {
+        case .error:
+            showError(message)
+        case .warning:
+            showWarning(message)
+        case .info, .none:
+            showStatus(message)
+        }
+    }
+
+    @MainActor
+    private func setHookStatus(_ key: String, _ text: String?) {
+        footer?.setHookStatus(key, text)
+        scheduleRender()
+    }
+
+    @MainActor
+    private func showHookError(_ hookPath: String, _ error: String) {
+        let errorText = Text(theme.fg(.error, "Hook \"\(hookPath)\" error: \(error)"), paddingX: 1, paddingY: 0)
+        chatContainer.addChild(errorText)
+        scheduleRender()
     }
 
     @MainActor
@@ -385,6 +816,7 @@ public final class InteractiveMode {
                                 toolName: call.name,
                                 args: call.arguments,
                                 options: ToolExecutionOptions(showImages: session.settingsManager.getShowImages()),
+                                customTool: customTools[call.name]?.tool,
                                 ui: tui
                             )
                             component.setExpanded(toolOutputExpanded)
@@ -424,6 +856,7 @@ public final class InteractiveMode {
                     toolName: toolName,
                     args: args,
                     options: ToolExecutionOptions(showImages: session.settingsManager.getShowImages()),
+                    customTool: customTools[toolName]?.tool,
                     ui: tui
                 )
                 component.setExpanded(toolOutputExpanded)
@@ -499,6 +932,7 @@ public final class InteractiveMode {
                     toolName: toolInfo?.name ?? toolResult.toolName,
                     args: toolInfo?.args ?? [:],
                     options: ToolExecutionOptions(showImages: session.settingsManager.getShowImages()),
+                    customTool: customTools[toolInfo?.name ?? toolResult.toolName]?.tool,
                     ui: tui
                 )
                 component.setExpanded(toolOutputExpanded)
@@ -556,7 +990,8 @@ public final class InteractiveMode {
                 }
             case "hookMessage":
                 if let hook = decodeHookMessage(custom), hook.display {
-                    let component = HookMessageComponent(message: hook)
+                    let renderer = session?.hookRunner?.getMessageRenderer(hook.customType)
+                    let component = HookMessageComponent(message: hook, customRenderer: renderer)
                     component.setExpanded(toolOutputExpanded)
                     chatContainer.addChild(component)
                 }
@@ -757,6 +1192,11 @@ public final class InteractiveMode {
 
     @MainActor
     private func shutdown() {
+        if let session {
+            Task {
+                await session.emitCustomToolSessionEvent(.shutdown)
+            }
+        }
         unsubscribe?()
         unsubscribe = nil
         tui?.stop()
@@ -944,6 +1384,13 @@ public final class InteractiveMode {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        if trimmed.hasPrefix("/") {
+            if await handleHookCommand(trimmed) {
+                editor.setText("")
+                return
+            }
+        }
+
         if trimmed == "/settings" {
             showSettingsSelector()
             editor.setText("")
@@ -1053,6 +1500,30 @@ public final class InteractiveMode {
                 self.showError(error.localizedDescription)
             }
         }
+    }
+
+    @MainActor
+    private func handleHookCommand(_ text: String) async -> Bool {
+        guard let session, let hookRunner = session.hookRunner else { return false }
+        guard text.hasPrefix("/") else { return false }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = String(trimmed.dropFirst())
+        let parts = body.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let namePart = parts.first else { return false }
+        let commandName = String(namePart)
+        guard !commandName.isEmpty else { return false }
+
+        let args = parts.count > 1 ? String(parts[1]) : ""
+        guard let command = hookRunner.getCommand(commandName) else { return false }
+
+        let context = hookRunner.createCommandContext()
+        do {
+            try await command.handler(args, context)
+        } catch {
+            hookRunner.emitError(HookError(hookPath: "command:\(commandName)", event: "command", error: error.localizedDescription))
+        }
+        return true
     }
 
     @MainActor

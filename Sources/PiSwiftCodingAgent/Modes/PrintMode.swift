@@ -18,6 +18,8 @@ public func runPrintMode(
         writeJsonLine(payload)
     }
 
+    await session.emitCustomToolSessionEvent(.start, previousSessionFile: nil)
+
     if let initialMessage {
         try await session.prompt(initialMessage, options: PromptOptions(expandSlashCommands: nil, images: initialImages))
     }

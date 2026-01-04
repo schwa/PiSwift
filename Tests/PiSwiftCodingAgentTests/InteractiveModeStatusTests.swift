@@ -11,12 +11,14 @@ private final class FakeUI: RenderRequesting {
     }
 }
 
+@MainActor
 private final class DummyComponent: Component {
     func render(width: Int) -> [String] {
         ["OTHER"]
     }
 }
 
+@MainActor
 private func renderLastLine(_ container: Container, width: Int = 120) -> String {
     guard let last = container.children.last else { return "" }
     return last.render(width: width).joined(separator: "\n")

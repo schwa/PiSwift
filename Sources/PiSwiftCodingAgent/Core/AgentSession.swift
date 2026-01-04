@@ -37,6 +37,7 @@ public struct AgentSessionConfig: Sendable {
     public var scopedModels: [ScopedModel]?
     public var fileCommands: [FileSlashCommand]?
     public var hookRunner: HookRunner?
+    public var customTools: [LoadedCustomTool]?
     public var modelRegistry: ModelRegistry
     public var skillsSettings: SkillsSettings?
 
@@ -47,6 +48,7 @@ public struct AgentSessionConfig: Sendable {
         scopedModels: [ScopedModel]? = nil,
         fileCommands: [FileSlashCommand]? = nil,
         hookRunner: HookRunner? = nil,
+        customTools: [LoadedCustomTool]? = nil,
         modelRegistry: ModelRegistry,
         skillsSettings: SkillsSettings? = nil
     ) {
@@ -56,6 +58,7 @@ public struct AgentSessionConfig: Sendable {
         self.scopedModels = scopedModels
         self.fileCommands = fileCommands
         self.hookRunner = hookRunner
+        self.customTools = customTools
         self.modelRegistry = modelRegistry
         self.skillsSettings = skillsSettings
     }
@@ -86,7 +89,8 @@ public final class AgentSession: @unchecked Sendable {
     public let sessionManager: SessionManager
     public let settingsManager: SettingsManager
     public let modelRegistry: ModelRegistry
-    private var hookRunner: HookRunner?
+    private var _hookRunner: HookRunner?
+    private var customToolsInternal: [LoadedCustomTool]
     private var scopedModels: [ScopedModel]
     private var fileCommands: [FileSlashCommand]
 
@@ -104,11 +108,12 @@ public final class AgentSession: @unchecked Sendable {
         self.sessionManager = config.sessionManager
         self.settingsManager = config.settingsManager
         self.modelRegistry = config.modelRegistry
-        self.hookRunner = config.hookRunner
+        self._hookRunner = config.hookRunner
+        self.customToolsInternal = config.customTools ?? []
         self.scopedModels = config.scopedModels ?? []
         self.fileCommands = config.fileCommands ?? []
 
-        self.hookRunner?.initialize(getModel: { [weak agent] in
+        self._hookRunner?.initialize(getModel: { [weak agent] in
             agent?.state.model
         }, hasUI: false)
 
@@ -120,6 +125,46 @@ public final class AgentSession: @unchecked Sendable {
     public func dispose() {
         unsubscribeAgent?()
         unsubscribeAgent = nil
+    }
+
+    public var hookRunner: HookRunner? {
+        _hookRunner
+    }
+
+    public var customTools: [LoadedCustomTool] {
+        customToolsInternal
+    }
+
+    public func emitCustomToolSessionEvent(
+        _ reason: CustomToolSessionEvent.Reason,
+        previousSessionFile: String? = nil
+    ) async {
+        guard !customToolsInternal.isEmpty else { return }
+
+        let event = CustomToolSessionEvent(reason: reason, previousSessionFile: previousSessionFile)
+        let context = CustomToolContext(
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            model: agent.state.model,
+            isIdle: { [weak self] in
+                !(self?.isStreaming ?? true)
+            },
+            hasPendingMessages: { [weak self] in
+                (self?.pendingMessageCount ?? 0) > 0
+            },
+            abort: { [weak self] in
+                Task { await self?.abort() }
+            }
+        )
+
+        for tool in customToolsInternal {
+            guard let handler = tool.tool.onSession else { continue }
+            do {
+                try await handler(event, context)
+            } catch {
+                // Ignore tool errors during session events
+            }
+        }
     }
 
     public func subscribe(_ listener: @escaping (AgentSessionEvent) -> Void) -> () -> Void {
@@ -228,6 +273,42 @@ public final class AgentSession: @unchecked Sendable {
         agent.followUp(buildUserMessage(text: text, images: nil))
     }
 
+    public func sendHookMessage(_ message: HookMessageInput, options: HookSendMessageOptions? = nil) async {
+        let hookMessage = HookMessage(
+            customType: message.customType,
+            content: message.content,
+            display: message.display,
+            details: message.details
+        )
+        let agentMessage = makeHookAgentMessage(hookMessage)
+
+        if isStreaming {
+            if options?.deliverAs == .followUp {
+                agent.followUp(agentMessage)
+            } else {
+                agent.steer(agentMessage)
+            }
+            return
+        }
+
+        if options?.triggerTurn == true {
+            do {
+                try await agent.prompt(agentMessage)
+            } catch {
+                return
+            }
+            return
+        }
+
+        agent.appendMessage(agentMessage)
+        _ = sessionManager.appendCustomMessage(
+            message.customType,
+            message.content,
+            message.display,
+            details: message.details
+        )
+    }
+
     public func clearQueue() -> (steering: [String], followUp: [String]) {
         let steering = steeringMessages
         let follow = followUpMessages
@@ -263,7 +344,7 @@ public final class AgentSession: @unchecked Sendable {
         let selectedText = extractUserContentText(user.content)
         let previousSession = sessionFile
 
-        if let hookRunner, hookRunner.hasHandlers("session_before_branch") {
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_branch") {
             if let result = await hookRunner.emit(SessionBeforeBranchEvent(entryId: entryId)) as? SessionBeforeBranchResult {
                 if result.cancel {
                     return (selectedText, true)
@@ -279,9 +360,11 @@ public final class AgentSession: @unchecked Sendable {
 
         syncAgentContext()
 
-        if let hookRunner {
+        if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionBranchEvent(previousSessionFile: previousSession))
         }
+
+        await emitCustomToolSessionEvent(.branch, previousSessionFile: previousSession)
 
         return (selectedText, false)
     }
@@ -314,7 +397,7 @@ public final class AgentSession: @unchecked Sendable {
         var summaryDetails: AnyCodable?
         var fromHook = false
 
-        if let hookRunner, hookRunner.hasHandlers("session_before_tree") {
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_tree") {
             if let result = await hookRunner.emit(SessionBeforeTreeEvent(preparation: preparation, signal: branchSummaryAbort)) as? SessionBeforeTreeResult {
                 if result.cancel {
                     return (nil, true, nil, nil)
@@ -395,9 +478,11 @@ public final class AgentSession: @unchecked Sendable {
 
         syncAgentContext()
 
-        if let hookRunner {
+        if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionTreeEvent(newLeafId: sessionManager.getLeafId(), oldLeafId: oldLeafId, summaryEntry: summaryEntry, fromHook: summaryEntry != nil ? fromHook : nil))
         }
+
+        await emitCustomToolSessionEvent(.tree, previousSessionFile: sessionFile)
 
         return (editorText, false, nil, summaryEntry)
     }
@@ -428,7 +513,7 @@ public final class AgentSession: @unchecked Sendable {
 
         var hookCompaction: CompactionResult?
         var fromHook = false
-        if let hookRunner, hookRunner.hasHandlers("session_before_compact") {
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_compact") {
             if let result = await hookRunner.emit(SessionBeforeCompactEvent(preparation: preparation, branchEntries: pathEntries, customInstructions: customInstructions, signal: compactionAbort)) as? SessionBeforeCompactResult {
                 if result.cancel {
                     throw NSError(domain: "AgentSession", code: 7, userInfo: [NSLocalizedDescriptionKey: "Compaction cancelled"])
@@ -469,7 +554,7 @@ public final class AgentSession: @unchecked Sendable {
 
         syncAgentContext()
 
-        if let hookRunner {
+        if let hookRunner = _hookRunner {
             if let entry = sessionManager.getEntries().compactMap({ entry -> CompactionEntry? in
                 if case .compaction(let compaction) = entry { return compaction }
                 return nil
