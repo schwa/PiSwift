@@ -1,0 +1,60 @@
+import Foundation
+import PiSwiftAI
+import PiSwiftAgent
+
+public func wrapToolWithHooks(_ tool: AgentTool, _ hookRunner: HookRunner) -> AgentTool {
+    AgentTool(
+        label: tool.label,
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters
+    ) { toolCallId, params, signal, onUpdate in
+        if hookRunner.hasHandlers("tool_call") {
+            let callEvent = ToolCallEvent(toolName: tool.name, toolCallId: toolCallId, input: params)
+            if let callResult = await hookRunner.emitToolCall(callEvent), callResult.block {
+                let reason = callResult.reason ?? "Tool execution was blocked by a hook"
+                throw NSError(domain: "HookRunner", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+            }
+        }
+
+        do {
+            let result = try await tool.execute(toolCallId, params, signal, onUpdate)
+
+            if hookRunner.hasHandlers("tool_result") {
+                let event = ToolResultEvent(
+                    toolName: tool.name,
+                    toolCallId: toolCallId,
+                    input: params,
+                    content: result.content,
+                    details: result.details,
+                    isError: false
+                )
+                if let hookResult = await hookRunner.emit(event) as? ToolResultEventResult {
+                    return AgentToolResult(
+                        content: hookResult.content ?? result.content,
+                        details: hookResult.details ?? result.details
+                    )
+                }
+            }
+
+            return result
+        } catch {
+            if hookRunner.hasHandlers("tool_result") {
+                let event = ToolResultEvent(
+                    toolName: tool.name,
+                    toolCallId: toolCallId,
+                    input: params,
+                    content: [.text(TextContent(text: error.localizedDescription))],
+                    details: nil,
+                    isError: true
+                )
+                _ = await hookRunner.emit(event)
+            }
+            throw error
+        }
+    }
+}
+
+public func wrapToolsWithHooks(_ tools: [AgentTool], _ hookRunner: HookRunner) -> [AgentTool] {
+    tools.map { wrapToolWithHooks($0, hookRunner) }
+}
