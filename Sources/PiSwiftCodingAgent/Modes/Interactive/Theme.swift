@@ -2,6 +2,7 @@ import Foundation
 import Dispatch
 import MiniTui
 import Darwin
+import PiSwiftSyntaxHighlight
 
 public enum ThemeColor: String, CaseIterable, Sendable {
     case accent
@@ -704,10 +705,25 @@ private func resolveExportColor(_ value: ThemeColorValue?, vars: [String: ThemeC
 }
 
 public func highlightCode(_ code: String, lang: String? = nil) -> [String] {
-    _ = lang
-    return code.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-        theme.fg(.mdCodeBlock, String(line))
-    }
+    let adapter = ThemeSyntaxAdapter(theme: theme)
+    return SyntaxHighlighter.highlight(code: code, lang: lang, theme: adapter)
+}
+
+private struct ThemeSyntaxAdapter: SyntaxTheme {
+    let theme: Theme
+
+    func plain(_ text: String) -> String { theme.fg(.mdCodeBlock, text) }
+    func keyword(_ text: String) -> String { theme.fg(.syntaxKeyword, text) }
+    func builtIn(_ text: String) -> String { theme.fg(.syntaxType, text) }
+    func literal(_ text: String) -> String { theme.fg(.syntaxNumber, text) }
+    func number(_ text: String) -> String { theme.fg(.syntaxNumber, text) }
+    func string(_ text: String) -> String { theme.fg(.syntaxString, text) }
+    func comment(_ text: String) -> String { theme.fg(.syntaxComment, text) }
+    func function(_ text: String) -> String { theme.fg(.syntaxFunction, text) }
+    func type(_ text: String) -> String { theme.fg(.syntaxType, text) }
+    func variable(_ text: String) -> String { theme.fg(.syntaxVariable, text) }
+    func operatorToken(_ text: String) -> String { theme.fg(.syntaxOperator, text) }
+    func punctuation(_ text: String) -> String { theme.fg(.syntaxPunctuation, text) }
 }
 
 public func getLanguageFromPath(_ filePath: String) -> String? {

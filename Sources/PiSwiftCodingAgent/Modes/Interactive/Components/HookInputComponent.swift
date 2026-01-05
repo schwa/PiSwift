@@ -1,10 +1,14 @@
 import Foundation
 import MiniTui
 
-public final class HookInputComponent: Container {
+public final class HookInputComponent: Container, SystemCursorAware {
     private let input: Input
     private let onSubmitCallback: (String) -> Void
     private let onCancelCallback: () -> Void
+    public var usesSystemCursor: Bool {
+        get { input.usesSystemCursor }
+        set { input.usesSystemCursor = newValue }
+    }
 
     public init(
         title: String,

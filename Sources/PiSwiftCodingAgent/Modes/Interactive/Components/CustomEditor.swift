@@ -1,10 +1,15 @@
 import Foundation
 import MiniTui
 
-public final class CustomEditor: Component {
+public final class CustomEditor: Component, SystemCursorAware {
     private let editor: Editor
     private let keybindings: KeybindingsManager
     private var actionHandlers: [AppAction: () -> Void] = [:]
+
+    public var usesSystemCursor: Bool {
+        get { editor.usesSystemCursor }
+        set { editor.usesSystemCursor = newValue }
+    }
 
     public var onEscape: (() -> Void)?
     public var onCtrlD: (() -> Void)?

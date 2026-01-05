@@ -2,11 +2,15 @@ import Foundation
 import MiniTui
 
 @MainActor
-public final class HookEditorComponent: Container {
+public final class HookEditorComponent: Container, SystemCursorAware {
     private let editor: Editor
     private let onSubmitCallback: (String) -> Void
     private let onCancelCallback: () -> Void
     private let tui: TUI
+    public var usesSystemCursor: Bool {
+        get { editor.usesSystemCursor }
+        set { editor.usesSystemCursor = newValue }
+    }
 
     public init(
         tui: TUI,

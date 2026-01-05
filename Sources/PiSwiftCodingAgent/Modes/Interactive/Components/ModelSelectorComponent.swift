@@ -14,7 +14,7 @@ private struct ScopedModelItem {
 }
 
 @MainActor
-public final class ModelSelectorComponent: Container {
+public final class ModelSelectorComponent: Container, SystemCursorAware {
     private let searchInput: Input
     private let listContainer: Container
     private var allModels: [ModelItem] = []
@@ -28,6 +28,10 @@ public final class ModelSelectorComponent: Container {
     private var errorMessage: String?
     private let tui: TUI
     private let scopedModels: [ScopedModelItem]
+    public var usesSystemCursor: Bool {
+        get { searchInput.usesSystemCursor }
+        set { searchInput.usesSystemCursor = newValue }
+    }
 
     public init(
         tui: TUI,

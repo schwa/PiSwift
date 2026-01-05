@@ -149,6 +149,7 @@ public final class InteractiveMode {
     private var customTools: [String: LoadedCustomTool] = [:]
     private var hookShortcuts: [KeyId: HookShortcut] = [:]
     private var keybindings: KeybindingsManager = KeybindingsManager.inMemory()
+    private var selectorCancel: (() -> Void)?
     private var setToolUIContext: (HookUIContext, Bool) -> Void = { _, _ in }
     private var setToolSendMessageHandler: (@Sendable (_ handler: @escaping HookSendMessageHandler) -> Void) = { _ in }
 
@@ -235,6 +236,23 @@ public final class InteractiveMode {
             ui = TuiRenderAdapter(created)
         }
         guard let tui else { return }
+
+        tui.onGlobalInput = { [weak self] data in
+            guard let self else { return false }
+            if self.keybindings.matches(data, .suspend) {
+                self.handleCtrlZ()
+                return true
+            }
+            if self.keybindings.matches(data, .clear) {
+                if let selectorCancel = self.selectorCancel {
+                    selectorCancel()
+                } else {
+                    self.handleCtrlC()
+                }
+                return true
+            }
+            return false
+        }
 
         let settingsManager = session.settingsManager
         hideThinkingBlock = settingsManager.getHideThinkingBlock()
@@ -1793,7 +1811,9 @@ public final class InteractiveMode {
     private func showSelector(_ builder: (_ done: @escaping () -> Void) -> (component: Component, focus: Component)) {
         guard let editorContainer, let tui else { return }
 
-        let done = {
+        let done: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.selectorCancel = nil
             editorContainer.clear()
             if let editor = self.editor {
                 editorContainer.addChild(editor)
@@ -1802,6 +1822,7 @@ public final class InteractiveMode {
             self.scheduleRender()
         }
 
+        selectorCancel = done
         let result = builder(done)
         editorContainer.clear()
         editorContainer.addChild(result.component)
@@ -1837,55 +1858,57 @@ public final class InteractiveMode {
             collapseChangelog: settingsManager.getCollapseChangelog()
         )
 
-        let callbacks = SettingsCallbacks(
-            onAutoCompactChange: { [weak self] enabled in
-                settingsManager.setCompactionEnabled(enabled)
-                self?.footer?.setAutoCompactEnabled(enabled)
-            },
-            onShowImagesChange: { [weak self] enabled in
-                settingsManager.setShowImages(enabled)
-                self?.updateToolImages(enabled)
-            },
-            onAutoResizeImagesChange: { enabled in
-                settingsManager.setAutoResizeImages(enabled)
-            },
-            onSteeringModeChange: { mode in
-                settingsManager.setSteeringMode(mode)
-                session.agent.setSteeringMode(AgentSteeringMode(rawValue: mode) ?? .oneAtATime)
-            },
-            onFollowUpModeChange: { mode in
-                settingsManager.setFollowUpMode(mode)
-                session.agent.setFollowUpMode(AgentFollowUpMode(rawValue: mode) ?? .oneAtATime)
-            },
-            onThinkingLevelChange: { [weak self] level in
-                session.agent.setThinkingLevel(level)
-                settingsManager.setDefaultThinkingLevel(level.rawValue)
-                self?.updateEditorBorderColor()
-            },
-            onThemeChange: { [weak self] name in
-                let result = setTheme(name, enableWatcher: true)
-                settingsManager.setTheme(name)
-                if result.success == false {
-                    self?.showError("Failed to load theme \(name): \(result.error ?? "unknown error")")
-                }
-            },
-            onThemePreview: { name in
-                _ = setTheme(name, enableWatcher: true)
-            },
-            onHideThinkingBlockChange: { [weak self] hide in
-                self?.hideThinkingBlock = hide
-                settingsManager.setHideThinkingBlock(hide)
-                self?.applyThinkingBlockVisibility()
-            },
-            onCollapseChangelogChange: { collapse in
-                settingsManager.setCollapseChangelog(collapse)
-            },
-            onCancel: { }
-        )
-
         showSelector { done in
+            let callbacks = SettingsCallbacks(
+                onAutoCompactChange: { [weak self] enabled in
+                    settingsManager.setCompactionEnabled(enabled)
+                    self?.footer?.setAutoCompactEnabled(enabled)
+                },
+                onShowImagesChange: { [weak self] enabled in
+                    settingsManager.setShowImages(enabled)
+                    self?.updateToolImages(enabled)
+                },
+                onAutoResizeImagesChange: { enabled in
+                    settingsManager.setAutoResizeImages(enabled)
+                },
+                onSteeringModeChange: { mode in
+                    settingsManager.setSteeringMode(mode)
+                    session.agent.setSteeringMode(AgentSteeringMode(rawValue: mode) ?? .oneAtATime)
+                },
+                onFollowUpModeChange: { mode in
+                    settingsManager.setFollowUpMode(mode)
+                    session.agent.setFollowUpMode(AgentFollowUpMode(rawValue: mode) ?? .oneAtATime)
+                },
+                onThinkingLevelChange: { [weak self] level in
+                    session.agent.setThinkingLevel(level)
+                    settingsManager.setDefaultThinkingLevel(level.rawValue)
+                    self?.updateEditorBorderColor()
+                },
+                onThemeChange: { [weak self] name in
+                    let result = setTheme(name, enableWatcher: true)
+                    settingsManager.setTheme(name)
+                    if result.success == false {
+                        self?.showError("Failed to load theme \(name): \(result.error ?? "unknown error")")
+                    }
+                },
+                onThemePreview: { name in
+                    _ = setTheme(name, enableWatcher: true)
+                },
+                onHideThinkingBlockChange: { [weak self] hide in
+                    self?.hideThinkingBlock = hide
+                    settingsManager.setHideThinkingBlock(hide)
+                    self?.applyThinkingBlockVisibility()
+                },
+                onCollapseChangelogChange: { collapse in
+                    settingsManager.setCollapseChangelog(collapse)
+                },
+                onCancel: {
+                    done()
+                }
+            )
+
             let selector = SettingsSelectorComponent(config: config, callbacks: callbacks)
-            return (component: selector, focus: selector)
+            return (component: selector, focus: selector.getSettingsList())
         }
     }
 

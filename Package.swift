@@ -24,6 +24,10 @@ let package = Package(
             name: "PiSwiftCodingAgent",
             targets: ["PiSwiftCodingAgent"]
         ),
+        .library(
+            name: "PiSwiftSyntaxHighlight",
+            targets: ["PiSwiftSyntaxHighlight"]
+        ),
         .executable(
             name: "pi-ai",
             targets: ["PiSwiftAICLI"]
@@ -61,11 +65,15 @@ let package = Package(
             dependencies: [
                 "PiSwiftAI",
                 "PiSwiftAgent",
+                "PiSwiftSyntaxHighlight",
                 .product(name: "MiniTui", package: "MiniTui"),
             ],
             resources: [
                 .process("Resources")
             ]
+        ),
+        .target(
+            name: "PiSwiftSyntaxHighlight"
         ),
         .executableTarget(
             name: "PiSwiftAICLI",
