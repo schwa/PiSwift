@@ -424,7 +424,8 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let contextFiles = options.contextFiles ?? discoverContextFiles(cwd: cwd, agentDir: agentDir)
     time("discoverContextFiles")
 
-    let builtInTools = options.tools ?? createCodingTools(cwd: cwd)
+    let toolsOptions = ToolsOptions(read: ReadToolOptions(autoResizeImages: settingsManager.getAutoResizeImages()))
+    let builtInTools = options.tools ?? createCodingTools(cwd: cwd, options: toolsOptions)
     time("createCodingTools")
 
     var customToolsResult: CustomToolsLoadResult
@@ -436,7 +437,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         customToolsResult = CustomToolsLoadResult(tools: loadedTools, errors: [])
     } else {
         let configuredPaths = settingsManager.getCustomTools() + (options.additionalCustomToolPaths ?? [])
-        let builtInToolNames = createAllTools(cwd: cwd).keys.map { $0.rawValue }
+        let builtInToolNames = createAllTools(cwd: cwd, options: toolsOptions).keys.map { $0.rawValue }
         customToolsResult = discoverAndLoadCustomTools(configuredPaths, cwd, builtInToolNames, agentDir, eventBus)
         for error in customToolsResult.errors {
             writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
@@ -465,7 +466,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
         contextProvider.buildContext()
     }
-    let allBuiltInToolsMap = createAllTools(cwd: cwd)
+    let allBuiltInToolsMap = createAllTools(cwd: cwd, options: toolsOptions)
     var toolRegistry: [String: AgentTool] = [:]
     for (name, tool) in allBuiltInToolsMap {
         toolRegistry[name.rawValue] = tool

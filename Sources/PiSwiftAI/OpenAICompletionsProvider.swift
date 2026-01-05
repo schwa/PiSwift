@@ -155,7 +155,7 @@ public func streamOpenAICompletions(
             stream.end()
         } catch {
             output.stopReason = options.signal?.isCancelled == true ? .aborted : .error
-            output.errorMessage = error.localizedDescription
+            output.errorMessage = describeOpenAIError(error)
             stream.push(.error(reason: output.stopReason, error: output))
             stream.end()
         }

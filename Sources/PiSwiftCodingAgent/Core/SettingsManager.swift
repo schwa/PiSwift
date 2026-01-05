@@ -38,6 +38,10 @@ public struct TerminalSettings: Sendable {
     public var showImages: Bool?
 }
 
+public struct ImageSettings: Sendable {
+    public var autoResize: Bool?
+}
+
 public struct Settings: Sendable {
     public var lastChangelogVersion: String?
     public var defaultProvider: String?
@@ -56,6 +60,7 @@ public struct Settings: Sendable {
     public var customTools: [String]?
     public var skills: SkillsSettings?
     public var terminal: TerminalSettings?
+    public var images: ImageSettings?
     public var enabledModels: [String]?
 
     public init() {}
@@ -277,6 +282,16 @@ public final class SettingsManager: @unchecked Sendable {
         save()
     }
 
+    public func getAutoResizeImages() -> Bool {
+        settings.images?.autoResize ?? true
+    }
+
+    public func setAutoResizeImages(_ enabled: Bool) {
+        if globalSettings.images == nil { globalSettings.images = ImageSettings() }
+        globalSettings.images?.autoResize = enabled
+        save()
+    }
+
     private static func loadFromFile(_ path: String) -> Settings {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -351,6 +366,10 @@ public final class SettingsManager: @unchecked Sendable {
             settings.terminal = TerminalSettings(showImages: terminal["showImages"] as? Bool)
         }
 
+        if let images = json["images"] as? [String: Any] {
+            settings.images = ImageSettings(autoResize: images["autoResize"] as? Bool)
+        }
+
         return settings
     }
 
@@ -409,6 +428,10 @@ public final class SettingsManager: @unchecked Sendable {
             json["terminal"] = ["showImages": terminal.showImages as Any]
         }
 
+        if let images = globalSettings.images {
+            json["images"] = ["autoResize": images.autoResize as Any]
+        }
+
         let dir = URL(fileURLWithPath: settingsPath).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -438,6 +461,7 @@ public final class SettingsManager: @unchecked Sendable {
         if override.customTools != nil { result.customTools = override.customTools }
         if override.skills != nil { result.skills = override.skills }
         if override.terminal != nil { result.terminal = override.terminal }
+        if override.images != nil { result.images = override.images }
         if override.enabledModels != nil { result.enabledModels = override.enabledModels }
         return result
     }

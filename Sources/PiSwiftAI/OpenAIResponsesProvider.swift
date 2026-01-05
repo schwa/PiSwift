@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenAI
 
@@ -17,11 +18,15 @@ public func streamOpenAIResponses(
             usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
             stopReason: .stop
         )
+        var client: OpenAI? = nil
+        var query: CreateModelResponseQuery? = nil
 
         do {
-            let client = try makeOpenAIClient(model: model, apiKey: options.apiKey)
-            let query = try buildResponsesQuery(model: model, context: context, options: options)
-            let openAIStream: AsyncThrowingStream<ResponseStreamEvent, Error> = client.responses.createResponseStreaming(query: query)
+            let builtClient = try makeOpenAIClient(model: model, apiKey: options.apiKey)
+            let builtQuery = try buildResponsesQuery(model: model, context: context, options: options)
+            client = builtClient
+            query = builtQuery
+            let openAIStream: AsyncThrowingStream<ResponseStreamEvent, Error> = builtClient.responses.createResponseStreaming(query: builtQuery)
             stream.push(.start(partial: output))
 
             var currentBlockIndex: Int? = nil
@@ -208,8 +213,11 @@ public func streamOpenAIResponses(
             stream.push(.done(reason: output.stopReason, message: output))
             stream.end()
         } catch {
+            if shouldLogOpenAIErrorBody(), let client, let query, error is OpenAIError {
+                await debugOpenAIResponsesError(client: client, query: query)
+            }
             output.stopReason = options.signal?.isCancelled == true ? .aborted : .error
-            output.errorMessage = error.localizedDescription
+            output.errorMessage = describeOpenAIError(error)
             stream.push(.error(reason: output.stopReason, error: output))
             stream.end()
         }
@@ -223,7 +231,7 @@ private func buildResponsesQuery(
     context: Context,
     options: OpenAIResponsesOptions
 ) throws -> CreateModelResponseQuery {
-    let inputItems = convertResponsesMessages(model: model, context: context)
+    var inputItems = convertResponsesMessages(model: model, context: context)
 
     var reasoning: Components.Schemas.Reasoning? = nil
     var include: [Components.Schemas.Includable]? = nil
@@ -234,12 +242,15 @@ private func buildResponsesQuery(
                 summary: mapReasoningSummary(options.reasoningSummary)
             )
             include = [.reasoning_encryptedContent]
+        } else if model.id.hasPrefix("gpt-5") {
+            let note = EasyInputMessage(role: .developer, content: .textInput(sanitizeSurrogates("# Juice: 0 !important")))
+            inputItems.append(.inputMessage(note))
         }
     }
 
     let tools = context.tools.map(convertResponsesTools)
 
-    return CreateModelResponseQuery(
+    let query = CreateModelResponseQuery(
         input: .inputItemList(inputItems),
         model: model.id,
         include: include,
@@ -252,6 +263,8 @@ private func buildResponsesQuery(
         toolChoice: nil,
         tools: tools
     )
+    logOpenAIResponsesQuery(query)
+    return query
 }
 
 private func mapResponsesReasoningEffort(_ effort: ReasoningEffort?) -> Components.Schemas.ReasoningEffort? {
@@ -319,10 +332,11 @@ private func convertResponsesMessages(model: Model, context: Context) -> [InputI
             }
         case .assistant(let assistant):
             var items: [InputItem] = []
+            let allowToolCalls = assistant.stopReason != .error
             for block in assistant.content {
                 switch block {
                 case .text(let textBlock):
-                    let id = textBlock.textSignature ?? "msg_\(messageIndex)"
+                    let id = normalizeResponseItemId(textBlock.textSignature, fallbackIndex: messageIndex)
                     let content = Components.Schemas.OutputTextContent(_type: .outputText, text: sanitizeSurrogates(textBlock.text), annotations: [])
                     let outputMessage = Components.Schemas.OutputMessage(
                         id: id,
@@ -333,9 +347,11 @@ private func convertResponsesMessages(model: Model, context: Context) -> [InputI
                     )
                     items.append(.item(.outputMessage(outputMessage)))
                 case .toolCall(let toolCall):
+                    guard allowToolCalls else { break }
                     let parts = toolCall.id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
                     let callId = parts.first.map(String.init) ?? toolCall.id
-                    let itemId = parts.count > 1 ? String(parts[1]) : nil
+                    let rawItemId = parts.count > 1 ? String(parts[1]) : nil
+                    let itemId = normalizeOptionalResponseItemId(rawItemId)
                     let toolItem = Components.Schemas.FunctionToolCall(
                         id: itemId,
                         _type: .functionCall,
@@ -345,8 +361,17 @@ private func convertResponsesMessages(model: Model, context: Context) -> [InputI
                         status: .completed
                     )
                     items.append(.item(.functionToolCall(toolItem)))
-                case .thinking:
-                    break
+                case .thinking(let thinking):
+                    guard allowToolCalls else { break }
+                    guard let signature = thinking.thinkingSignature,
+                          let data = signature.data(using: .utf8) else {
+                        break
+                    }
+                    if let reasoningItem = try? JSONDecoder().decode(Components.Schemas.ReasoningItem.self, from: data) {
+                        items.append(.item(.reasoningItem(reasoningItem)))
+                    } else {
+                        logOpenAIDebug("openai responses failed to decode reasoning item signature")
+                    }
                 case .image:
                     break
                 }
@@ -395,6 +420,102 @@ private func convertResponsesTools(_ tools: [AITool]) -> [Tool] {
         let schema = openAIJSONSchema(from: tool.parameters) ?? .object([:])
         let function = FunctionTool(name: tool.name, description: tool.description, parameters: schema, strict: false)
         return .functionTool(function)
+    }
+}
+
+private func normalizeResponseItemId(_ id: String?, fallbackIndex: Int) -> String {
+    var resolved = (id?.isEmpty == false) ? id! : "msg_\(fallbackIndex)"
+    if resolved.count > 64 {
+        resolved = "msg_\(shortHash(resolved))"
+    }
+    return resolved
+}
+
+private func normalizeOptionalResponseItemId(_ id: String?) -> String? {
+    guard let id, !id.isEmpty else { return nil }
+    if id.count > 64 {
+        return "msg_\(shortHash(id))"
+    }
+    return id
+}
+
+private func shortHash(_ value: String) -> String {
+    guard let data = value.data(using: .utf8) else {
+        return String(value.prefix(16))
+    }
+    let digest = SHA256.hash(data: data)
+    return digest.map { String(format: "%02x", $0) }.joined().prefix(16).description
+}
+
+private func shouldLogOpenAIPayload() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let flag = env["PI_DEBUG_OPENAI_PAYLOAD"]?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes" || flag == "full"
+}
+
+private func shouldLogOpenAIErrorBody() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let flag = env["PI_DEBUG_OPENAI_BODY"]?.lowercased()
+    return flag == "1" || flag == "true" || flag == "yes"
+}
+
+private func logOpenAIResponsesQuery(_ query: CreateModelResponseQuery) {
+    guard shouldLogOpenAIDebug() else { return }
+    let inputCount: Int
+    switch query.input {
+    case .textInput:
+        inputCount = 1
+    case .inputItemList(let items):
+        inputCount = items.count
+    }
+    let toolCount = query.tools?.count ?? 0
+    logOpenAIDebug("openai responses query model=\(query.model) inputItems=\(inputCount) tools=\(toolCount) reasoning=\(query.reasoning != nil) stream=\(query.stream == true)")
+
+    guard shouldLogOpenAIPayload() else { return }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let data = try? encoder.encode(query),
+       var payload = String(data: data, encoding: .utf8) {
+        if payload.count > 20000 {
+            payload = String(payload.prefix(20000)) + "\n... (truncated)"
+        }
+        logOpenAIDebug("openai responses payload=\n\(payload)")
+    }
+}
+
+private func debugOpenAIResponsesError(client: OpenAI, query: CreateModelResponseQuery) async {
+    let nonStreaming = CreateModelResponseQuery(
+        input: query.input,
+        model: query.model,
+        include: query.include,
+        background: query.background,
+        instructions: query.instructions,
+        maxOutputTokens: query.maxOutputTokens,
+        metadata: query.metadata,
+        parallelToolCalls: query.parallelToolCalls,
+        previousResponseId: query.previousResponseId,
+        prompt: query.prompt,
+        reasoning: query.reasoning,
+        serviceTier: query.serviceTier,
+        store: query.store,
+        stream: false,
+        temperature: query.temperature,
+        text: query.text,
+        toolChoice: query.toolChoice,
+        tools: query.tools,
+        topP: query.topP,
+        truncation: query.truncation,
+        user: query.user
+    )
+
+    do {
+        _ = try await client.responses.createResponse(query: nonStreaming)
+    } catch {
+        if let apiError = error as? APIErrorResponse {
+            logOpenAIDebug("openai errorBody message=\(apiError.error.message) type=\(apiError.error.type) param=\(apiError.error.param ?? "nil") code=\(apiError.error.code ?? "nil")")
+        } else {
+            logOpenAIDebug("openai nonstreaming error=\(error.localizedDescription)")
+        }
     }
 }
 

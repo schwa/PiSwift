@@ -863,6 +863,12 @@ public final class InteractiveMode {
             }
         }
 
+        editor.onPasteImage = { [weak self] in
+            Task { @MainActor in
+                self?.handleClipboardImagePaste()
+            }
+        }
+
         editor.onSubmit = { [weak self] text in
             Task { @MainActor in
                 await self?.handleEditorSubmit(text)
@@ -1197,6 +1203,7 @@ public final class InteractiveMode {
             theme.fg(.dim, "/") + theme.fg(.muted, " for commands"),
             theme.fg(.dim, "!") + theme.fg(.muted, " to run bash"),
             theme.fg(.dim, followUp) + theme.fg(.muted, " to queue follow-up"),
+            theme.fg(.dim, "ctrl+v") + theme.fg(.muted, " to paste image"),
         ].joined(separator: "\n")
         return "\(logo)\n\(instructions)"
     }
@@ -1553,6 +1560,22 @@ public final class InteractiveMode {
     }
 
     @MainActor
+    private func handleClipboardImagePaste() {
+        guard let editor else { return }
+        guard clipboardHasImage(), let data = getClipboardImagePngData(), !data.isEmpty else { return }
+
+        let fileName = "pi-clipboard-\(UUID().uuidString).png"
+        let filePath = (NSTemporaryDirectory() as NSString).appendingPathComponent(fileName)
+        do {
+            try data.write(to: URL(fileURLWithPath: filePath))
+            editor.insertTextAtCursor(filePath)
+            scheduleRender()
+        } catch {
+            // Ignore clipboard errors.
+        }
+    }
+
+    @MainActor
     private func handleEditorSubmit(_ text: String) async {
         guard let session, let editor else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1803,6 +1826,7 @@ public final class InteractiveMode {
         let config = SettingsConfig(
             autoCompact: settingsManager.getCompactionEnabled(),
             showImages: settingsManager.getShowImages(),
+            autoResizeImages: settingsManager.getAutoResizeImages(),
             steeringMode: settingsManager.getSteeringMode(),
             followUpMode: settingsManager.getFollowUpMode(),
             thinkingLevel: session.agent.state.thinkingLevel,
@@ -1821,6 +1845,9 @@ public final class InteractiveMode {
             onShowImagesChange: { [weak self] enabled in
                 settingsManager.setShowImages(enabled)
                 self?.updateToolImages(enabled)
+            },
+            onAutoResizeImagesChange: { enabled in
+                settingsManager.setAutoResizeImages(enabled)
             },
             onSteeringModeChange: { mode in
                 settingsManager.setSteeringMode(mode)
@@ -2166,6 +2193,7 @@ public final class InteractiveMode {
 | `\(toggleThinking)` | Toggle thinking block visibility |
 | `\(externalEditor)` | Edit message in external editor |
 | `\(followUp)` | Queue follow-up message |
+| `Ctrl+V` | Paste image from clipboard |
 | `/` | Slash commands |
 | `!` | Run bash command |
 """

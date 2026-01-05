@@ -48,4 +48,4 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - [x] Plan-mode hook parity (todo extraction, widget + final list, tool_result/turn_end tracking).
 - [x] Tool registry/tool control parity (full registry even when scoped, wrap all tools).
 - [x] Keybinding & slash command parity (`/quit` + `/exit`, configurable keybindings, robust shortcut matching, `$ARGUMENTS` for slash commands).
-- [ ] Image handling parity (auto-resize toggle, read tool resize + dimension note, consistent placeholders, clipboard paste).
+- [x] Image handling parity (auto-resize toggle, read tool resize + dimension note, consistent placeholders, clipboard paste).

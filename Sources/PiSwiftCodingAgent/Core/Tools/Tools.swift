@@ -26,17 +26,37 @@ public let allTools: [ToolName: Tool] = [
     .ls: lsTool,
 ]
 
+public struct ToolsOptions: Sendable {
+    public var read: ReadToolOptions?
+
+    public init(read: ReadToolOptions? = nil) {
+        self.read = read
+    }
+}
+
 public func createCodingTools(cwd: String) -> [Tool] {
-    [createReadTool(cwd: cwd), createBashTool(cwd: cwd), createEditTool(cwd: cwd), createWriteTool(cwd: cwd)]
+    createCodingTools(cwd: cwd, options: nil)
+}
+
+public func createCodingTools(cwd: String, options: ToolsOptions?) -> [Tool] {
+    [createReadTool(cwd: cwd, options: options?.read), createBashTool(cwd: cwd), createEditTool(cwd: cwd), createWriteTool(cwd: cwd)]
 }
 
 public func createReadOnlyTools(cwd: String) -> [Tool] {
-    [createReadTool(cwd: cwd), createGrepTool(cwd: cwd), createFindTool(cwd: cwd), createLsTool(cwd: cwd)]
+    createReadOnlyTools(cwd: cwd, options: nil)
+}
+
+public func createReadOnlyTools(cwd: String, options: ToolsOptions?) -> [Tool] {
+    [createReadTool(cwd: cwd, options: options?.read), createGrepTool(cwd: cwd), createFindTool(cwd: cwd), createLsTool(cwd: cwd)]
 }
 
 public func createAllTools(cwd: String) -> [ToolName: Tool] {
+    createAllTools(cwd: cwd, options: nil)
+}
+
+public func createAllTools(cwd: String, options: ToolsOptions?) -> [ToolName: Tool] {
     [
-        .read: createReadTool(cwd: cwd),
+        .read: createReadTool(cwd: cwd, options: options?.read),
         .bash: createBashTool(cwd: cwd),
         .edit: createEditTool(cwd: cwd),
         .write: createWriteTool(cwd: cwd),

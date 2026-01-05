@@ -48,6 +48,10 @@ public final class CustomEditor: Component {
         editor.getText()
     }
 
+    public func insertTextAtCursor(_ text: String) {
+        editor.insertTextAtCursor(text)
+    }
+
     public func addToHistory(_ text: String) {
         editor.addToHistory(text)
     }

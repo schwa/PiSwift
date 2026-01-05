@@ -58,14 +58,14 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             Darwin.exit(1)
         }
 
-        let initialMessageResult = try prepareInitialMessage(&parsed)
-        time("prepareInitialMessage")
-
         let settingsManager = SettingsManager.create(cwd, getAgentDir())
         time("SettingsManager.create")
         let themeName = settingsManager.getTheme()
         initTheme(themeName, enableWatcher: parsed.print != true && parsed.mode == nil)
         time("initTheme")
+
+        let initialMessageResult = try prepareInitialMessage(&parsed, autoResizeImages: settingsManager.getAutoResizeImages())
+        time("prepareInitialMessage")
 
         var resumeSession: String? = nil
         if parsed.resume == true {
@@ -142,7 +142,10 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             skillsSettings.includeSkills = includeSkills
         }
 
-        let allBuiltInToolsMap = createAllTools(cwd: cwd)
+        let allBuiltInToolsMap = createAllTools(
+            cwd: cwd,
+            options: ToolsOptions(read: ReadToolOptions(autoResizeImages: settingsManager.getAutoResizeImages()))
+        )
         let selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
         let selectedTools = selectedToolNames.compactMap { allBuiltInToolsMap[$0] }
         let eventBus = createEventBus()
@@ -452,12 +455,12 @@ private struct PreparedInitialMessage {
     var images: [ImageContent]?
 }
 
-private func prepareInitialMessage(_ parsed: inout Args) throws -> PreparedInitialMessage {
+private func prepareInitialMessage(_ parsed: inout Args, autoResizeImages: Bool) throws -> PreparedInitialMessage {
     guard !parsed.fileArgs.isEmpty else {
         return PreparedInitialMessage(message: nil, images: nil)
     }
 
-    let processed = try processFileArguments(parsed.fileArgs)
+    let processed = try processFileArguments(parsed.fileArgs, options: ProcessFileOptions(autoResizeImages: autoResizeImages))
     let textContent = processed.textContent
     if parsed.messages.isEmpty {
         return PreparedInitialMessage(message: textContent, images: processed.imageAttachments.isEmpty ? nil : processed.imageAttachments)

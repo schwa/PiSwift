@@ -389,7 +389,27 @@ public final class AgentSession: @unchecked Sendable {
         }
 
         if agent.state.model.id.isEmpty {
-            throw NSError(domain: "AgentSession", code: 2, userInfo: [NSLocalizedDescriptionKey: "No model selected"])
+            throw NSError(
+                domain: "AgentSession",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "No model selected.\n\n" +
+                    "Use /login, set an API key environment variable, or create \(getAuthPath())\n\n" +
+                    "Then use /model to select a model."
+                ]
+            )
+        }
+
+        let apiKey = await modelRegistry.getApiKey(agent.state.model.provider)
+        if apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            throw NSError(
+                domain: "AgentSession",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "No API key found for \(agent.state.model.provider).\n\n" +
+                    "Use /login, set an API key environment variable, or create \(getAuthPath())"
+                ]
+            )
         }
 
         let expandedText: String

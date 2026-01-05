@@ -19,6 +19,7 @@ public final class ToolExecutionComponent: Container {
     private let contentText: Text
     private var imageComponents: [Image] = []
     private var imageSpacers: [Spacer] = []
+    private var convertedImages: [Int: ImageContent] = [:]
     private let toolName: String
     private var args: [String: AnyCodable]
     private var expanded = false
@@ -73,7 +74,9 @@ public final class ToolExecutionComponent: Container {
     public func updateResult(_ result: ToolResultMessage, isPartial: Bool = false) {
         self.result = result
         self.isPartial = isPartial
+        self.convertedImages = [:]
         updateDisplay()
+        maybeConvertImagesForKitty()
     }
 
     public func setExpanded(_ expanded: Bool) {
@@ -160,14 +163,18 @@ public final class ToolExecutionComponent: Container {
             }
 
             let caps = getCapabilities()
-            for image in imageBlocks {
+            for (index, image) in imageBlocks.enumerated() {
                 if caps.images != nil, showImages {
+                    let resolvedImage = convertedImages[index] ?? image
+                    if caps.images == .kitty, resolvedImage.mimeType != "image/png" {
+                        continue
+                    }
                     let spacer = Spacer(1)
                     addChild(spacer)
                     imageSpacers.append(spacer)
                     let imageComponent = Image(
-                        base64Data: image.data,
-                        mimeType: image.mimeType,
+                        base64Data: resolvedImage.data,
+                        mimeType: resolvedImage.mimeType,
                         theme: ImageTheme(fallbackColor: { theme.fg(.toolOutput, $0) }),
                         options: ImageOptions(filename: nil)
                     )
@@ -177,7 +184,9 @@ public final class ToolExecutionComponent: Container {
                     let spacer = Spacer(1)
                     addChild(spacer)
                     imageSpacers.append(spacer)
-                    let fallback = Text(theme.fg(.toolOutput, "[image: \(image.mimeType)]"), paddingX: 1, paddingY: 0)
+                    let dimensions = getImageDimensions(image.data, mimeType: image.mimeType)
+                    let label = imageFallback(image.mimeType, dimensions: dimensions, filename: nil)
+                    let fallback = Text(theme.fg(.toolOutput, label), paddingX: 1, paddingY: 0)
                     addChild(fallback)
                 }
             }
@@ -259,7 +268,45 @@ public final class ToolExecutionComponent: Container {
             }
             return nil
         }
-        return textBlocks.joined(separator: "\n")
+        let imageBlocks = result.content.compactMap { block -> ImageContent? in
+            if case let .image(image) = block {
+                return image
+            }
+            return nil
+        }
+        var output = textBlocks.joined(separator: "\n")
+        let caps = getCapabilities()
+        if !imageBlocks.isEmpty && (caps.images == nil || !showImages) {
+            let labels = imageBlocks.map { image in
+                let dimensions = getImageDimensions(image.data, mimeType: image.mimeType)
+                return imageFallback(image.mimeType, dimensions: dimensions, filename: nil)
+            }
+            let combined = labels.joined(separator: "\n")
+            output = output.isEmpty ? combined : "\(output)\n\(combined)"
+        }
+        return output
+    }
+
+    private func maybeConvertImagesForKitty() {
+        let caps = getCapabilities()
+        guard caps.images == .kitty, let result else { return }
+
+        let imageBlocks = result.content.compactMap { block -> ImageContent? in
+            if case let .image(image) = block {
+                return image
+            }
+            return nil
+        }
+
+        for (index, image) in imageBlocks.enumerated() {
+            if image.mimeType == "image/png" { continue }
+            if convertedImages[index] != nil { continue }
+            if let converted = convertToPng(image.data, image.mimeType) {
+                convertedImages[index] = converted
+                updateDisplay()
+                ui.requestRender()
+            }
+        }
     }
 
     private func extractDiff(from details: AnyCodable?) -> String? {

@@ -11,13 +11,22 @@ public struct FileProcessingResult: Sendable {
     }
 }
 
-public func processFileArguments(_ fileArgs: [String]) throws -> FileProcessingResult {
+public struct ProcessFileOptions: Sendable {
+    public var autoResizeImages: Bool?
+
+    public init(autoResizeImages: Bool? = nil) {
+        self.autoResizeImages = autoResizeImages
+    }
+}
+
+public func processFileArguments(_ fileArgs: [String], options: ProcessFileOptions? = nil) throws -> FileProcessingResult {
+    let autoResizeImages = options?.autoResizeImages ?? true
     var textContent = ""
     var imageAttachments: [ImageContent] = []
 
     for fileArg in fileArgs {
-        let expanded = expandPath(fileArg)
-        let absolutePath = URL(fileURLWithPath: expanded).standardizedFileURL.path
+        let resolvedPath = resolveReadPath(fileArg, cwd: FileManager.default.currentDirectoryPath)
+        let absolutePath = URL(fileURLWithPath: resolvedPath).standardizedFileURL.path
 
         guard FileManager.default.fileExists(atPath: absolutePath) else {
             throw NSError(domain: "FileProcessor", code: 1, userInfo: [NSLocalizedDescriptionKey: "File not found: \(absolutePath)"])
@@ -31,8 +40,24 @@ public func processFileArguments(_ fileArgs: [String]) throws -> FileProcessingR
         if let mimeType = detectSupportedImageMimeType(fromFile: absolutePath) {
             let data = try Data(contentsOf: URL(fileURLWithPath: absolutePath))
             let base64 = data.base64EncodedString()
-            imageAttachments.append(ImageContent(data: base64, mimeType: mimeType))
-            textContent += "<file name=\"\(absolutePath)\"></file>\n"
+
+            let attachment: ImageContent
+            var dimensionNote: String? = nil
+
+            if autoResizeImages {
+                let resized = resizeImage(ImageContent(data: base64, mimeType: mimeType))
+                dimensionNote = formatDimensionNote(resized)
+                attachment = ImageContent(data: resized.data, mimeType: resized.mimeType)
+            } else {
+                attachment = ImageContent(data: base64, mimeType: mimeType)
+            }
+
+            imageAttachments.append(attachment)
+            if let dimensionNote {
+                textContent += "<file name=\"\(absolutePath)\">\(dimensionNote)</file>\n"
+            } else {
+                textContent += "<file name=\"\(absolutePath)\"></file>\n"
+            }
         } else {
             let content = try String(contentsOfFile: absolutePath, encoding: .utf8)
             textContent += "<file name=\"\(absolutePath)\">\n\(content)\n</file>\n"

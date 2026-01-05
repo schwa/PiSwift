@@ -14,6 +14,7 @@ private let thinkingDescriptions: [ThinkingLevel: String] = [
 public struct SettingsConfig: Sendable {
     public var autoCompact: Bool
     public var showImages: Bool
+    public var autoResizeImages: Bool
     public var steeringMode: String
     public var followUpMode: String
     public var thinkingLevel: ThinkingLevel
@@ -26,6 +27,7 @@ public struct SettingsConfig: Sendable {
     public init(
         autoCompact: Bool,
         showImages: Bool,
+        autoResizeImages: Bool,
         steeringMode: String,
         followUpMode: String,
         thinkingLevel: ThinkingLevel,
@@ -37,6 +39,7 @@ public struct SettingsConfig: Sendable {
     ) {
         self.autoCompact = autoCompact
         self.showImages = showImages
+        self.autoResizeImages = autoResizeImages
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
         self.thinkingLevel = thinkingLevel
@@ -51,6 +54,7 @@ public struct SettingsConfig: Sendable {
 public struct SettingsCallbacks {
     public var onAutoCompactChange: (Bool) -> Void
     public var onShowImagesChange: (Bool) -> Void
+    public var onAutoResizeImagesChange: (Bool) -> Void
     public var onSteeringModeChange: (String) -> Void
     public var onFollowUpModeChange: (String) -> Void
     public var onThinkingLevelChange: (ThinkingLevel) -> Void
@@ -63,6 +67,7 @@ public struct SettingsCallbacks {
     public init(
         onAutoCompactChange: @escaping (Bool) -> Void,
         onShowImagesChange: @escaping (Bool) -> Void,
+        onAutoResizeImagesChange: @escaping (Bool) -> Void,
         onSteeringModeChange: @escaping (String) -> Void,
         onFollowUpModeChange: @escaping (String) -> Void,
         onThinkingLevelChange: @escaping (ThinkingLevel) -> Void,
@@ -74,6 +79,7 @@ public struct SettingsCallbacks {
     ) {
         self.onAutoCompactChange = onAutoCompactChange
         self.onShowImagesChange = onShowImagesChange
+        self.onAutoResizeImagesChange = onAutoResizeImagesChange
         self.onSteeringModeChange = onSteeringModeChange
         self.onFollowUpModeChange = onFollowUpModeChange
         self.onThinkingLevelChange = onThinkingLevelChange
@@ -239,6 +245,18 @@ public final class SettingsSelectorComponent: Container {
             )
         }
 
+        let autoResizeIndex = supportsImages ? 2 : 1
+        items.insert(
+            SettingItem(
+                id: "auto-resize-images",
+                label: "Auto-resize images",
+                description: "Resize large images to 2000x2000 max for better model compatibility",
+                currentValue: config.autoResizeImages ? "true" : "false",
+                values: ["true", "false"]
+            ),
+            at: autoResizeIndex
+        )
+
         self.settingsList = SettingsList(
             items: items,
             maxVisible: 10,
@@ -249,6 +267,8 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onAutoCompactChange(newValue == "true")
                 case "show-images":
                     callbacks.onShowImagesChange(newValue == "true")
+                case "auto-resize-images":
+                    callbacks.onAutoResizeImagesChange(newValue == "true")
                 case "steering-mode":
                     callbacks.onSteeringModeChange(newValue)
                 case "follow-up-mode":

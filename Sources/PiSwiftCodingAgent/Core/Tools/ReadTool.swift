@@ -6,8 +6,17 @@ public struct ReadToolDetails: Sendable {
     public var truncation: TruncationResult?
 }
 
-public func createReadTool(cwd: String) -> AgentTool {
-    AgentTool(
+public struct ReadToolOptions: Sendable {
+    public var autoResizeImages: Bool?
+
+    public init(autoResizeImages: Bool? = nil) {
+        self.autoResizeImages = autoResizeImages
+    }
+}
+
+public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> AgentTool {
+    let autoResizeImages = options?.autoResizeImages ?? true
+    return AgentTool(
         label: "read",
         name: "read",
         description: "Read the contents of a file. Supports text files and images (jpg, png, gif, webp).",
@@ -38,6 +47,21 @@ public func createReadTool(cwd: String) -> AgentTool {
         if let mimeType = detectSupportedImageMimeType(fromFile: absolutePath) {
             let data = try Data(contentsOf: URL(fileURLWithPath: absolutePath))
             let base64 = data.base64EncodedString()
+
+            if autoResizeImages {
+                let resized = resizeImage(ImageContent(data: base64, mimeType: mimeType))
+                let dimensionNote = formatDimensionNote(resized)
+                var textNote = "Read image file [\(resized.mimeType)]"
+                if let dimensionNote {
+                    textNote += "\n\(dimensionNote)"
+                }
+                let content: [ContentBlock] = [
+                    .text(TextContent(text: textNote)),
+                    .image(ImageContent(data: resized.data, mimeType: resized.mimeType)),
+                ]
+                return AgentToolResult(content: content)
+            }
+
             let content: [ContentBlock] = [
                 .text(TextContent(text: "Read image file [\(mimeType)]")),
                 .image(ImageContent(data: base64, mimeType: mimeType)),

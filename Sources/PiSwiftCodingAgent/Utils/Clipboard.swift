@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public enum ClipboardError: Error, CustomStringConvertible {
     case missingTool(String)
@@ -30,6 +33,29 @@ public func copyToClipboard(_ text: String) throws {
     #else
     try runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
     #endif
+}
+
+public func clipboardHasImage() -> Bool {
+#if canImport(AppKit)
+    return NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil)
+#else
+    return false
+#endif
+}
+
+public func getClipboardImagePngData() -> Data? {
+#if canImport(AppKit)
+    guard let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage else {
+        return nil
+    }
+    guard let tiff = image.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else {
+        return nil
+    }
+    return rep.representation(using: .png, properties: [:])
+#else
+    return nil
+#endif
 }
 
 private func runClipboardCommand(command: String, args: [String], input: String) throws {
