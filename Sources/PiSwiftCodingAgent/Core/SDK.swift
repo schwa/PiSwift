@@ -297,18 +297,24 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
 
 private func createLoadedHooksFromDefinitions(_ definitions: [HookDefinition], eventBus: EventBus) -> [LoadedHook] {
     definitions.map { definition in
-        let api = HookAPI(events: eventBus)
+        let path = definition.path ?? "<inline>"
+        let api = HookAPI(events: eventBus, hookPath: path)
         api.setExecCwd(FileManager.default.currentDirectoryPath)
         definition.factory(api)
-        let path = definition.path ?? "<inline>"
         return LoadedHook(
             path: path,
             resolvedPath: path,
             handlers: api.handlers,
             messageRenderers: api.messageRenderers,
             commands: api.commands,
+            flags: api.flags,
+            shortcuts: api.shortcuts,
             setSendMessageHandler: api.setSendMessageHandler,
-            setAppendEntryHandler: api.setAppendEntryHandler
+            setAppendEntryHandler: api.setAppendEntryHandler,
+            setGetActiveToolsHandler: api.setGetActiveToolsHandler,
+            setGetAllToolsHandler: api.setGetAllToolsHandler,
+            setSetActiveToolsHandler: api.setSetActiveToolsHandler,
+            setFlagValue: api.setFlagValue
         )
     }
 }
@@ -325,6 +331,16 @@ private func createFactoryFromLoadedHook(_ loaded: LoadedHook) -> HookFactory {
         }
         for command in loaded.commands.values {
             api.registerCommand(command.name, description: command.description, handler: command.handler)
+        }
+        for flag in loaded.flags.values {
+            api.registerFlag(flag.name, HookFlagOptions(
+                description: flag.description,
+                type: flag.type,
+                defaultValue: flag.defaultValue
+            ))
+        }
+        for shortcut in loaded.shortcuts.values {
+            api.registerShortcut(shortcut.shortcut, description: shortcut.description, handler: shortcut.handler)
         }
     }
 }
@@ -449,37 +465,54 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
         contextProvider.buildContext()
     }
+    let allBuiltInToolsMap = createAllTools(cwd: cwd)
+    var toolRegistry: [String: AgentTool] = [:]
+    for (name, tool) in allBuiltInToolsMap {
+        toolRegistry[name.rawValue] = tool
+    }
+    for tool in wrappedCustomTools {
+        toolRegistry[tool.name] = tool
+    }
+
     var allTools = builtInTools + wrappedCustomTools
     time("combineTools")
     if let hookRunner {
         allTools = wrapToolsWithHooks(allTools, hookRunner)
+        let registryTools = Array(toolRegistry.values)
+        let wrappedRegistry = wrapToolsWithHooks(registryTools, hookRunner)
+        toolRegistry = Dictionary(uniqueKeysWithValues: wrappedRegistry.map { ($0.name, $0) })
     }
 
-    let defaultPrompt = buildSystemPrompt(BuildSystemPromptOptions(
-        cwd: cwd,
-        agentDir: agentDir,
-        contextFiles: contextFiles,
-        skills: skills
-    ))
-    time("buildSystemPrompt")
-
-    let systemPrompt: String
-    if let systemPromptInput = options.systemPrompt {
-        switch systemPromptInput {
-        case .text(let text):
-            systemPrompt = buildSystemPrompt(BuildSystemPromptOptions(
-                customPrompt: text,
-                cwd: cwd,
-                agentDir: agentDir,
-                contextFiles: contextFiles,
-                skills: skills
-            ))
-        case .builder(let builder):
-            systemPrompt = builder(defaultPrompt)
+    let rebuildSystemPrompt: @Sendable ([String]) -> String = { toolNames in
+        let validToolNames = toolNames.compactMap { ToolName(rawValue: $0) }
+        let defaultPrompt = buildSystemPrompt(BuildSystemPromptOptions(
+            selectedTools: validToolNames,
+            cwd: cwd,
+            agentDir: agentDir,
+            contextFiles: contextFiles,
+            skills: skills
+        ))
+        if let systemPromptInput = options.systemPrompt {
+            switch systemPromptInput {
+            case .text(let text):
+                return buildSystemPrompt(BuildSystemPromptOptions(
+                    customPrompt: text,
+                    selectedTools: validToolNames,
+                    cwd: cwd,
+                    agentDir: agentDir,
+                    contextFiles: contextFiles,
+                    skills: skills
+                ))
+            case .builder(let builder):
+                return builder(defaultPrompt)
+            }
         }
-    } else {
-        systemPrompt = defaultPrompt
+        return defaultPrompt
     }
+
+    let initialActiveToolNames = allTools.map { $0.name }
+    let systemPrompt = rebuildSystemPrompt(initialActiveToolNames)
+    time("buildSystemPrompt")
 
     let slashCommands = options.slashCommands ?? discoverSlashCommands(cwd: cwd, agentDir: agentDir)
     time("discoverSlashCommands")
@@ -523,7 +556,9 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         customTools: customToolsResult.tools,
         modelRegistry: modelRegistry,
         skillsSettings: settingsManager.getSkillsSettings(),
-        eventBus: eventBus
+        eventBus: eventBus,
+        toolRegistry: toolRegistry,
+        rebuildSystemPrompt: rebuildSystemPrompt
     ))
     time("createAgentSession")
     contextProvider.session = createdSession

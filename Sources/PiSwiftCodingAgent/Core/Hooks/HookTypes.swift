@@ -9,6 +9,68 @@ public enum HookNotificationType: String, Sendable {
     case error
 }
 
+public enum HookFlagType: String, Sendable {
+    case boolean
+    case string
+}
+
+public enum HookFlagValue: Sendable, Equatable {
+    case bool(Bool)
+    case string(String)
+
+    public var boolValue: Bool? {
+        switch self {
+        case .bool(let value):
+            return value
+        case .string:
+            return nil
+        }
+    }
+
+    public var stringValue: String? {
+        switch self {
+        case .bool:
+            return nil
+        case .string(let value):
+            return value
+        }
+    }
+}
+
+public struct HookFlag: Sendable {
+    public var name: String
+    public var hookPath: String
+    public var description: String?
+    public var type: HookFlagType
+    public var defaultValue: HookFlagValue?
+
+    public init(
+        name: String,
+        hookPath: String,
+        description: String? = nil,
+        type: HookFlagType,
+        defaultValue: HookFlagValue? = nil
+    ) {
+        self.name = name
+        self.hookPath = hookPath
+        self.description = description
+        self.type = type
+        self.defaultValue = defaultValue
+    }
+}
+
+public struct HookFlagOptions: Sendable {
+    public var description: String?
+    public var type: HookFlagType
+    public var defaultValue: HookFlagValue?
+
+    public init(description: String? = nil, type: HookFlagType, defaultValue: HookFlagValue? = nil) {
+        self.description = description
+        self.type = type
+        self.defaultValue = defaultValue
+    }
+}
+
 public typealias HookWidgetFactory = @Sendable (_ tui: TUI, _ theme: Theme) -> Component
 
 public enum HookWidgetContent: @unchecked Sendable {
@@ -60,6 +122,13 @@ public typealias HookSendMessageHandler = @Sendable (_ message: HookMessageInput
 public typealias HookAppendEntryHandler = @Sendable (_ customType: String, _ data: [String: Any]) -> Void
 public typealias HookSendMessageSetter = (@escaping HookSendMessageHandler) -> Void
 public typealias HookAppendEntrySetter = (@escaping HookAppendEntryHandler) -> Void
+public typealias HookGetActiveToolsHandler = @Sendable () -> [String]
+public typealias HookGetAllToolsHandler = @Sendable () -> [String]
+public typealias HookSetActiveToolsHandler = @Sendable (_ toolNames: [String]) -> Void
+public typealias HookGetActiveToolsSetter = (@escaping HookGetActiveToolsHandler) -> Void
+public typealias HookGetAllToolsSetter = (@escaping HookGetAllToolsHandler) -> Void
+public typealias HookSetActiveToolsSetter = (@escaping HookSetActiveToolsHandler) -> Void
+public typealias HookSetFlagValue = @Sendable (_ name: String, _ value: HookFlagValue) -> Void
 
 public struct HookCommandResult: Sendable {
     public var cancelled: Bool
@@ -252,6 +321,25 @@ public struct HookCommandContext: Sendable {
         self.newSession = newSession
         self.branch = branch
         self.navigateTree = navigateTree
+    }
+}
+
+public struct HookShortcut: Sendable {
+    public var shortcut: KeyId
+    public var hookPath: String
+    public var description: String?
+    public var handler: @Sendable (_ context: HookContext) async -> Void
+
+    public init(
+        shortcut: KeyId,
+        hookPath: String,
+        description: String? = nil,
+        handler: @escaping @Sendable (_ context: HookContext) async -> Void
+    ) {
+        self.shortcut = shortcut
+        self.hookPath = hookPath
+        self.description = description
+        self.handler = handler
     }
 }
 
@@ -574,8 +662,14 @@ public struct LoadedHook: @unchecked Sendable {
     public var handlers: [String: [HookHandler]]
     public var messageRenderers: [String: HookMessageRenderer]
     public var commands: [String: RegisteredCommand]
+    public var flags: [String: HookFlag]
+    public var shortcuts: [KeyId: HookShortcut]
     public var setSendMessageHandler: HookSendMessageSetter
     public var setAppendEntryHandler: HookAppendEntrySetter
+    public var setGetActiveToolsHandler: HookGetActiveToolsSetter
+    public var setGetAllToolsHandler: HookGetAllToolsSetter
+    public var setSetActiveToolsHandler: HookSetActiveToolsSetter
+    public var setFlagValue: HookSetFlagValue
 
     public init(
         path: String,
@@ -583,16 +677,28 @@ public struct LoadedHook: @unchecked Sendable {
         handlers: [String: [HookHandler]],
         messageRenderers: [String: HookMessageRenderer] = [:],
         commands: [String: RegisteredCommand] = [:],
+        flags: [String: HookFlag] = [:],
+        shortcuts: [KeyId: HookShortcut] = [:],
         setSendMessageHandler: @escaping HookSendMessageSetter = { _ in },
-        setAppendEntryHandler: @escaping HookAppendEntrySetter = { _ in }
+        setAppendEntryHandler: @escaping HookAppendEntrySetter = { _ in },
+        setGetActiveToolsHandler: @escaping HookGetActiveToolsSetter = { _ in },
+        setGetAllToolsHandler: @escaping HookGetAllToolsSetter = { _ in },
+        setSetActiveToolsHandler: @escaping HookSetActiveToolsSetter = { _ in },
+        setFlagValue: @escaping HookSetFlagValue = { _, _ in }
     ) {
         self.path = path
         self.resolvedPath = resolvedPath
         self.handlers = handlers
         self.messageRenderers = messageRenderers
         self.commands = commands
+        self.flags = flags
+        self.shortcuts = shortcuts
         self.setSendMessageHandler = setSendMessageHandler
         self.setAppendEntryHandler = setAppendEntryHandler
+        self.setGetActiveToolsHandler = setGetActiveToolsHandler
+        self.setGetAllToolsHandler = setGetAllToolsHandler
+        self.setSetActiveToolsHandler = setSetActiveToolsHandler
+        self.setFlagValue = setFlagValue
     }
 }
 
@@ -617,16 +723,30 @@ public final class HookAPI: @unchecked Sendable {
     public private(set) var handlers: [String: [HookHandler]] = [:]
     public private(set) var messageRenderers: [String: HookMessageRenderer] = [:]
     public private(set) var commands: [String: RegisteredCommand] = [:]
+    public private(set) var flags: [String: HookFlag] = [:]
+    public private(set) var shortcuts: [KeyId: HookShortcut] = [:]
     private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
     private var appendEntryHandler: HookAppendEntryHandler = { _, _ in }
+    private var getActiveToolsHandler: HookGetActiveToolsHandler = { [] }
+    private var getAllToolsHandler: HookGetAllToolsHandler = { [] }
+    private var setActiveToolsHandler: HookSetActiveToolsHandler = { _ in }
+    private var flagValues: [String: HookFlagValue] = [:]
     private var execCwd: String?
+    private var hookPath: String = "<hook>"
 
-    public init(events: EventBus = createEventBus()) {
+    public init(events: EventBus = createEventBus(), hookPath: String? = nil) {
         self.events = events
+        if let hookPath {
+            self.hookPath = hookPath
+        }
     }
 
     public func setExecCwd(_ cwd: String) {
         execCwd = cwd
+    }
+
+    public func setHookPath(_ path: String) {
+        hookPath = path
     }
 
     public func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
@@ -635,6 +755,22 @@ public final class HookAPI: @unchecked Sendable {
 
     public func setAppendEntryHandler(_ handler: @escaping HookAppendEntryHandler) {
         appendEntryHandler = handler
+    }
+
+    public func setGetActiveToolsHandler(_ handler: @escaping HookGetActiveToolsHandler) {
+        getActiveToolsHandler = handler
+    }
+
+    public func setGetAllToolsHandler(_ handler: @escaping HookGetAllToolsHandler) {
+        getAllToolsHandler = handler
+    }
+
+    public func setSetActiveToolsHandler(_ handler: @escaping HookSetActiveToolsHandler) {
+        setActiveToolsHandler = handler
+    }
+
+    public func setFlagValue(_ name: String, _ value: HookFlagValue) {
+        flagValues[name] = value
     }
 
     public func on<T: HookEvent>(_ type: String, _ handler: @Sendable @escaping (T, HookContext) async throws -> Any?) {
@@ -655,6 +791,45 @@ public final class HookAPI: @unchecked Sendable {
 
     public func appendEntry(_ customType: String, _ data: [String: Any]) {
         appendEntryHandler(customType, data)
+    }
+
+    public func getActiveTools() -> [String] {
+        getActiveToolsHandler()
+    }
+
+    public func getAllTools() -> [String] {
+        getAllToolsHandler()
+    }
+
+    public func setActiveTools(_ toolNames: [String]) {
+        setActiveToolsHandler(toolNames)
+    }
+
+    public func registerFlag(_ name: String, _ options: HookFlagOptions) {
+        let flag = HookFlag(
+            name: name,
+            hookPath: hookPath,
+            description: options.description,
+            type: options.type,
+            defaultValue: options.defaultValue
+        )
+        flags[name] = flag
+        if let defaultValue = options.defaultValue {
+            flagValues[name] = defaultValue
+        }
+    }
+
+    public func getFlag(_ name: String) -> HookFlagValue? {
+        flagValues[name]
+    }
+
+    public func registerShortcut(_ shortcut: KeyId, description: String? = nil, handler: @escaping @Sendable (_ context: HookContext) async -> Void) {
+        shortcuts[shortcut] = HookShortcut(
+            shortcut: shortcut,
+            hookPath: hookPath,
+            description: description,
+            handler: handler
+        )
     }
 
     public func registerMessageRenderer(_ customType: String, _ renderer: @escaping HookMessageRenderer) {

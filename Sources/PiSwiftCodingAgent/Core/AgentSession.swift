@@ -41,6 +41,8 @@ public struct AgentSessionConfig: Sendable {
     public var modelRegistry: ModelRegistry
     public var skillsSettings: SkillsSettings?
     public var eventBus: EventBus?
+    public var toolRegistry: [String: AgentTool]?
+    public var rebuildSystemPrompt: (@Sendable ([String]) -> String)?
 
     public init(
         agent: Agent,
@@ -52,7 +54,9 @@ public struct AgentSessionConfig: Sendable {
         customTools: [LoadedCustomTool]? = nil,
         modelRegistry: ModelRegistry,
         skillsSettings: SkillsSettings? = nil,
-        eventBus: EventBus? = nil
+        eventBus: EventBus? = nil,
+        toolRegistry: [String: AgentTool]? = nil,
+        rebuildSystemPrompt: (@Sendable ([String]) -> String)? = nil
     ) {
         self.agent = agent
         self.sessionManager = sessionManager
@@ -64,6 +68,8 @@ public struct AgentSessionConfig: Sendable {
         self.modelRegistry = modelRegistry
         self.skillsSettings = skillsSettings
         self.eventBus = eventBus
+        self.toolRegistry = toolRegistry
+        self.rebuildSystemPrompt = rebuildSystemPrompt
     }
 }
 
@@ -179,6 +185,8 @@ public final class AgentSession: @unchecked Sendable {
     private var isCompactingInternal = false
     private var turnIndex = 0
     private var baseSystemPrompt: String
+    private var toolRegistry: [String: AgentTool]
+    private var rebuildSystemPrompt: (@Sendable ([String]) -> String)?
 
     public init(config: AgentSessionConfig) {
         self.agent = config.agent
@@ -191,10 +199,16 @@ public final class AgentSession: @unchecked Sendable {
         self.scopedModels = config.scopedModels ?? []
         self.fileCommands = config.fileCommands ?? []
         self.baseSystemPrompt = config.agent.state.systemPrompt
+        self.toolRegistry = config.toolRegistry ?? [:]
+        self.rebuildSystemPrompt = config.rebuildSystemPrompt
 
-        self._hookRunner?.initialize(getModel: { [weak agent] in
-            agent?.state.model
-        }, hasUI: false)
+        self._hookRunner?.initialize(
+            getModel: { [weak agent] in agent?.state.model },
+            getActiveToolsHandler: { [weak self] in self?.getActiveToolNames() ?? [] },
+            getAllToolsHandler: { [weak self] in self?.getAllToolNames() ?? [] },
+            setActiveToolsHandler: { [weak self] names in self?.setActiveToolsByName(names) },
+            hasUI: false
+        )
 
         self.unsubscribeAgent = agent.subscribe { [weak self] event in
             self?.handleAgentEvent(event)
@@ -342,6 +356,31 @@ public final class AgentSession: @unchecked Sendable {
 
     public var pendingMessageCount: Int {
         steeringMessages.count + followUpMessages.count
+    }
+
+    public func getActiveToolNames() -> [String] {
+        agent.state.tools.map { $0.name }
+    }
+
+    public func getAllToolNames() -> [String] {
+        Array(toolRegistry.keys)
+    }
+
+    public func setActiveToolsByName(_ toolNames: [String]) {
+        var tools: [AgentTool] = []
+        var validNames: [String] = []
+        for name in toolNames {
+            if let tool = toolRegistry[name] {
+                tools.append(tool)
+                validNames.append(name)
+            }
+        }
+        agent.setTools(tools)
+
+        if let rebuildSystemPrompt {
+            baseSystemPrompt = rebuildSystemPrompt(validNames)
+            agent.setSystemPrompt(baseSystemPrompt)
+        }
     }
 
     public func prompt(_ text: String, options: PromptOptions? = nil) async throws {

@@ -3,19 +3,13 @@ import MiniTui
 
 public final class CustomEditor: Component {
     private let editor: Editor
+    private let keybindings: KeybindingsManager
+    private var actionHandlers: [AppAction: () -> Void] = [:]
 
     public var onEscape: (() -> Void)?
-    public var onCtrlC: (() -> Void)?
     public var onCtrlD: (() -> Void)?
-    public var onShiftTab: (() -> Void)?
-    public var onCtrlP: (() -> Void)?
-    public var onShiftCtrlP: (() -> Void)?
-    public var onCtrlL: (() -> Void)?
-    public var onCtrlO: (() -> Void)?
-    public var onCtrlT: (() -> Void)?
-    public var onCtrlG: (() -> Void)?
-    public var onCtrlZ: (() -> Void)?
-    public var onAltEnter: (() -> Void)?
+    public var onPasteImage: (() -> Void)?
+    public var onHookShortcut: ((String) -> Bool)?
 
     public var onSubmit: ((String) -> Void)? {
         get { editor.onSubmit }
@@ -37,8 +31,13 @@ public final class CustomEditor: Component {
         set { editor.borderColor = newValue }
     }
 
-    public init(theme: EditorTheme) {
+    public init(theme: EditorTheme, keybindings: KeybindingsManager) {
         self.editor = Editor(theme: theme)
+        self.keybindings = keybindings
+    }
+
+    public func onAction(_ action: AppAction, handler: @escaping () -> Void) {
+        actionHandlers[action] = handler
     }
 
     public func setText(_ text: String) {
@@ -70,55 +69,38 @@ public final class CustomEditor: Component {
     }
 
     public func handleInput(_ data: String) {
-        if isAltEnter(data), let onAltEnter {
-            onAltEnter()
+        if onHookShortcut?(data) == true {
             return
         }
-        if isCtrlG(data), let onCtrlG {
-            onCtrlG()
+
+        if matchesKey(data, Key.ctrl("v")) {
+            onPasteImage?()
             return
         }
-        if isCtrlZ(data), let onCtrlZ {
-            onCtrlZ()
+
+        if keybindings.matches(data, .interrupt) {
+            if !editor.isShowingAutocomplete() {
+                let handler = onEscape ?? actionHandlers[.interrupt]
+                handler?()
+                return
+            }
+            editor.handleInput(data)
             return
         }
-        if isCtrlT(data), let onCtrlT {
-            onCtrlT()
-            return
-        }
-        if isCtrlL(data), let onCtrlL {
-            onCtrlL()
-            return
-        }
-        if isCtrlO(data), let onCtrlO {
-            onCtrlO()
-            return
-        }
-        if isShiftCtrlP(data), let onShiftCtrlP {
-            onShiftCtrlP()
-            return
-        }
-        if isCtrlP(data), let onCtrlP {
-            onCtrlP()
-            return
-        }
-        if isShiftTab(data), let onShiftTab {
-            onShiftTab()
-            return
-        }
-        if isEscape(data), let onEscape, !editor.isShowingAutocomplete() {
-            onEscape()
-            return
-        }
-        if isCtrlC(data), let onCtrlC {
-            onCtrlC()
-            return
-        }
-        if isCtrlD(data) {
-            if editor.getText().isEmpty, let onCtrlD {
-                onCtrlD()
+
+        if keybindings.matches(data, .exit) {
+            if editor.getText().isEmpty {
+                let handler = onCtrlD ?? actionHandlers[.exit]
+                handler?()
             }
             return
+        }
+
+        for (action, handler) in actionHandlers where action != .interrupt && action != .exit {
+            if keybindings.matches(data, action) {
+                handler()
+                return
+            }
         }
 
         editor.handleInput(data)

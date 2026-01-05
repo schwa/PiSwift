@@ -45,7 +45,7 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 ## Delta from `pi-mono/packages/coding-agent` (pending parity)
 - [x] Event bus for hooks/tools (`pi.events`), tool `sendMessage`, and `deliverAs: "nextTurn"` queue semantics (clear on new/switch/branch).
 - [x] Hook API extensions: `systemPromptAppend`, error stack traces, deep-copy context messages, setTitle/setWidget UI hooks.
-- [ ] Plan-mode hook parity (todo extraction + [DONE:id] tracking, widget + final list, tool_result tracking, buffered text_delta).
-- [ ] Tool registry/tool control parity (full registry even when scoped, wrap all tools, sync active tools on no saved state).
-- [ ] Keybinding & slash command parity (`/quit` + `/exit`, configurable keybindings, robust shortcut matching, `$ARGUMENTS` for slash commands).
+- [x] Plan-mode hook parity (todo extraction, widget + final list, tool_result/turn_end tracking).
+- [x] Tool registry/tool control parity (full registry even when scoped, wrap all tools).
+- [x] Keybinding & slash command parity (`/quit` + `/exit`, configurable keybindings, robust shortcut matching, `$ARGUMENTS` for slash commands).
 - [ ] Image handling parity (auto-resize toggle, read tool resize + dimension note, consistent placeholders, clipboard paste).

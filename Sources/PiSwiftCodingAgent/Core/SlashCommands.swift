@@ -71,7 +71,7 @@ public func parseCommandArgs(_ argsString: String) -> [String] {
 }
 
 public func substituteArgs(_ content: String, _ args: [String]) -> String {
-    var result = content.replacingOccurrences(of: "$@", with: args.joined(separator: " "))
+    var result = content
 
     if let regex = try? NSRegularExpression(pattern: "\\$(\\d+)", options: []) {
         let range = NSRange(location: 0, length: result.utf16.count)
@@ -87,6 +87,10 @@ public func substituteArgs(_ content: String, _ args: [String]) -> String {
             result.replaceSubrange(replaceRange, with: replacement)
         }
     }
+
+    let allArgs = args.joined(separator: " ")
+    result = result.replacingOccurrences(of: "$ARGUMENTS", with: allArgs)
+    result = result.replacingOccurrences(of: "$@", with: allArgs)
 
     return result
 }

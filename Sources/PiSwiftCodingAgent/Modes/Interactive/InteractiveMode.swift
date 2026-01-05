@@ -147,6 +147,8 @@ public final class InteractiveMode {
     private var hookWidgetOrder: [String] = []
     private var baseSlashCommands: [SlashCommand] = []
     private var customTools: [String: LoadedCustomTool] = [:]
+    private var hookShortcuts: [KeyId: HookShortcut] = [:]
+    private var keybindings: KeybindingsManager = KeybindingsManager.inMemory()
     private var setToolUIContext: (HookUIContext, Bool) -> Void = { _, _ in }
     private var setToolSendMessageHandler: (@Sendable (_ handler: @escaping HookSendMessageHandler) -> Void) = { _ in }
 
@@ -225,6 +227,8 @@ public final class InteractiveMode {
     private func initializeIfNeeded() async {
         guard !isInitialized, let session else { return }
 
+        keybindings = KeybindingsManager.create()
+
         if tui == nil {
             let created = TUI(terminal: ProcessTerminal())
             tui = created
@@ -241,7 +245,7 @@ public final class InteractiveMode {
         let pendingMessages = Container()
         let status = Container()
         let widgets = Container()
-        let editor = CustomEditor(theme: getEditorTheme())
+        let editor = CustomEditor(theme: getEditorTheme(), keybindings: keybindings)
         let editorContainer = Container()
         let footer = FooterComponent(session: session)
 
@@ -268,6 +272,8 @@ public final class InteractiveMode {
             SlashCommand(name: "new", description: "Start a new session"),
             SlashCommand(name: "compact", description: "Compact session"),
             SlashCommand(name: "resume", description: "Resume a session"),
+            SlashCommand(name: "quit", description: "Exit the agent"),
+            SlashCommand(name: "exit", description: "Exit the agent"),
         ]
 
         baseSlashCommands = slashCommands
@@ -438,6 +444,15 @@ public final class InteractiveMode {
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            getActiveToolsHandler: { [weak session] in
+                session?.getActiveToolNames() ?? []
+            },
+            getAllToolsHandler: { [weak session] in
+                session?.getAllToolNames() ?? []
+            },
+            setActiveToolsHandler: { [weak session] toolNames in
+                session?.setActiveToolsByName(toolNames)
+            },
             newSessionHandler: { [weak self] options in
                 guard let self else { return HookCommandResult(cancelled: true) }
                 return await self.handleHookNewSession(options)
@@ -473,6 +488,8 @@ public final class InteractiveMode {
                 self?.showHookError(error.hookPath, error.error, error.stack)
             }
         }
+
+        setupHookShortcuts(hookRunner)
 
         _ = await hookRunner.emit(SessionStartEvent())
 
@@ -691,6 +708,29 @@ public final class InteractiveMode {
     }
 
     @MainActor
+    private func setupHookShortcuts(_ hookRunner: HookRunner) {
+        hookShortcuts = hookRunner.getShortcuts()
+        guard let editor else { return }
+        if hookShortcuts.isEmpty {
+            editor.onHookShortcut = nil
+            return
+        }
+        editor.onHookShortcut = { [weak self, weak hookRunner] data in
+            guard let self, let hookRunner else { return false }
+            for (key, shortcut) in self.hookShortcuts {
+                if matchesKey(data, key) {
+                    Task { @MainActor in
+                        let context = hookRunner.createShortcutContext()
+                        await shortcut.handler(context)
+                    }
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    @MainActor
     private func setHookWidget(_ key: String, _ content: HookWidgetContent?) {
         if let existing = hookWidgets[key] {
             if let disposable = existing as? HookDisposableComponent {
@@ -766,47 +806,47 @@ public final class InteractiveMode {
         editor.onEscape = { [weak self] in
             self?.handleEscape()
         }
-        editor.onCtrlC = { [weak self] in
-            self?.handleCtrlC()
-        }
         editor.onCtrlD = { [weak self] in
             self?.handleCtrlD()
         }
-        editor.onCtrlZ = { [weak self] in
+        editor.onAction(.clear) { [weak self] in
+            self?.handleCtrlC()
+        }
+        editor.onAction(.suspend) { [weak self] in
             self?.handleCtrlZ()
         }
-        editor.onShiftTab = { [weak self] in
+        editor.onAction(.cycleThinkingLevel) { [weak self] in
             self?.cycleThinkingLevel()
         }
-        editor.onCtrlP = { [weak self] in
+        editor.onAction(.cycleModelForward) { [weak self] in
             Task { @MainActor in
                 await self?.cycleModel(direction: .forward)
             }
         }
-        editor.onShiftCtrlP = { [weak self] in
+        editor.onAction(.cycleModelBackward) { [weak self] in
             Task { @MainActor in
                 await self?.cycleModel(direction: .backward)
             }
         }
-        editor.onCtrlL = { [weak self] in
+        editor.onAction(.selectModel) { [weak self] in
             Task { @MainActor in
                 self?.showModelSelector()
             }
         }
-        editor.onCtrlO = { [weak self] in
+        editor.onAction(.expandTools) { [weak self] in
             Task { @MainActor in
                 self?.toggleToolOutputExpansion()
             }
         }
-        editor.onCtrlT = { [weak self] in
+        editor.onAction(.toggleThinking) { [weak self] in
             Task { @MainActor in
                 self?.toggleThinkingBlockVisibility()
             }
         }
-        editor.onCtrlG = { [weak self] in
+        editor.onAction(.externalEditor) { [weak self] in
             Task { await self?.openExternalEditor() }
         }
-        editor.onAltEnter = { [weak self] in
+        editor.onAction(.followUp) { [weak self] in
             Task { @MainActor in
                 await self?.handleAltEnter()
             }
@@ -1128,21 +1168,35 @@ public final class InteractiveMode {
 
     private func buildHeaderText() -> String {
         let logo = theme.bold(theme.fg(.accent, APP_NAME)) + theme.fg(.dim, " v\(version)")
+        let deleteToLineEnd = formatKeyDisplay(getEditorKeybindings().getKeys(.deleteToLineEnd))
+        let interrupt = formatKeyDisplay(keybindings.getDisplayString(.interrupt))
+        let clear = formatKeyDisplay(keybindings.getDisplayString(.clear))
+        let exit = formatKeyDisplay(keybindings.getDisplayString(.exit))
+        let suspend = formatKeyDisplay(keybindings.getDisplayString(.suspend))
+        let cycleThinkingLevel = formatKeyDisplay(keybindings.getDisplayString(.cycleThinkingLevel))
+        let cycleModelForward = formatKeyDisplay(keybindings.getDisplayString(.cycleModelForward))
+        let cycleModelBackward = formatKeyDisplay(keybindings.getDisplayString(.cycleModelBackward))
+        let selectModel = formatKeyDisplay(keybindings.getDisplayString(.selectModel))
+        let expandTools = formatKeyDisplay(keybindings.getDisplayString(.expandTools))
+        let toggleThinking = formatKeyDisplay(keybindings.getDisplayString(.toggleThinking))
+        let externalEditor = formatKeyDisplay(keybindings.getDisplayString(.externalEditor))
+        let followUp = formatKeyDisplay(keybindings.getDisplayString(.followUp))
         let instructions = [
-            theme.fg(.dim, "esc") + theme.fg(.muted, " to interrupt"),
-            theme.fg(.dim, "ctrl+c") + theme.fg(.muted, " to clear"),
-            theme.fg(.dim, "ctrl+c twice") + theme.fg(.muted, " to exit"),
-            theme.fg(.dim, "ctrl+d") + theme.fg(.muted, " to exit (empty)"),
-            theme.fg(.dim, "ctrl+z") + theme.fg(.muted, " to suspend"),
-            theme.fg(.dim, "shift+tab") + theme.fg(.muted, " to cycle thinking"),
-            theme.fg(.dim, "ctrl+p / shift+ctrl+p") + theme.fg(.muted, " to cycle models"),
-            theme.fg(.dim, "ctrl+l") + theme.fg(.muted, " to select model"),
-            theme.fg(.dim, "ctrl+o") + theme.fg(.muted, " to expand tools"),
-            theme.fg(.dim, "ctrl+t") + theme.fg(.muted, " to toggle thinking"),
-            theme.fg(.dim, "ctrl+g") + theme.fg(.muted, " for external editor"),
+            theme.fg(.dim, interrupt) + theme.fg(.muted, " to interrupt"),
+            theme.fg(.dim, clear) + theme.fg(.muted, " to clear"),
+            theme.fg(.dim, "\(clear) twice") + theme.fg(.muted, " to exit"),
+            theme.fg(.dim, exit) + theme.fg(.muted, " to exit (empty)"),
+            theme.fg(.dim, suspend) + theme.fg(.muted, " to suspend"),
+            theme.fg(.dim, deleteToLineEnd) + theme.fg(.muted, " to delete line"),
+            theme.fg(.dim, cycleThinkingLevel) + theme.fg(.muted, " to cycle thinking"),
+            theme.fg(.dim, "\(cycleModelForward)/\(cycleModelBackward)") + theme.fg(.muted, " to cycle models"),
+            theme.fg(.dim, selectModel) + theme.fg(.muted, " to select model"),
+            theme.fg(.dim, expandTools) + theme.fg(.muted, " to expand tools"),
+            theme.fg(.dim, toggleThinking) + theme.fg(.muted, " to toggle thinking"),
+            theme.fg(.dim, externalEditor) + theme.fg(.muted, " for external editor"),
             theme.fg(.dim, "/") + theme.fg(.muted, " for commands"),
             theme.fg(.dim, "!") + theme.fg(.muted, " to run bash"),
-            theme.fg(.dim, "alt+enter") + theme.fg(.muted, " to queue follow-up"),
+            theme.fg(.dim, followUp) + theme.fg(.muted, " to queue follow-up"),
         ].joined(separator: "\n")
         return "\(logo)\n\(instructions)"
     }
@@ -1577,6 +1631,11 @@ public final class InteractiveMode {
         if trimmed == "/resume" {
             showSessionSelector()
             editor.setText("")
+            return
+        }
+        if trimmed == "/quit" || trimmed == "/exit" {
+            editor.setText("")
+            shutdown()
             return
         }
 
@@ -2052,25 +2111,107 @@ public final class InteractiveMode {
 
     @MainActor
     private func handleHotkeysCommand() {
-        let lines: [String] = [
-            "Keyboard Shortcuts",
-            "",
-            "esc - interrupt / cancel",
-            "ctrl+c - clear editor (double to exit)",
-            "ctrl+d - exit when empty",
-            "ctrl+z - suspend",
-            "shift+tab - cycle thinking",
-            "ctrl+p / shift+ctrl+p - cycle models",
-            "ctrl+l - model selector",
-            "ctrl+o - expand tool output",
-            "ctrl+t - toggle thinking blocks",
-            "ctrl+g - external editor",
-            "alt+enter - queue follow-up",
-        ]
+        let cursorWordLeft = getEditorKeyDisplay(.cursorWordLeft)
+        let cursorWordRight = getEditorKeyDisplay(.cursorWordRight)
+        let cursorLineStart = getEditorKeyDisplay(.cursorLineStart)
+        let cursorLineEnd = getEditorKeyDisplay(.cursorLineEnd)
+
+        let submit = getEditorKeyDisplay(.submit)
+        let newLine = getEditorKeyDisplay(.newLine)
+        let deleteWordBackward = getEditorKeyDisplay(.deleteWordBackward)
+        let deleteToLineStart = getEditorKeyDisplay(.deleteToLineStart)
+        let deleteToLineEnd = getEditorKeyDisplay(.deleteToLineEnd)
+        let tab = getEditorKeyDisplay(.tab)
+
+        let interrupt = getAppKeyDisplay(.interrupt)
+        let clear = getAppKeyDisplay(.clear)
+        let exit = getAppKeyDisplay(.exit)
+        let suspend = getAppKeyDisplay(.suspend)
+        let cycleThinkingLevel = getAppKeyDisplay(.cycleThinkingLevel)
+        let cycleModelForward = getAppKeyDisplay(.cycleModelForward)
+        let expandTools = getAppKeyDisplay(.expandTools)
+        let toggleThinking = getAppKeyDisplay(.toggleThinking)
+        let externalEditor = getAppKeyDisplay(.externalEditor)
+        let followUp = getAppKeyDisplay(.followUp)
+
+        var hotkeys = """
+**Navigation**
+| Key | Action |
+|-----|--------|
+| `Arrow keys` | Move cursor / browse history (Up when empty) |
+| `\(cursorWordLeft)` / `\(cursorWordRight)` | Move by word |
+| `\(cursorLineStart)` | Start of line |
+| `\(cursorLineEnd)` | End of line |
+
+**Editing**
+| Key | Action |
+|-----|--------|
+| `\(submit)` | Send message |
+| `\(newLine)` | New line |
+| `\(deleteWordBackward)` | Delete word backwards |
+| `\(deleteToLineStart)` | Delete to start of line |
+| `\(deleteToLineEnd)` | Delete to end of line |
+
+**Other**
+| Key | Action |
+|-----|--------|
+| `\(tab)` | Path completion / accept autocomplete |
+| `\(interrupt)` | Cancel autocomplete / abort streaming |
+| `\(clear)` | Clear editor (first) / exit (second) |
+| `\(exit)` | Exit (when editor is empty) |
+| `\(suspend)` | Suspend to background |
+| `\(cycleThinkingLevel)` | Cycle thinking level |
+| `\(cycleModelForward)` | Cycle models |
+| `\(expandTools)` | Toggle tool output expansion |
+| `\(toggleThinking)` | Toggle thinking block visibility |
+| `\(externalEditor)` | Edit message in external editor |
+| `\(followUp)` | Queue follow-up message |
+| `/` | Slash commands |
+| `!` | Run bash command |
+"""
+
+        if !hookShortcuts.isEmpty {
+            hotkeys += """
+
+**Hooks**
+| Key | Action |
+|-----|--------|
+"""
+            let sorted = hookShortcuts.keys.sorted()
+            for key in sorted {
+                if let shortcut = hookShortcuts[key] {
+                    let description = shortcut.description ?? shortcut.hookPath
+                    hotkeys += "| `\(key)` | \(description) |\n"
+                }
+            }
+        }
 
         chatContainer.addChild(Spacer(1))
-        chatContainer.addChild(Text(theme.bold(theme.fg(.accent, lines.joined(separator: "\n"))), paddingX: 1, paddingY: 0))
+        chatContainer.addChild(DynamicBorder())
+        chatContainer.addChild(Text(theme.bold(theme.fg(.accent, "Keyboard Shortcuts")), paddingX: 1, paddingY: 0))
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Markdown(hotkeys.trimmingCharacters(in: .whitespacesAndNewlines), paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
+        chatContainer.addChild(DynamicBorder())
         scheduleRender()
+    }
+
+    private func formatKeyDisplay(_ keys: [KeyId]) -> String {
+        return keys.map { formatKeyDisplay($0) }.joined(separator: "/")
+    }
+
+    private func formatKeyDisplay(_ keys: String) -> String {
+        return keys.split(separator: "+").map { part in
+            guard let first = part.first else { return "" }
+            return first.uppercased() + part.dropFirst()
+        }.joined(separator: "+")
+    }
+
+    private func getAppKeyDisplay(_ action: AppAction) -> String {
+        return formatKeyDisplay(keybindings.getDisplayString(action))
+    }
+
+    private func getEditorKeyDisplay(_ action: EditorAction) -> String {
+        return formatKeyDisplay(getEditorKeybindings().getKeys(action))
     }
 
     @MainActor

@@ -30,6 +30,15 @@ public func runPrintMode(
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            getActiveToolsHandler: { [weak session] in
+                session?.getActiveToolNames() ?? []
+            },
+            getAllToolsHandler: { [weak session] in
+                session?.getAllToolNames() ?? []
+            },
+            setActiveToolsHandler: { [weak session] toolNames in
+                session?.setActiveToolsByName(toolNames)
+            },
             isIdle: { [weak session] in
                 !(session?.isStreaming ?? true)
             },

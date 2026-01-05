@@ -1,8 +1,27 @@
 import Foundation
+import Darwin
+import MiniTui
 import PiSwiftAI
 import PiSwiftAgent
 
 public final class HookRunner: @unchecked Sendable {
+    private static let reservedShortcuts: Set<String> = [
+        "ctrl+c",
+        "ctrl+d",
+        "ctrl+z",
+        "ctrl+k",
+        "ctrl+p",
+        "ctrl+l",
+        "ctrl+o",
+        "ctrl+t",
+        "ctrl+g",
+        "shift+tab",
+        "shift+ctrl+p",
+        "alt+enter",
+        "escape",
+        "enter",
+    ]
+
     private var hooks: [LoadedHook]
     private let cwd: String
     private let sessionManager: SessionManager
@@ -41,6 +60,9 @@ public final class HookRunner: @unchecked Sendable {
         getModel: @escaping () -> Model?,
         sendMessageHandler: @escaping HookSendMessageHandler = { _, _ in },
         appendEntryHandler: @escaping HookAppendEntryHandler = { _, _ in },
+        getActiveToolsHandler: HookGetActiveToolsHandler? = nil,
+        getAllToolsHandler: HookGetAllToolsHandler? = nil,
+        setActiveToolsHandler: HookSetActiveToolsHandler? = nil,
         newSessionHandler: HookNewSessionHandler? = nil,
         branchHandler: HookBranchHandler? = nil,
         navigateTreeHandler: HookNavigateTreeHandler? = nil,
@@ -71,6 +93,9 @@ public final class HookRunner: @unchecked Sendable {
         for hook in hooks {
             hook.setSendMessageHandler(sendMessageHandler)
             hook.setAppendEntryHandler(appendEntryHandler)
+            hook.setGetActiveToolsHandler(getActiveToolsHandler ?? { [] })
+            hook.setGetAllToolsHandler(getAllToolsHandler ?? { [] })
+            hook.setSetActiveToolsHandler(setActiveToolsHandler ?? { _ in })
         }
     }
 
@@ -101,6 +126,42 @@ public final class HookRunner: @unchecked Sendable {
             commands.append(contentsOf: hook.commands.values)
         }
         return commands
+    }
+
+    public func getFlags() -> [String: HookFlag] {
+        var allFlags: [String: HookFlag] = [:]
+        for hook in hooks {
+            for (name, flag) in hook.flags {
+                allFlags[name] = flag
+            }
+        }
+        return allFlags
+    }
+
+    public func setFlagValue(_ name: String, _ value: HookFlagValue) {
+        for hook in hooks {
+            if hook.flags[name] != nil {
+                hook.setFlagValue(name, value)
+            }
+        }
+    }
+
+    public func getShortcuts() -> [KeyId: HookShortcut] {
+        var allShortcuts: [KeyId: HookShortcut] = [:]
+        for hook in hooks {
+            for (key, shortcut) in hook.shortcuts {
+                let normalizedKey = key.lowercased()
+                if Self.reservedShortcuts.contains(normalizedKey) {
+                    logHookWarning("Hook shortcut '\(key)' from \(shortcut.hookPath) conflicts with built-in shortcut. Skipping.")
+                    continue
+                }
+                if let existing = allShortcuts[normalizedKey] {
+                    logHookWarning("Hook shortcut conflict: '\(key)' registered by both \(existing.hookPath) and \(shortcut.hookPath). Using \(shortcut.hookPath).")
+                }
+                allShortcuts[normalizedKey] = shortcut
+            }
+        }
+        return allShortcuts
     }
 
     public func getCommand(_ name: String) -> RegisteredCommand? {
@@ -147,6 +208,10 @@ public final class HookRunner: @unchecked Sendable {
             abort: { [weak self] in self?.abort() },
             hasPendingMessages: { [weak self] in self?.hasPendingMessages() ?? false }
         )
+    }
+
+    public func createShortcutContext() -> HookContext {
+        createContext()
     }
 
     public func createCommandContext() -> HookCommandContext {
@@ -285,6 +350,10 @@ public final class HookRunner: @unchecked Sendable {
             systemPromptAppend: systemPromptAppends.isEmpty ? nil : systemPromptAppends.joined(separator: "\n\n")
         )
     }
+}
+
+private func logHookWarning(_ message: String) {
+    fputs("Warning: \(message)\n", stderr)
 }
 
 private func captureStack() -> String {

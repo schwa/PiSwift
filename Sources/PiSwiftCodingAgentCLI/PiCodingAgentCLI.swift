@@ -142,9 +142,9 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             skillsSettings.includeSkills = includeSkills
         }
 
-        let toolMap = createAllTools(cwd: cwd)
+        let allBuiltInToolsMap = createAllTools(cwd: cwd)
         let selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
-        let selectedTools = selectedToolNames.compactMap { toolMap[$0] }
+        let selectedTools = selectedToolNames.compactMap { allBuiltInToolsMap[$0] }
         let eventBus = createEventBus()
 
         var hookRunner: HookRunner? = nil
@@ -160,7 +160,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let customToolPaths = settingsManager.getCustomTools() + (parsed.customTools ?? [])
-        let builtInToolNames = toolMap.keys.map { $0.rawValue }
+        let builtInToolNames = allBuiltInToolsMap.keys.map { $0.rawValue }
         let customToolsResult = discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir(), eventBus)
         time("discoverAndLoadCustomTools")
         for error in customToolsResult.errors {
@@ -175,19 +175,40 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
             contextProvider.buildContext()
         }
+
+        var toolRegistry: [String: AgentTool] = [:]
+        for (name, tool) in allBuiltInToolsMap {
+            toolRegistry[name.rawValue] = tool
+        }
+        for tool in wrappedCustomTools {
+            toolRegistry[tool.name] = tool
+        }
+
+        let initialActiveToolNames = selectedToolNames.map { $0.rawValue } + wrappedCustomTools.map { $0.name }
         var allTools = selectedTools + wrappedCustomTools
         if let hookRunner {
             allTools = wrapToolsWithHooks(allTools, hookRunner)
+            let registryTools = Array(toolRegistry.values)
+            let wrappedRegistry = wrapToolsWithHooks(registryTools, hookRunner)
+            toolRegistry = Dictionary(uniqueKeysWithValues: wrappedRegistry.map { ($0.name, $0) })
         }
 
-        let systemPrompt = buildSystemPrompt(BuildSystemPromptOptions(
-            customPrompt: parsed.systemPrompt,
-            selectedTools: selectedToolNames,
-            appendSystemPrompt: parsed.appendSystemPrompt,
-            skillsSettings: skillsSettings,
-            cwd: cwd,
-            agentDir: getAgentDir()
-        ))
+        let customPrompt = parsed.systemPrompt
+        let appendSystemPrompt = parsed.appendSystemPrompt
+        let skillsSettingsSnapshot = skillsSettings
+        let rebuildSystemPrompt: @Sendable ([String]) -> String = { toolNames in
+            let validToolNames = toolNames.compactMap { ToolName(rawValue: $0) }
+            return buildSystemPrompt(BuildSystemPromptOptions(
+                customPrompt: customPrompt,
+                selectedTools: validToolNames,
+                appendSystemPrompt: appendSystemPrompt,
+                skillsSettings: skillsSettingsSnapshot,
+                cwd: cwd,
+                agentDir: getAgentDir()
+            ))
+        }
+
+        let systemPrompt = rebuildSystemPrompt(initialActiveToolNames)
         time("buildSystemPrompt")
 
         if parsed.continue == true || parsed.resume == true {
@@ -261,7 +282,9 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             customTools: customToolsResult.tools,
             modelRegistry: modelRegistry,
             skillsSettings: skillsSettings,
-            eventBus: eventBus
+            eventBus: eventBus,
+            toolRegistry: toolRegistry,
+            rebuildSystemPrompt: rebuildSystemPrompt
         ))
         contextProvider.session = createdSession
         let sendMessageHandler: HookSendMessageHandler = { [weak createdSession] message, options in

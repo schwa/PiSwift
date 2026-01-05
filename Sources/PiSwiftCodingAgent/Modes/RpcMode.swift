@@ -251,6 +251,15 @@ public func runRpcMode(_ session: AgentSession) async {
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            getActiveToolsHandler: { [weak session] in
+                session?.getActiveToolNames() ?? []
+            },
+            getAllToolsHandler: { [weak session] in
+                session?.getAllToolNames() ?? []
+            },
+            setActiveToolsHandler: { [weak session] toolNames in
+                session?.setActiveToolsByName(toolNames)
+            },
             uiContext: uiContext,
             hasUI: false
         )

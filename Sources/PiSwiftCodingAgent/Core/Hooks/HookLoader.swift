@@ -84,7 +84,7 @@ private func loadHook(_ hookPath: String, cwd: String, eventBus: EventBus) -> (h
             return (nil, "Bundle principal class must conform to HookPlugin")
         }
 
-        let api = HookAPI(events: eventBus)
+        let api = HookAPI(events: eventBus, hookPath: hookPath)
         api.setExecCwd(cwd)
         let plugin = principal.init()
         plugin.register(api)
@@ -96,8 +96,14 @@ private func loadHook(_ hookPath: String, cwd: String, eventBus: EventBus) -> (h
             handlers: api.handlers,
             messageRenderers: api.messageRenderers,
             commands: api.commands,
+            flags: api.flags,
+            shortcuts: api.shortcuts,
             setSendMessageHandler: api.setSendMessageHandler,
-            setAppendEntryHandler: api.setAppendEntryHandler
+            setAppendEntryHandler: api.setAppendEntryHandler,
+            setGetActiveToolsHandler: api.setGetActiveToolsHandler,
+            setGetAllToolsHandler: api.setGetAllToolsHandler,
+            setSetActiveToolsHandler: api.setSetActiveToolsHandler,
+            setFlagValue: api.setFlagValue
         )
         return (loaded, nil)
     }
