@@ -66,7 +66,7 @@ private func discoverHooksInDir(_ dir: String) -> [String] {
     return hooks
 }
 
-private func loadHook(_ hookPath: String, cwd: String) -> (hook: LoadedHook?, error: String?) {
+private func loadHook(_ hookPath: String, cwd: String, eventBus: EventBus) -> (hook: LoadedHook?, error: String?) {
     let resolvedPath = resolveHookPath(hookPath, cwd: cwd)
     guard FileManager.default.fileExists(atPath: resolvedPath) else {
         return (nil, "Hook not found")
@@ -84,7 +84,7 @@ private func loadHook(_ hookPath: String, cwd: String) -> (hook: LoadedHook?, er
             return (nil, "Bundle principal class must conform to HookPlugin")
         }
 
-        let api = HookAPI()
+        let api = HookAPI(events: eventBus)
         api.setExecCwd(cwd)
         let plugin = principal.init()
         plugin.register(api)
@@ -105,12 +105,13 @@ private func loadHook(_ hookPath: String, cwd: String) -> (hook: LoadedHook?, er
     return (nil, "Unsupported hook format. Use a .bundle with a HookPlugin principal class")
 }
 
-public func loadHooks(_ paths: [String], cwd: String) -> LoadHooksResult {
+public func loadHooks(_ paths: [String], cwd: String, eventBus: EventBus? = nil) -> LoadHooksResult {
     var hooks: [LoadedHook] = []
     var errors: [HookLoadError] = []
+    let resolvedEventBus = eventBus ?? createEventBus()
 
     for path in paths {
-        let result = loadHook(path, cwd: cwd)
+        let result = loadHook(path, cwd: cwd, eventBus: resolvedEventBus)
         if let error = result.error {
             errors.append(HookLoadError(path: path, error: error))
             continue
@@ -123,7 +124,12 @@ public func loadHooks(_ paths: [String], cwd: String) -> LoadHooksResult {
     return LoadHooksResult(hooks: hooks, errors: errors)
 }
 
-public func discoverAndLoadHooks(_ configuredPaths: [String], _ cwd: String, _ agentDir: String = getAgentDir()) -> LoadHooksResult {
+public func discoverAndLoadHooks(
+    _ configuredPaths: [String],
+    _ cwd: String,
+    _ agentDir: String = getAgentDir(),
+    _ eventBus: EventBus? = nil
+) -> LoadHooksResult {
     var allPaths: [String] = []
     var seen: Set<String> = []
 
@@ -145,5 +151,5 @@ public func discoverAndLoadHooks(_ configuredPaths: [String], _ cwd: String, _ a
 
     addPaths(configuredPaths)
 
-    return loadHooks(allPaths, cwd: cwd)
+    return loadHooks(allPaths, cwd: cwd, eventBus: eventBus)
 }

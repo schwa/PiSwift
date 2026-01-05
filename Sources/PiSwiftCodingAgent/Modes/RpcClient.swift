@@ -125,6 +125,8 @@ public enum RpcHookUIRequest: Sendable {
     case editor(id: String, title: String, prefill: String?)
     case notify(id: String, message: String, notifyType: HookNotificationType?)
     case setStatus(id: String, statusKey: String, statusText: String?)
+    case setWidget(id: String, widgetKey: String, widgetLines: [String]?)
+    case setTitle(id: String, title: String)
     case setEditorText(id: String, text: String)
 
     public var id: String {
@@ -135,6 +137,8 @@ public enum RpcHookUIRequest: Sendable {
              .editor(let id, _, _),
              .notify(let id, _, _),
              .setStatus(let id, _, _),
+             .setWidget(let id, _, _),
+             .setTitle(let id, _),
              .setEditorText(let id, _):
             return id
         }
@@ -162,11 +166,13 @@ public struct RpcHookError: Sendable {
     public var hookPath: String
     public var event: String
     public var error: String
+    public var stack: String?
 
-    public init(hookPath: String, event: String, error: String) {
+    public init(hookPath: String, event: String, error: String, stack: String? = nil) {
         self.hookPath = hookPath
         self.event = event
         self.error = error
+        self.stack = stack
     }
 }
 
@@ -725,7 +731,8 @@ private func decodeRpcEvent(_ dict: [String: Any]) -> RpcEvent {
         let hookPath = dict["hookPath"] as? String ?? ""
         let event = dict["event"] as? String ?? ""
         let error = dict["error"] as? String ?? ""
-        return .hookError(RpcHookError(hookPath: hookPath, event: event, error: error))
+        let stack = dict["stack"] as? String
+        return .hookError(RpcHookError(hookPath: hookPath, event: event, error: error, stack: stack))
     }
     if let event = decodeAgentEvent(dict) {
         return .agent(event)
@@ -764,6 +771,13 @@ private func decodeHookUIRequest(_ dict: [String: Any]) -> RpcHookUIRequest? {
         let key = dict["statusKey"] as? String ?? ""
         let text = dict["statusText"] as? String
         return .setStatus(id: id, statusKey: key, statusText: text)
+    case "setWidget":
+        let key = dict["widgetKey"] as? String ?? ""
+        let lines = dict["widgetLines"] as? [String]
+        return .setWidget(id: id, widgetKey: key, widgetLines: lines)
+    case "setTitle":
+        let title = dict["title"] as? String ?? ""
+        return .setTitle(id: id, title: title)
     case "set_editor_text":
         let text = dict["text"] as? String ?? ""
         return .setEditorText(id: id, text: text)

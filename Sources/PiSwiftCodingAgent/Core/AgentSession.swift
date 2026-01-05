@@ -40,6 +40,7 @@ public struct AgentSessionConfig: Sendable {
     public var customTools: [LoadedCustomTool]?
     public var modelRegistry: ModelRegistry
     public var skillsSettings: SkillsSettings?
+    public var eventBus: EventBus?
 
     public init(
         agent: Agent,
@@ -50,7 +51,8 @@ public struct AgentSessionConfig: Sendable {
         hookRunner: HookRunner? = nil,
         customTools: [LoadedCustomTool]? = nil,
         modelRegistry: ModelRegistry,
-        skillsSettings: SkillsSettings? = nil
+        skillsSettings: SkillsSettings? = nil,
+        eventBus: EventBus? = nil
     ) {
         self.agent = agent
         self.sessionManager = sessionManager
@@ -61,6 +63,7 @@ public struct AgentSessionConfig: Sendable {
         self.customTools = customTools
         self.modelRegistry = modelRegistry
         self.skillsSettings = skillsSettings
+        self.eventBus = eventBus
     }
 }
 
@@ -156,6 +159,7 @@ public final class AgentSession: @unchecked Sendable {
     public let sessionManager: SessionManager
     public let settingsManager: SettingsManager
     public let modelRegistry: ModelRegistry
+    public let eventBus: EventBus
     private var _hookRunner: HookRunner?
     private var customToolsInternal: [LoadedCustomTool]
     private var scopedModels: [ScopedModel]
@@ -166,6 +170,7 @@ public final class AgentSession: @unchecked Sendable {
 
     private var steeringMessages: [String] = []
     private var followUpMessages: [String] = []
+    private var pendingNextTurnMessages: [HookMessage] = []
 
     private var compactionAbort: CancellationToken?
     private var branchSummaryAbort: CancellationToken?
@@ -173,16 +178,19 @@ public final class AgentSession: @unchecked Sendable {
     private var pendingBashMessages: [BashExecutionMessage] = []
     private var isCompactingInternal = false
     private var turnIndex = 0
+    private var baseSystemPrompt: String
 
     public init(config: AgentSessionConfig) {
         self.agent = config.agent
         self.sessionManager = config.sessionManager
         self.settingsManager = config.settingsManager
         self.modelRegistry = config.modelRegistry
+        self.eventBus = config.eventBus ?? createEventBus()
         self._hookRunner = config.hookRunner
         self.customToolsInternal = config.customTools ?? []
         self.scopedModels = config.scopedModels ?? []
         self.fileCommands = config.fileCommands ?? []
+        self.baseSystemPrompt = config.agent.state.systemPrompt
 
         self._hookRunner?.initialize(getModel: { [weak agent] in
             agent?.state.model
@@ -225,6 +233,10 @@ public final class AgentSession: @unchecked Sendable {
             },
             abort: { [weak self] in
                 Task { await self?.abort() }
+            },
+            events: eventBus,
+            sendMessage: { [weak self] message, options in
+                Task { await self?.sendHookMessage(message, options: options) }
             }
         )
 
@@ -347,19 +359,36 @@ public final class AgentSession: @unchecked Sendable {
         } else {
             expandedText = text
         }
-        var messages: [AgentMessage] = [buildUserMessage(text: expandedText, images: options?.images)]
-        if let hookRunner = _hookRunner, hookRunner.hasHandlers("before_agent_start") {
-            if let result = await hookRunner.emitBeforeAgentStart(expandedText, options?.images),
-               let message = result.message {
-                let hookMessage = HookMessage(
-                    customType: message.customType,
-                    content: message.content,
-                    display: message.display,
-                    details: message.details,
-                    timestamp: Int64(Date().timeIntervalSince1970 * 1000)
-                )
-                messages.append(makeHookAgentMessage(hookMessage))
+        var messages: [AgentMessage] = []
+        if !pendingNextTurnMessages.isEmpty {
+            for message in pendingNextTurnMessages {
+                messages.append(makeHookAgentMessage(message))
             }
+            pendingNextTurnMessages.removeAll()
+        }
+        messages.append(buildUserMessage(text: expandedText, images: options?.images))
+        var systemPromptAppend: String?
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("before_agent_start") {
+            if let result = await hookRunner.emitBeforeAgentStart(expandedText, options?.images) {
+                if let hookMessages = result.messages {
+                    for message in hookMessages {
+                        let hookMessage = HookMessage(
+                            customType: message.customType,
+                            content: message.content,
+                            display: message.display,
+                            details: message.details,
+                            timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                        )
+                        messages.append(makeHookAgentMessage(hookMessage))
+                    }
+                }
+                systemPromptAppend = result.systemPromptAppend
+            }
+        }
+        if let systemPromptAppend, !systemPromptAppend.isEmpty {
+            agent.setSystemPrompt("\(baseSystemPrompt)\n\n\(systemPromptAppend)")
+        } else {
+            agent.setSystemPrompt(baseSystemPrompt)
         }
         try await agent.prompt(messages)
     }
@@ -389,6 +418,11 @@ public final class AgentSession: @unchecked Sendable {
             details: message.details
         )
         let agentMessage = makeHookAgentMessage(hookMessage)
+
+        if options?.deliverAs == .nextTurn {
+            pendingNextTurnMessages.append(hookMessage)
+            return
+        }
 
         if isStreaming {
             if options?.deliverAs == .followUp {
@@ -517,6 +551,7 @@ public final class AgentSession: @unchecked Sendable {
         _ = sessionManager.newSession(options)
         steeringMessages.removeAll()
         followUpMessages.removeAll()
+        pendingNextTurnMessages.removeAll()
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionSwitchEvent(reason: .new, previousSessionFile: previousSession))
         }
@@ -536,6 +571,7 @@ public final class AgentSession: @unchecked Sendable {
         agent.reset()
         steeringMessages.removeAll()
         followUpMessages.removeAll()
+        pendingNextTurnMessages.removeAll()
         sessionManager.setSessionFile(sessionPath)
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionSwitchEvent(reason: .resume, previousSessionFile: previousSession))
@@ -749,6 +785,7 @@ public final class AgentSession: @unchecked Sendable {
         }
 
         await emitCustomToolSessionEvent(.branch, previousSessionFile: previousSession)
+        pendingNextTurnMessages.removeAll()
 
         if !skipConversationRestore {
             syncAgentContext()

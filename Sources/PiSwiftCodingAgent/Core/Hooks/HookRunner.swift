@@ -200,7 +200,7 @@ public final class HookRunner: @unchecked Sendable {
                         }
                     }
                 } catch {
-                    emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription))
+                    emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription, stack: captureStack()))
                 }
             }
         }
@@ -223,7 +223,7 @@ public final class HookRunner: @unchecked Sendable {
                         }
                     }
                 } catch {
-                    emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription))
+                    emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription, stack: captureStack()))
                 }
             }
         }
@@ -240,12 +240,13 @@ public final class HookRunner: @unchecked Sendable {
             guard let handlers = hook.handlers["context"] else { continue }
             for handler in handlers {
                 do {
-                    if let result = try await handler(ContextEvent(messages: currentMessages), context) as? ContextEventResult,
+                    let safeMessages = deepCopyMessages(currentMessages)
+                    if let result = try await handler(ContextEvent(messages: safeMessages), context) as? ContextEventResult,
                        let replacement = result.messages {
                         currentMessages = replacement
                     }
                 } catch {
-                    emitError(HookError(hookPath: hook.path, event: "context", error: error.localizedDescription))
+                    emitError(HookError(hookPath: hook.path, event: "context", error: error.localizedDescription, stack: captureStack()))
                 }
             }
         }
@@ -253,25 +254,119 @@ public final class HookRunner: @unchecked Sendable {
         return currentMessages
     }
 
-    public func emitBeforeAgentStart(_ prompt: String, _ images: [ImageContent]?) async -> BeforeAgentStartEventResult? {
+    public func emitBeforeAgentStart(_ prompt: String, _ images: [ImageContent]?) async -> BeforeAgentStartCombinedResult? {
         let context = createContext()
-        var result: BeforeAgentStartEventResult?
+        var messages: [HookMessageInput] = []
+        var systemPromptAppends: [String] = []
 
         for hook in hooks {
             guard let handlers = hook.handlers["before_agent_start"] else { continue }
             for handler in handlers {
                 do {
                     if let handlerResult = try await handler(BeforeAgentStartEvent(prompt: prompt, images: images), context) as? BeforeAgentStartEventResult {
-                        if result == nil, handlerResult.message != nil {
-                            result = handlerResult
+                        if let message = handlerResult.message {
+                            messages.append(message)
+                        }
+                        if let append = handlerResult.systemPromptAppend, !append.isEmpty {
+                            systemPromptAppends.append(append)
                         }
                     }
                 } catch {
-                    emitError(HookError(hookPath: hook.path, event: "before_agent_start", error: error.localizedDescription))
+                    emitError(HookError(hookPath: hook.path, event: "before_agent_start", error: error.localizedDescription, stack: captureStack()))
                 }
             }
         }
 
-        return result
+        if messages.isEmpty && systemPromptAppends.isEmpty {
+            return nil
+        }
+        return BeforeAgentStartCombinedResult(
+            messages: messages.isEmpty ? nil : messages,
+            systemPromptAppend: systemPromptAppends.isEmpty ? nil : systemPromptAppends.joined(separator: "\n\n")
+        )
     }
+}
+
+private func captureStack() -> String {
+    Thread.callStackSymbols.joined(separator: "\n")
+}
+
+private func deepCopyMessages(_ messages: [AgentMessage]) -> [AgentMessage] {
+    messages.map { deepCopyAgentMessage($0) }
+}
+
+private func deepCopyAgentMessage(_ message: AgentMessage) -> AgentMessage {
+    switch message {
+    case .user(let user):
+        return .user(deepCopyUserMessage(user))
+    case .assistant(let assistant):
+        return .assistant(deepCopyAssistantMessage(assistant))
+    case .toolResult(let toolResult):
+        return .toolResult(deepCopyToolResultMessage(toolResult))
+    case .custom(let custom):
+        return .custom(AgentCustomMessage(
+            role: custom.role,
+            payload: custom.payload.map(deepCopyAnyCodable),
+            timestamp: custom.timestamp
+        ))
+    }
+}
+
+private func deepCopyUserMessage(_ message: UserMessage) -> UserMessage {
+    switch message.content {
+    case .text(let text):
+        return UserMessage(content: .text(text), timestamp: message.timestamp)
+    case .blocks(let blocks):
+        return UserMessage(content: .blocks(blocks.map(deepCopyContentBlock)), timestamp: message.timestamp)
+    }
+}
+
+private func deepCopyAssistantMessage(_ message: AssistantMessage) -> AssistantMessage {
+    AssistantMessage(
+        content: message.content.map(deepCopyContentBlock),
+        api: message.api,
+        provider: message.provider,
+        model: message.model,
+        usage: message.usage,
+        stopReason: message.stopReason,
+        errorMessage: message.errorMessage,
+        timestamp: message.timestamp
+    )
+}
+
+private func deepCopyToolResultMessage(_ message: ToolResultMessage) -> ToolResultMessage {
+    ToolResultMessage(
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        content: message.content.map(deepCopyContentBlock),
+        details: message.details.map(deepCopyAnyCodable),
+        isError: message.isError,
+        timestamp: message.timestamp
+    )
+}
+
+private func deepCopyContentBlock(_ block: ContentBlock) -> ContentBlock {
+    switch block {
+    case .text(let text):
+        return .text(TextContent(text: text.text, textSignature: text.textSignature))
+    case .thinking(let thinking):
+        return .thinking(ThinkingContent(thinking: thinking.thinking, thinkingSignature: thinking.thinkingSignature))
+    case .image(let image):
+        return .image(ImageContent(data: image.data, mimeType: image.mimeType))
+    case .toolCall(let call):
+        return .toolCall(ToolCall(
+            id: call.id,
+            name: call.name,
+            arguments: deepCopyAnyCodableMap(call.arguments),
+            thoughtSignature: call.thoughtSignature
+        ))
+    }
+}
+
+private func deepCopyAnyCodableMap(_ dict: [String: AnyCodable]) -> [String: AnyCodable] {
+    dict.mapValues { deepCopyAnyCodable($0) }
+}
+
+private func deepCopyAnyCodable(_ value: AnyCodable) -> AnyCodable {
+    AnyCodable(value.jsonValue)
 }

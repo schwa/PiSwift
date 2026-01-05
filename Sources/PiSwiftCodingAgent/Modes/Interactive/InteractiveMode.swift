@@ -35,6 +35,8 @@ private struct InteractiveHookUIContext: HookUIContext {
     private let inputHandler: (String, String?) async -> String?
     private let notifyHandler: (String, HookNotificationType?) -> Void
     private let setStatusHandler: (String, String?) -> Void
+    private let setWidgetHandler: (String, HookWidgetContent?) -> Void
+    private let setTitleHandler: (String) -> Void
     private let customHandler: (@escaping HookCustomFactory) async -> HookCustomResult?
     private let setEditorTextHandler: (String) -> Void
     private let getEditorTextHandler: () -> String
@@ -47,6 +49,8 @@ private struct InteractiveHookUIContext: HookUIContext {
         input: @escaping (String, String?) async -> String?,
         notify: @escaping (String, HookNotificationType?) -> Void,
         setStatus: @escaping (String, String?) -> Void,
+        setWidget: @escaping (String, HookWidgetContent?) -> Void,
+        setTitle: @escaping (String) -> Void,
         custom: @escaping (@escaping HookCustomFactory) async -> HookCustomResult?,
         setEditorText: @escaping (String) -> Void,
         getEditorText: @escaping () -> String,
@@ -58,6 +62,8 @@ private struct InteractiveHookUIContext: HookUIContext {
         self.inputHandler = input
         self.notifyHandler = notify
         self.setStatusHandler = setStatus
+        self.setWidgetHandler = setWidget
+        self.setTitleHandler = setTitle
         self.customHandler = custom
         self.setEditorTextHandler = setEditorText
         self.getEditorTextHandler = getEditorText
@@ -83,6 +89,14 @@ private struct InteractiveHookUIContext: HookUIContext {
 
     func setStatus(_ key: String, _ text: String?) {
         setStatusHandler(key, text)
+    }
+
+    func setWidget(_ key: String, _ content: HookWidgetContent?) {
+        setWidgetHandler(key, content)
+    }
+
+    func setTitle(_ title: String) {
+        setTitleHandler(title)
     }
 
     func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
@@ -122,15 +136,19 @@ public final class InteractiveMode {
 
     private var pendingMessagesContainer: Container?
     private var statusContainer: Container?
+    private var widgetContainer: Container?
     private var editor: CustomEditor?
     private var editorContainer: Container?
     private var footer: FooterComponent?
     private var hookSelector: HookSelectorComponent?
     private var hookInput: HookInputComponent?
     private var hookEditor: HookEditorComponent?
+    private var hookWidgets: [String: Component] = [:]
+    private var hookWidgetOrder: [String] = []
     private var baseSlashCommands: [SlashCommand] = []
     private var customTools: [String: LoadedCustomTool] = [:]
     private var setToolUIContext: (HookUIContext, Bool) -> Void = { _, _ in }
+    private var setToolSendMessageHandler: (@Sendable (_ handler: @escaping HookSendMessageHandler) -> Void) = { _ in }
 
     private var isInitialized = false
     private var loadingAnimation: Loader?
@@ -152,6 +170,8 @@ public final class InteractiveMode {
     private var pendingSteeringMessages: [String] = []
     private var pendingFollowUpMessages: [String] = []
 
+    private static let maxWidgetLines = 10
+
     private var exitContinuation: CheckedContinuation<Void, Never>?
     private var unsubscribe: (() -> Void)?
     private var sigcontSource: DispatchSourceSignal?
@@ -168,6 +188,7 @@ public final class InteractiveMode {
         scopedModels: [ScopedModel] = [],
         customTools: [LoadedCustomTool] = [],
         setToolUIContext: @escaping (HookUIContext, Bool) -> Void = { _, _ in },
+        setToolSendMessageHandler: @escaping @Sendable (_ handler: @escaping HookSendMessageHandler) -> Void = { _ in },
         fdPath: String? = nil
     ) {
         self.init(chatContainer: Container(), ui: NullRenderRequester())
@@ -177,6 +198,7 @@ public final class InteractiveMode {
         self.scopedModels = scopedModels
         self.customTools = Dictionary(uniqueKeysWithValues: customTools.map { ($0.tool.name, $0) })
         self.setToolUIContext = setToolUIContext
+        self.setToolSendMessageHandler = setToolSendMessageHandler
         self.fdPath = fdPath
     }
 
@@ -218,6 +240,7 @@ public final class InteractiveMode {
         let header = buildHeaderText()
         let pendingMessages = Container()
         let status = Container()
+        let widgets = Container()
         let editor = CustomEditor(theme: getEditorTheme())
         let editorContainer = Container()
         let footer = FooterComponent(session: session)
@@ -226,6 +249,7 @@ public final class InteractiveMode {
 
         pendingMessagesContainer = pendingMessages
         statusContainer = status
+        widgetContainer = widgets
         self.editor = editor
         self.editorContainer = editorContainer
         self.footer = footer
@@ -270,6 +294,7 @@ public final class InteractiveMode {
         tui.addChild(chatContainer)
         tui.addChild(pendingMessages)
         tui.addChild(status)
+        tui.addChild(widgets)
         tui.addChild(Spacer(1))
         tui.addChild(editorContainer)
         tui.addChild(footer)
@@ -334,6 +359,16 @@ public final class InteractiveMode {
                     self?.setHookStatus(key, text)
                 }
             },
+            setWidget: { [weak self] key, content in
+                Task { @MainActor in
+                    self?.setHookWidget(key, content)
+                }
+            },
+            setTitle: { [weak self] title in
+                Task { @MainActor in
+                    self?.tui?.terminal.setTitle(title)
+                }
+            },
             custom: { [weak self] factory in
                 guard let self else { return nil }
                 return await self.showHookCustom(factory)
@@ -364,6 +399,21 @@ public final class InteractiveMode {
         }
 
         setToolUIContext(uiContext, true)
+        setToolSendMessageHandler { [weak session, weak self] message, options in
+            guard let session else { return }
+            let shouldRefresh = !session.isStreaming
+                && options?.triggerTurn != true
+                && options?.deliverAs != .nextTurn
+                && message.display
+            Task {
+                await session.sendHookMessage(message, options: options)
+                if shouldRefresh {
+                    Task { @MainActor [weak self] in
+                        self?.renderInitialMessages()
+                    }
+                }
+            }
+        }
         await session.emitCustomToolSessionEvent(.start, previousSessionFile: nil)
 
         guard let hookRunner = session.hookRunner else { return }
@@ -372,7 +422,10 @@ public final class InteractiveMode {
             getModel: { [weak session] in session?.agent.state.model },
             sendMessageHandler: { [weak session, weak self] message, options in
                 guard let session else { return }
-                let shouldRefresh = !session.isStreaming && options?.triggerTurn != true && message.display
+                let shouldRefresh = !session.isStreaming
+                    && options?.triggerTurn != true
+                    && options?.deliverAs != .nextTurn
+                    && message.display
                 Task {
                     await session.sendHookMessage(message, options: options)
                     if shouldRefresh {
@@ -417,7 +470,7 @@ public final class InteractiveMode {
 
         _ = hookRunner.onError { [weak self] error in
             Task { @MainActor in
-                self?.showHookError(error.hookPath, error.error)
+                self?.showHookError(error.hookPath, error.error, error.stack)
             }
         }
 
@@ -638,9 +691,71 @@ public final class InteractiveMode {
     }
 
     @MainActor
-    private func showHookError(_ hookPath: String, _ error: String) {
+    private func setHookWidget(_ key: String, _ content: HookWidgetContent?) {
+        if let existing = hookWidgets[key] {
+            if let disposable = existing as? HookDisposableComponent {
+                disposable.dispose()
+            }
+        }
+
+        if content == nil {
+            hookWidgets.removeValue(forKey: key)
+            hookWidgetOrder.removeAll { $0 == key }
+            renderWidgets()
+            return
+        }
+
+        guard let tui else { return }
+
+        if hookWidgets[key] == nil {
+            hookWidgetOrder.append(key)
+        }
+
+        switch content {
+        case .lines(let lines):
+            let container = Container()
+            let limitedLines = Array(lines.prefix(Self.maxWidgetLines))
+            for line in limitedLines {
+                container.addChild(Text(line, paddingX: 1, paddingY: 0))
+            }
+            if lines.count > Self.maxWidgetLines {
+                container.addChild(Text(theme.fg(.muted, "... (widget truncated)"), paddingX: 1, paddingY: 0))
+            }
+            hookWidgets[key] = container
+        case .component(let factory):
+            hookWidgets[key] = factory(tui, theme)
+        case .none:
+            break
+        }
+
+        renderWidgets()
+    }
+
+    @MainActor
+    private func renderWidgets() {
+        guard let widgetContainer else { return }
+        widgetContainer.clear()
+
+        for key in hookWidgetOrder {
+            if let component = hookWidgets[key] {
+                widgetContainer.addChild(component)
+            }
+        }
+
+        scheduleRender()
+    }
+
+    @MainActor
+    private func showHookError(_ hookPath: String, _ error: String, _ stack: String? = nil) {
         let errorText = Text(theme.fg(.error, "Hook \"\(hookPath)\" error: \(error)"), paddingX: 1, paddingY: 0)
         chatContainer.addChild(errorText)
+        if let stack, !stack.isEmpty {
+            let lines = stack.split(separator: "\n").dropFirst()
+            if !lines.isEmpty {
+                let formatted = lines.map { theme.fg(.dim, "  \($0.trimmingCharacters(in: .whitespaces))") }.joined(separator: "\n")
+                chatContainer.addChild(Text(formatted, paddingX: 1, paddingY: 0))
+            }
+        }
         scheduleRender()
     }
 
@@ -1526,7 +1641,12 @@ public final class InteractiveMode {
         do {
             try await command.handler(args, context)
         } catch {
-            hookRunner.emitError(HookError(hookPath: "command:\(commandName)", event: "command", error: error.localizedDescription))
+            hookRunner.emitError(HookError(
+                hookPath: "command:\(commandName)",
+                event: "command",
+                error: error.localizedDescription,
+                stack: Thread.callStackSymbols.joined(separator: "\n")
+            ))
         }
         return true
     }

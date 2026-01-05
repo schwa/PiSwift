@@ -14,6 +14,8 @@ public struct CustomToolContext: Sendable {
     public var isIdle: @Sendable () -> Bool
     public var hasPendingMessages: @Sendable () -> Bool
     public var abort: @Sendable () -> Void
+    public var events: EventBus
+    public var sendMessage: HookSendMessageHandler
 
     public init(
         sessionManager: SessionManager,
@@ -21,7 +23,9 @@ public struct CustomToolContext: Sendable {
         model: Model?,
         isIdle: @escaping @Sendable () -> Bool,
         hasPendingMessages: @escaping @Sendable () -> Bool,
-        abort: @escaping @Sendable () -> Void
+        abort: @escaping @Sendable () -> Void,
+        events: EventBus,
+        sendMessage: @escaping HookSendMessageHandler
     ) {
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
@@ -29,6 +33,8 @@ public struct CustomToolContext: Sendable {
         self.isIdle = isIdle
         self.hasPendingMessages = hasPendingMessages
         self.abort = abort
+        self.events = events
+        self.sendMessage = sendMessage
     }
 }
 
@@ -139,15 +145,18 @@ public struct CustomToolsLoadResult: @unchecked Sendable {
     public var tools: [LoadedCustomTool]
     public var errors: [CustomToolLoadError]
     public var setUIContext: (@Sendable (_ uiContext: CustomToolUIContext, _ hasUI: Bool) -> Void)
+    public var setSendMessageHandler: (@Sendable (_ handler: @escaping HookSendMessageHandler) -> Void)
 
     public init(
         tools: [LoadedCustomTool],
         errors: [CustomToolLoadError],
-        setUIContext: @escaping @Sendable (_ uiContext: CustomToolUIContext, _ hasUI: Bool) -> Void = { _, _ in }
+        setUIContext: @escaping @Sendable (_ uiContext: CustomToolUIContext, _ hasUI: Bool) -> Void = { _, _ in },
+        setSendMessageHandler: @escaping @Sendable (_ handler: @escaping HookSendMessageHandler) -> Void = { _ in }
     ) {
         self.tools = tools
         self.errors = errors
         self.setUIContext = setUIContext
+        self.setSendMessageHandler = setSendMessageHandler
     }
 }
 
@@ -158,14 +167,22 @@ public protocol CustomToolPlugin: AnyObject {
 
 public final class CustomToolAPI: @unchecked Sendable {
     public let cwd: String
+    public let events: EventBus
 
     private let lock = NSLock()
     private var uiContext: CustomToolUIContext
     private var hasUIValue: Bool
     private var registeredTools: [CustomTool] = []
+    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
 
-    public init(cwd: String, ui: CustomToolUIContext = NoOpHookUIContext(), hasUI: Bool = false) {
+    public init(
+        cwd: String,
+        events: EventBus,
+        ui: CustomToolUIContext = NoOpHookUIContext(),
+        hasUI: Bool = false
+    ) {
         self.cwd = cwd
+        self.events = events
         self.uiContext = ui
         self.hasUIValue = hasUI
     }
@@ -213,6 +230,19 @@ public final class CustomToolAPI: @unchecked Sendable {
         let snapshot = registeredTools
         lock.unlock()
         return snapshot
+    }
+
+    public func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
+        lock.lock()
+        sendMessageHandler = handler
+        lock.unlock()
+    }
+
+    public func sendMessage(_ message: HookMessageInput, options: HookSendMessageOptions? = nil) {
+        lock.lock()
+        let handler = sendMessageHandler
+        lock.unlock()
+        handler(message, options)
     }
 
     public func exec(_ command: String, _ args: [String], _ options: ExecOptions? = nil) async -> ExecResult {

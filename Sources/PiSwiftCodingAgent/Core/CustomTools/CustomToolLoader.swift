@@ -81,13 +81,15 @@ private func loadCustomTool(
 public func loadCustomTools(
     _ paths: [String],
     _ cwd: String,
-    _ builtInToolNames: [String]
+    _ builtInToolNames: [String],
+    _ eventBus: EventBus? = nil
 ) -> CustomToolsLoadResult {
     var tools: [LoadedCustomTool] = []
     var errors: [CustomToolLoadError] = []
     var seenNames = Set(builtInToolNames)
 
-    let sharedApi = CustomToolAPI(cwd: cwd)
+    let resolvedEventBus = eventBus ?? createEventBus()
+    let sharedApi = CustomToolAPI(cwd: cwd, events: resolvedEventBus)
 
     for toolPath in paths {
         let result = loadCustomTool(toolPath, cwd: cwd, sharedApi: sharedApi)
@@ -116,6 +118,9 @@ public func loadCustomTools(
         setUIContext: { uiContext, hasUI in
             sharedApi.ui = uiContext
             sharedApi.hasUI = hasUI
+        },
+        setSendMessageHandler: { handler in
+            sharedApi.setSendMessageHandler(handler)
         }
     )
 }
@@ -124,7 +129,8 @@ public func discoverAndLoadCustomTools(
     _ configuredPaths: [String],
     _ cwd: String,
     _ builtInToolNames: [String],
-    _ agentDir: String = getAgentDir()
+    _ agentDir: String = getAgentDir(),
+    _ eventBus: EventBus? = nil
 ) -> CustomToolsLoadResult {
     var allPaths: [String] = []
     var seen: Set<String> = []
@@ -147,5 +153,5 @@ public func discoverAndLoadCustomTools(
 
     addPaths(configuredPaths.map { resolveToolPath($0, cwd: cwd) })
 
-    return loadCustomTools(allPaths, cwd, builtInToolNames)
+    return loadCustomTools(allPaths, cwd, builtInToolNames, eventBus)
 }

@@ -145,10 +145,11 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let toolMap = createAllTools(cwd: cwd)
         let selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
         let selectedTools = selectedToolNames.compactMap { toolMap[$0] }
+        let eventBus = createEventBus()
 
         var hookRunner: HookRunner? = nil
         let hookPaths = settingsManager.getHooks() + (parsed.hooks ?? [])
-        let hookLoadResult = discoverAndLoadHooks(hookPaths, cwd, getAgentDir())
+        let hookLoadResult = discoverAndLoadHooks(hookPaths, cwd, getAgentDir(), eventBus)
         time("discoverAndLoadHooks")
         for error in hookLoadResult.errors {
             fputs("Failed to load hook \"\(error.path)\": \(error.error)\n", stderr)
@@ -160,13 +161,17 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
         let customToolPaths = settingsManager.getCustomTools() + (parsed.customTools ?? [])
         let builtInToolNames = toolMap.keys.map { $0.rawValue }
-        let customToolsResult = discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir())
+        let customToolsResult = discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir(), eventBus)
         time("discoverAndLoadCustomTools")
         for error in customToolsResult.errors {
             fputs("Failed to load custom tool \"\(error.path)\": \(error.error)\n", stderr)
         }
 
-        let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry)
+        let contextProvider = CustomToolContextProvider(
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            eventBus: eventBus
+        )
         let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
             contextProvider.buildContext()
         }
@@ -255,9 +260,18 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             hookRunner: hookRunner,
             customTools: customToolsResult.tools,
             modelRegistry: modelRegistry,
-            skillsSettings: skillsSettings
+            skillsSettings: skillsSettings,
+            eventBus: eventBus
         ))
         contextProvider.session = createdSession
+        let sendMessageHandler: HookSendMessageHandler = { [weak createdSession] message, options in
+            guard let session = createdSession else { return }
+            Task {
+                await session.sendHookMessage(message, options: options)
+            }
+        }
+        customToolsResult.setSendMessageHandler(sendMessageHandler)
+        contextProvider.setSendMessageHandler(sendMessageHandler)
 
         if mode == .rpc {
             await runRpcMode(createdSession)
@@ -291,6 +305,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                     scopedModels: scopedModels,
                     customTools: customToolsResult.tools,
                     setToolUIContext: customToolsResult.setUIContext,
+                    setToolSendMessageHandler: customToolsResult.setSendMessageHandler,
                     fdPath: fdPath
                 )
             }
@@ -549,10 +564,13 @@ private final class CustomToolContextProvider: @unchecked Sendable {
     weak var session: AgentSession?
     private let sessionManager: SessionManager
     private let modelRegistry: ModelRegistry
+    private let eventBus: EventBus
+    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
 
-    init(sessionManager: SessionManager, modelRegistry: ModelRegistry) {
+    init(sessionManager: SessionManager, modelRegistry: ModelRegistry, eventBus: EventBus) {
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
+        self.eventBus = eventBus
     }
 
     func buildContext() -> CustomToolContext {
@@ -568,7 +586,16 @@ private final class CustomToolContextProvider: @unchecked Sendable {
             },
             abort: { [weak self] in
                 Task { await self?.session?.abort() }
+            },
+            events: eventBus,
+            sendMessage: { [weak self] message, options in
+                guard let self else { return }
+                self.sendMessageHandler(message, options)
             }
         )
+    }
+
+    func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
+        sendMessageHandler = handler
     }
 }

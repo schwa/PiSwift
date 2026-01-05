@@ -34,6 +34,7 @@ public struct CreateAgentSessionOptions: @unchecked Sendable {
     public var additionalCustomToolPaths: [String]?
     public var hooks: [HookDefinition]?
     public var additionalHookPaths: [String]?
+    public var eventBus: EventBus?
     public var skills: [Skill]?
     public var contextFiles: [ContextFile]?
     public var slashCommands: [FileSlashCommand]?
@@ -54,6 +55,7 @@ public struct CreateAgentSessionOptions: @unchecked Sendable {
         additionalCustomToolPaths: [String]? = nil,
         hooks: [HookDefinition]? = nil,
         additionalHookPaths: [String]? = nil,
+        eventBus: EventBus? = nil,
         skills: [Skill]? = nil,
         contextFiles: [ContextFile]? = nil,
         slashCommands: [FileSlashCommand]? = nil,
@@ -73,6 +75,7 @@ public struct CreateAgentSessionOptions: @unchecked Sendable {
         self.additionalCustomToolPaths = additionalCustomToolPaths
         self.hooks = hooks
         self.additionalHookPaths = additionalHookPaths
+        self.eventBus = eventBus
         self.skills = skills
         self.contextFiles = contextFiles
         self.slashCommands = slashCommands
@@ -159,10 +162,13 @@ private final class CustomToolContextProvider: @unchecked Sendable {
     weak var session: AgentSession?
     private let sessionManager: SessionManager
     private let modelRegistry: ModelRegistry
+    private let eventBus: EventBus
+    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
 
-    init(sessionManager: SessionManager, modelRegistry: ModelRegistry) {
+    init(sessionManager: SessionManager, modelRegistry: ModelRegistry, eventBus: EventBus) {
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
+        self.eventBus = eventBus
     }
 
     func buildContext() -> CustomToolContext {
@@ -178,8 +184,17 @@ private final class CustomToolContextProvider: @unchecked Sendable {
             },
             abort: { [weak self] in
                 Task { await self?.session?.abort() }
+            },
+            events: eventBus,
+            sendMessage: { [weak self] message, options in
+                guard let self else { return }
+                self.sendMessageHandler(message, options)
             }
         )
+    }
+
+    func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
+        sendMessageHandler = handler
     }
 }
 
@@ -191,11 +206,11 @@ public func discoverModels(authStorage: AuthStorage, agentDir: String = getAgent
     ModelRegistry(authStorage, agentDir)
 }
 
-public func discoverHooks(cwd: String? = nil, agentDir: String? = nil) async -> [HookDefinition] {
+public func discoverHooks(_ eventBus: EventBus, cwd: String? = nil, agentDir: String? = nil) async -> [HookDefinition] {
     let resolvedCwd = cwd ?? FileManager.default.currentDirectoryPath
     let resolvedAgentDir = agentDir ?? getAgentDir()
 
-    let result = discoverAndLoadHooks([], resolvedCwd, resolvedAgentDir)
+    let result = discoverAndLoadHooks([], resolvedCwd, resolvedAgentDir, eventBus)
     for error in result.errors {
         writeStderr("Failed to load hook \"\(error.path)\": \(error.error)\n")
     }
@@ -205,17 +220,25 @@ public func discoverHooks(cwd: String? = nil, agentDir: String? = nil) async -> 
     }
 }
 
-public func discoverCustomTools(cwd: String? = nil, agentDir: String? = nil) async -> [CustomToolDefinition] {
+public func discoverHooks(cwd: String? = nil, agentDir: String? = nil) async -> [HookDefinition] {
+    await discoverHooks(createEventBus(), cwd: cwd, agentDir: agentDir)
+}
+
+public func discoverCustomTools(_ eventBus: EventBus, cwd: String? = nil, agentDir: String? = nil) async -> [CustomToolDefinition] {
     let resolvedCwd = cwd ?? FileManager.default.currentDirectoryPath
     let resolvedAgentDir = agentDir ?? getAgentDir()
 
     let builtInToolNames = createAllTools(cwd: resolvedCwd).keys.map { $0.rawValue }
-    let result = discoverAndLoadCustomTools([], resolvedCwd, builtInToolNames, resolvedAgentDir)
+    let result = discoverAndLoadCustomTools([], resolvedCwd, builtInToolNames, resolvedAgentDir, eventBus)
     for error in result.errors {
         writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
     }
 
     return result.tools.map { CustomToolDefinition(path: $0.path, tool: $0.tool) }
+}
+
+public func discoverCustomTools(cwd: String? = nil, agentDir: String? = nil) async -> [CustomToolDefinition] {
+    await discoverCustomTools(createEventBus(), cwd: cwd, agentDir: agentDir)
 }
 
 public func discoverSkills(cwd: String? = nil, agentDir: String? = nil, settings: SkillsSettings? = nil) -> [Skill] {
@@ -272,9 +295,9 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
     )
 }
 
-private func createLoadedHooksFromDefinitions(_ definitions: [HookDefinition]) -> [LoadedHook] {
+private func createLoadedHooksFromDefinitions(_ definitions: [HookDefinition], eventBus: EventBus) -> [LoadedHook] {
     definitions.map { definition in
-        let api = HookAPI()
+        let api = HookAPI(events: eventBus)
         api.setExecCwd(FileManager.default.currentDirectoryPath)
         definition.factory(api)
         let path = definition.path ?? "<inline>"
@@ -309,6 +332,7 @@ private func createFactoryFromLoadedHook(_ loaded: LoadedHook) -> HookFactory {
 public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgentSessionOptions()) async -> CreateAgentSessionResult {
     let cwd = options.cwd ?? FileManager.default.currentDirectoryPath
     let agentDir = options.agentDir ?? getAgentDir()
+    let eventBus = options.eventBus ?? createEventBus()
 
     let authStorage = options.authStorage ?? discoverAuthStorage(agentDir: agentDir)
     let modelRegistry = options.modelRegistry ?? discoverModels(authStorage: authStorage, agentDir: agentDir)
@@ -397,7 +421,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     } else {
         let configuredPaths = settingsManager.getCustomTools() + (options.additionalCustomToolPaths ?? [])
         let builtInToolNames = createAllTools(cwd: cwd).keys.map { $0.rawValue }
-        customToolsResult = discoverAndLoadCustomTools(configuredPaths, cwd, builtInToolNames, agentDir)
+        customToolsResult = discoverAndLoadCustomTools(configuredPaths, cwd, builtInToolNames, agentDir, eventBus)
         for error in customToolsResult.errors {
             writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
         }
@@ -406,12 +430,12 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     var hookRunner: HookRunner? = nil
     if let hooks = options.hooks {
         if !hooks.isEmpty {
-            let loadedHooks = createLoadedHooksFromDefinitions(hooks)
+            let loadedHooks = createLoadedHooksFromDefinitions(hooks, eventBus: eventBus)
             hookRunner = HookRunner(loadedHooks, cwd, sessionManager, modelRegistry)
         }
     } else {
         let hookPaths = settingsManager.getHooks() + (options.additionalHookPaths ?? [])
-        let loadResult = discoverAndLoadHooks(hookPaths, cwd, agentDir)
+        let loadResult = discoverAndLoadHooks(hookPaths, cwd, agentDir, eventBus)
         time("discoverAndLoadHooks")
         for error in loadResult.errors {
             writeStderr("Failed to load hook \"\(error.path)\": \(error.error)\n")
@@ -421,7 +445,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     }
 
-    let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry)
+    let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry, eventBus: eventBus)
     let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
         contextProvider.buildContext()
     }
@@ -498,10 +522,19 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         hookRunner: hookRunner,
         customTools: customToolsResult.tools,
         modelRegistry: modelRegistry,
-        skillsSettings: settingsManager.getSkillsSettings()
+        skillsSettings: settingsManager.getSkillsSettings(),
+        eventBus: eventBus
     ))
     time("createAgentSession")
     contextProvider.session = createdSession
+    let sendMessageHandler: HookSendMessageHandler = { [weak createdSession] message, options in
+        guard let session = createdSession else { return }
+        Task {
+            await session.sendHookMessage(message, options: options)
+        }
+    }
+    customToolsResult.setSendMessageHandler(sendMessageHandler)
+    contextProvider.setSendMessageHandler(sendMessageHandler)
 
     return CreateAgentSessionResult(session: createdSession, customToolsResult: customToolsResult, modelFallbackMessage: modelFallbackMessage)
 }

@@ -9,6 +9,13 @@ public enum HookNotificationType: String, Sendable {
     case error
 }
 
+public typealias HookWidgetFactory = @Sendable (_ tui: TUI, _ theme: Theme) -> Component
+
+public enum HookWidgetContent: @unchecked Sendable {
+    case lines([String])
+    case component(HookWidgetFactory)
+}
+
 public struct HookMessageRenderOptions: Sendable {
     public var expanded: Bool
 
@@ -22,6 +29,7 @@ public typealias HookMessageRenderer = @Sendable (HookMessage, HookMessageRender
 public enum HookDeliverAs: String, Sendable {
     case steer
     case followUp
+    case nextTurn
 }
 
 public struct HookSendMessageOptions: Sendable {
@@ -117,11 +125,23 @@ public protocol HookUIContext: Sendable {
     func input(_ title: String, _ placeholder: String?) async -> String?
     func notify(_ message: String, _ type: HookNotificationType?)
     func setStatus(_ key: String, _ text: String?)
+    func setWidget(_ key: String, _ content: HookWidgetContent?)
+    func setTitle(_ title: String)
     func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult?
     func setEditorText(_ text: String)
     func getEditorText() -> String
     func editor(_ title: String, _ prefill: String?) async -> String?
     var theme: Theme { get }
+}
+
+public extension HookUIContext {
+    func setWidget(_ key: String, _ lines: [String]) {
+        setWidget(key, .lines(lines))
+    }
+
+    func setWidget(_ key: String, _ factory: @escaping HookWidgetFactory) {
+        setWidget(key, .component(factory))
+    }
 }
 
 public final class NoOpHookUIContext: HookUIContext {
@@ -132,6 +152,8 @@ public final class NoOpHookUIContext: HookUIContext {
     public func input(_ title: String, _ placeholder: String?) async -> String? { nil }
     public func notify(_ message: String, _ type: HookNotificationType?) {}
     public func setStatus(_ key: String, _ text: String?) {}
+    public func setWidget(_ key: String, _ content: HookWidgetContent?) {}
+    public func setTitle(_ title: String) {}
     public func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? { nil }
     public func setEditorText(_ text: String) {}
     public func getEditorText() -> String { "" }
@@ -476,9 +498,21 @@ public struct SessionBeforeCompactResult: Sendable {
 
 public struct BeforeAgentStartEventResult: Sendable {
     public var message: HookMessageInput?
+    public var systemPromptAppend: String?
 
-    public init(message: HookMessageInput? = nil) {
+    public init(message: HookMessageInput? = nil, systemPromptAppend: String? = nil) {
         self.message = message
+        self.systemPromptAppend = systemPromptAppend
+    }
+}
+
+public struct BeforeAgentStartCombinedResult: Sendable {
+    public var messages: [HookMessageInput]?
+    public var systemPromptAppend: String?
+
+    public init(messages: [HookMessageInput]? = nil, systemPromptAppend: String? = nil) {
+        self.messages = messages
+        self.systemPromptAppend = systemPromptAppend
     }
 }
 
@@ -524,11 +558,13 @@ public struct HookError: Sendable {
     public var hookPath: String
     public var event: String
     public var error: String
+    public var stack: String?
 
-    public init(hookPath: String, event: String, error: String) {
+    public init(hookPath: String, event: String, error: String, stack: String? = nil) {
         self.hookPath = hookPath
         self.event = event
         self.error = error
+        self.stack = stack
     }
 }
 
@@ -577,6 +613,7 @@ public struct TreePreparation: Sendable {
 }
 
 public final class HookAPI: @unchecked Sendable {
+    public let events: EventBus
     public private(set) var handlers: [String: [HookHandler]] = [:]
     public private(set) var messageRenderers: [String: HookMessageRenderer] = [:]
     public private(set) var commands: [String: RegisteredCommand] = [:]
@@ -584,7 +621,9 @@ public final class HookAPI: @unchecked Sendable {
     private var appendEntryHandler: HookAppendEntryHandler = { _, _ in }
     private var execCwd: String?
 
-    public init() {}
+    public init(events: EventBus = createEventBus()) {
+        self.events = events
+    }
 
     public func setExecCwd(_ cwd: String) {
         execCwd = cwd

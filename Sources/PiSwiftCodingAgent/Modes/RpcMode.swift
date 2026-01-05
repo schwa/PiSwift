@@ -132,6 +132,38 @@ private final class RpcHookUIContext: HookUIContext {
         ])
     }
 
+    func setWidget(_ key: String, _ content: HookWidgetContent?) {
+        switch content {
+        case .lines(let lines):
+            output.send([
+                "type": "hook_ui_request",
+                "id": UUID().uuidString,
+                "method": "setWidget",
+                "widgetKey": key,
+                "widgetLines": lines,
+            ])
+        case .none:
+            output.send([
+                "type": "hook_ui_request",
+                "id": UUID().uuidString,
+                "method": "setWidget",
+                "widgetKey": key,
+                "widgetLines": NSNull(),
+            ])
+        case .component:
+            break
+        }
+    }
+
+    func setTitle(_ title: String) {
+        output.send([
+            "type": "hook_ui_request",
+            "id": UUID().uuidString,
+            "method": "setTitle",
+            "title": title,
+        ])
+    }
+
     func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
         _ = factory
         return nil
@@ -228,6 +260,7 @@ public func runRpcMode(_ session: AgentSession) async {
                 "hookPath": error.hookPath,
                 "event": error.event,
                 "error": error.error,
+                "stack": error.stack as Any,
             ])
         }
 
