@@ -392,7 +392,7 @@ public func migrateSessionEntries(_ entries: inout [FileEntry]) {
 }
 
 public func buildSessionContext(_ entries: [SessionEntry], _ leafId: String? = nil, _ byId: [String: SessionEntry]? = nil) -> SessionContext {
-    var idMap = byId ?? Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+    let idMap = byId ?? Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
 
     if leafId == nil && entries.isEmpty {
         return SessionContext(messages: [], thinkingLevel: "off", model: nil)

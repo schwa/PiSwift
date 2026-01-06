@@ -13,13 +13,15 @@ public enum KnownProvider: String, Sendable {
 
 public typealias Provider = String
 
-public enum ReasoningEffort: String, Sendable {
+public enum ThinkingLevel: String, Sendable {
     case minimal
     case low
     case medium
     case high
     case xhigh
 }
+
+public typealias ReasoningEffort = ThinkingLevel
 
 public struct StreamOptions: Sendable {
     public var temperature: Double?
@@ -40,14 +42,14 @@ public struct SimpleStreamOptions: Sendable {
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
-    public var reasoning: ReasoningEffort?
+    public var reasoning: ThinkingLevel?
 
     public init(
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
-        reasoning: ReasoningEffort? = nil
+        reasoning: ThinkingLevel? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -402,7 +404,7 @@ public struct OpenAICompletionsOptions: Sendable {
     public var signal: CancellationToken?
     public var apiKey: String?
     public var toolChoice: OpenAIToolChoice?
-    public var reasoningEffort: ReasoningEffort?
+    public var reasoningEffort: ThinkingLevel?
 
     public init(
         temperature: Double? = nil,
@@ -410,7 +412,7 @@ public struct OpenAICompletionsOptions: Sendable {
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
         toolChoice: OpenAIToolChoice? = nil,
-        reasoningEffort: ReasoningEffort? = nil
+        reasoningEffort: ThinkingLevel? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -432,7 +434,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
-    public var reasoningEffort: ReasoningEffort?
+    public var reasoningEffort: ThinkingLevel?
     public var reasoningSummary: OpenAIReasoningSummary?
 
     public init(
@@ -440,7 +442,7 @@ public struct OpenAIResponsesOptions: Sendable {
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
-        reasoningEffort: ReasoningEffort? = nil,
+        reasoningEffort: ThinkingLevel? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil
     ) {
         self.temperature = temperature

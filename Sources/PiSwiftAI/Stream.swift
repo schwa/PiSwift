@@ -133,7 +133,7 @@ private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, ap
         )
     }
 
-    let budgets: [ReasoningEffort: Int] = [
+    let budgets: [ThinkingLevel: Int] = [
         .minimal: 1024,
         .low: 2048,
         .medium: 8192,
@@ -152,7 +152,7 @@ private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, ap
     )
 }
 
-private func clampReasoningEffort(_ effort: ReasoningEffort?) -> ReasoningEffort? {
+private func clampThinkingLevel(_ effort: ThinkingLevel?) -> ThinkingLevel? {
     guard let effort else { return nil }
     if effort == .xhigh {
         return .high
@@ -162,7 +162,7 @@ private func clampReasoningEffort(_ effort: ReasoningEffort?) -> ReasoningEffort
 
 private func mapOpenAICompletionsOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAICompletionsOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
-    let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampReasoningEffort(options?.reasoning)
+    let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
     return OpenAICompletionsOptions(
         temperature: options?.temperature,
         maxTokens: maxTokens,
@@ -174,7 +174,7 @@ private func mapOpenAICompletionsOptions(model: Model, options: SimpleStreamOpti
 
 private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAIResponsesOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
-    let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampReasoningEffort(options?.reasoning)
+    let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
     return OpenAIResponsesOptions(
         temperature: options?.temperature,
         maxTokens: maxTokens,

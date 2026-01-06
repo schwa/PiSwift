@@ -2,20 +2,26 @@ import Foundation
 import PiSwiftAI
 
 public final class ModelRegistry: @unchecked Sendable {
-    private let authStorage: AuthStorage
+    public let authStorage: AuthStorage
     private var models: [Model] = []
     private var errorMessage: String?
+    private let modelsDir: String?
 
     public init(_ authStorage: AuthStorage, _ modelsDir: String? = nil) {
         self.authStorage = authStorage
+        self.modelsDir = modelsDir
         loadDefaultModels()
-        if let modelsDir {
-            loadCustomModels(from: modelsDir)
-        }
+        loadCustomModelsIfNeeded()
     }
 
     public func getError() -> String? {
         errorMessage
+    }
+
+    public func refresh() {
+        errorMessage = nil
+        loadDefaultModels()
+        loadCustomModelsIfNeeded()
     }
 
     public func find(_ provider: String, _ modelId: String) -> Model? {
@@ -36,6 +42,11 @@ public final class ModelRegistry: @unchecked Sendable {
             loaded.append(contentsOf: getModels(provider: provider))
         }
         models = loaded
+    }
+
+    private func loadCustomModelsIfNeeded() {
+        guard let modelsDir else { return }
+        loadCustomModels(from: modelsDir)
     }
 
     private func loadCustomModels(from dir: String) {

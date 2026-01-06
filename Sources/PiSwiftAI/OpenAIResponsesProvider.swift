@@ -267,7 +267,7 @@ private func buildResponsesQuery(
     return query
 }
 
-private func mapResponsesReasoningEffort(_ effort: ReasoningEffort?) -> Components.Schemas.ReasoningEffort? {
+private func mapResponsesReasoningEffort(_ effort: ThinkingLevel?) -> Components.Schemas.ReasoningEffort? {
     guard let effort else { return nil }
     switch effort {
     case .minimal:

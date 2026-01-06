@@ -150,6 +150,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
 }
 
 @Test func promptAfterCompletion() async throws {
+    guard let apiKey = API_KEY else { return }
     let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
     let agent = Agent(AgentOptions(
         initialState: AgentState(systemPrompt: "Test", model: model, tools: []),
@@ -168,7 +169,11 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         agent: agent,
         sessionManager: SessionManager.inMemory(),
         settingsManager: SettingsManager.inMemory(),
-        modelRegistry: ModelRegistry(AuthStorage(":memory:"))
+        modelRegistry: {
+            let authStorage = AuthStorage(":memory:")
+            authStorage.setRuntimeApiKey("anthropic", apiKey)
+            return ModelRegistry(authStorage)
+        }()
     ))
     defer { session.dispose() }
 

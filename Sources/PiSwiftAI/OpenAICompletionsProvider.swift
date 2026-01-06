@@ -292,9 +292,9 @@ private func buildCompletionsQuery(
         ? mapChatReasoningEffort(options.reasoningEffort!)
         : nil
 
-    let maxCompletionTokens = compat.maxTokensField == .maxCompletionTokens ? options.maxTokens : nil
+    let maxCompletionTokens = options.maxTokens
 
-    var query = ChatQuery(
+    let query = ChatQuery(
         messages: messages,
         model: model.id,
         reasoningEffort: reasoningEffort,
@@ -307,14 +307,10 @@ private func buildCompletionsQuery(
         streamOptions: .init(includeUsage: true)
     )
 
-    if compat.maxTokensField == .maxTokens, let maxTokens = options.maxTokens {
-        query.maxTokens = maxTokens
-    }
-
     return query
 }
 
-private func mapChatReasoningEffort(_ effort: ReasoningEffort) -> ChatQuery.ReasoningEffort {
+private func mapChatReasoningEffort(_ effort: ThinkingLevel) -> ChatQuery.ReasoningEffort {
     switch effort {
     case .minimal:
         return .minimal

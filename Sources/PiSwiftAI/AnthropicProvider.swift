@@ -211,7 +211,7 @@ public func streamAnthropic(
             stream.push(.done(reason: output.stopReason, message: output))
             stream.end()
         } catch {
-            logAnthropicDebug("anthropic error model=\(model.id) baseUrl=\(model.baseUrl ?? "default") type=\(String(describing: type(of: error)))")
+            logAnthropicDebug("anthropic error model=\(model.id) baseUrl=\(model.baseUrl) type=\(String(describing: type(of: error)))")
             if let apiError = error as? APIError {
                 logAnthropicDebug("anthropic apiError=\(apiError.displayDescription)")
                 if let debugService, let debugParameters {

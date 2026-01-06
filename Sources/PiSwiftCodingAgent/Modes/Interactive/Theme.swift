@@ -411,7 +411,9 @@ private func getBuiltinThemeData() -> [String: ThemeJson] {
     let names = ["dark", "light"]
 
     for name in names {
-        if let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "theme"),
+        let bundledUrl = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "theme")
+            ?? Bundle.module.url(forResource: name, withExtension: "json")
+        if let url = bundledUrl,
            let data = try? Data(contentsOf: url),
            let json = try? decoder.decode(ThemeJson.self, from: data) {
             builtins[name] = json
@@ -704,6 +706,58 @@ private func resolveExportColor(_ value: ThemeColorValue?, vars: [String: ThemeC
     }
 }
 
+private func escapeAnsiForDebug(_ text: String) -> String {
+    var result = ""
+    for scalar in text.unicodeScalars {
+        if scalar.value == 0x1B {
+            result += "\\u{001B}"
+        } else if scalar.value < 0x20 {
+            result += String(format: "\\u{%02X}", scalar.value)
+        } else {
+            result.append(Character(scalar))
+        }
+    }
+    return result
+}
+
+public func getThemeDiagnostics() -> String {
+    let env = ProcessInfo.processInfo.environment
+    let term = env["TERM"] ?? ""
+    let colorterm = env["COLORTERM"] ?? ""
+    let colorfgbg = env["COLORFGBG"] ?? ""
+    let cwd = FileManager.default.currentDirectoryPath
+
+    let accentAnsi = theme.getFgAnsi(.accent)
+    let selectedBgAnsi = theme.getBgAnsi(.selectedBg)
+    let accentDefault = accentAnsi == "\u{001B}[39m"
+    let selectedBgDefault = selectedBgAnsi == "\u{001B}[49m"
+
+    let bundlePath = Bundle.module.bundleURL.path
+    let bundleDark = Bundle.module.url(forResource: "dark", withExtension: "json", subdirectory: "theme") != nil
+        || Bundle.module.url(forResource: "dark", withExtension: "json") != nil
+    let bundleLight = Bundle.module.url(forResource: "light", withExtension: "json", subdirectory: "theme") != nil
+        || Bundle.module.url(forResource: "light", withExtension: "json") != nil
+    let themesDir = getThemesDir()
+    let themesDirDark = FileManager.default.fileExists(atPath: (themesDir as NSString).appendingPathComponent("dark.json"))
+    let themesDirLight = FileManager.default.fileExists(atPath: (themesDir as NSString).appendingPathComponent("light.json"))
+    let customThemesDir = getCustomThemesDir()
+
+    let lines = [
+        "Theme diagnostics:",
+        "currentTheme=\(themeState.currentThemeName ?? "nil")",
+        "colorMode=\(theme.getColorMode())",
+        "fg.accent=\(escapeAnsiForDebug(accentAnsi)) default=\(accentDefault)",
+        "bg.selectedBg=\(escapeAnsiForDebug(selectedBgAnsi)) default=\(selectedBgDefault)",
+        "bundlePath=\(bundlePath)",
+        "bundleHasDark=\(bundleDark) bundleHasLight=\(bundleLight)",
+        "cwd=\(cwd)",
+        "themesDir=\(themesDir) dark=\(themesDirDark) light=\(themesDirLight)",
+        "customThemesDir=\(customThemesDir)",
+        "env TERM=\(term) COLORTERM=\(colorterm) COLORFGBG=\(colorfgbg)",
+    ]
+    return lines.joined(separator: "\n")
+}
+
 public func highlightCode(_ code: String, lang: String? = nil) -> [String] {
     let adapter = ThemeSyntaxAdapter(theme: theme)
     return SyntaxHighlighter.highlight(code: code, lang: lang, theme: adapter)
@@ -822,7 +876,8 @@ public func getSelectListTheme() -> SelectListTheme {
         selectedText: { theme.fg(.accent, $0) },
         description: { theme.fg(.muted, $0) },
         scrollInfo: { theme.fg(.muted, $0) },
-        noMatch: { theme.fg(.muted, $0) }
+        noMatch: { theme.fg(.muted, $0) },
+        selectedBackground: { theme.bg(.selectedBg, $0) }
     )
 }
 

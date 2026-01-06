@@ -371,20 +371,8 @@ public final class Agent: @unchecked Sendable {
     }
 
     private func mapThinkingLevel(_ level: ThinkingLevel) -> ReasoningEffort? {
-        switch level {
-        case .off:
-            return nil
-        case .minimal:
-            return .low
-        case .low:
-            return .low
-        case .medium:
-            return .medium
-        case .high:
-            return .high
-        case .xhigh:
-            return .xhigh
-        }
+        guard level != .off else { return nil }
+        return ReasoningEffort(rawValue: level.rawValue)
     }
 
     private func ensureNotStreaming(_ error: AgentError) throws {

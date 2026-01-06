@@ -34,6 +34,13 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - CLI args parsing + wiring: `pi-mono/packages/coding-agent/src/cli/args.ts` -> `Sources/PiSwiftCodingAgent/CLI/Args.swift` + `Sources/PiSwiftCodingAgentCLI/CLIOptions.swift` + `Sources/PiSwiftCodingAgentCLI/PiCodingAgentCLI.swift` (ArgumentParser + help snapshot tests)
 
 ## Partial / stubs (implemented but missing JS behavior)
+- OAuth login + token refresh workflows (JS `packages/ai/src/utils/oauth/*`):
+  - Anthropic OAuth (PKCE auth code with manual code paste) (done).
+  - OpenAI Codex OAuth (PKCE + local callback server + manual paste fallback + accountId extraction) (done).
+  - Shared helpers (`getOAuthApiKey`, token refresh, provider list) and CLI `/login` + OAuth selector (done).
+  - GitHub Copilot device-code flow + model enablement.
+  - Google Gemini CLI OAuth (local callback server + manual redirect paste fallback + project discovery).
+  - Google Antigravity OAuth (local callback server + manual redirect paste fallback + project discovery).
 
 ## Not required
 - Config + package detection/versioning: `pi-mono/packages/coding-agent/src/config.ts` -> `Sources/PiSwiftCodingAgent/Config.swift` (no package.json-driven name/version, bun/tsx detection, theme/export path resolution logic)
@@ -49,3 +56,4 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - [x] Tool registry/tool control parity (full registry even when scoped, wrap all tools).
 - [x] Keybinding & slash command parity (`/quit` + `/exit`, configurable keybindings, robust shortcut matching, `$ARGUMENTS` for slash commands).
 - [x] Image handling parity (auto-resize toggle, read tool resize + dimension note, consistent placeholders, clipboard paste).
+- [ ] OAuth parity for `pi-mono/packages/ai` (see "Partial / stubs"): remaining GitHub Copilot + Google flows.

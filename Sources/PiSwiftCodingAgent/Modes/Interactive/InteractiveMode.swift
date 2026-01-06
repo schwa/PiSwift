@@ -280,11 +280,14 @@ public final class InteractiveMode {
             SlashCommand(name: "settings", description: "Open settings menu"),
             SlashCommand(name: "model", description: "Select model"),
             SlashCommand(name: "theme", description: "Select theme"),
+            SlashCommand(name: "login", description: "Login with OAuth provider"),
+            SlashCommand(name: "logout", description: "Logout from OAuth provider"),
             SlashCommand(name: "export", description: "Export session to HTML"),
             SlashCommand(name: "copy", description: "Copy last assistant message"),
             SlashCommand(name: "session", description: "Show session info"),
             SlashCommand(name: "changelog", description: "Show changelog"),
             SlashCommand(name: "hotkeys", description: "Show shortcuts"),
+            SlashCommand(name: "debug", description: "Show theme diagnostics"),
             SlashCommand(name: "branch", description: "Branch from a user message"),
             SlashCommand(name: "tree", description: "Navigate session tree"),
             SlashCommand(name: "new", description: "Start a new session"),
@@ -1621,6 +1624,16 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
+        if trimmed == "/login" {
+            showOAuthSelector(.login)
+            editor.setText("")
+            return
+        }
+        if trimmed == "/logout" {
+            showOAuthSelector(.logout)
+            editor.setText("")
+            return
+        }
         if trimmed.hasPrefix("/export") {
             handleExportCommand(trimmed)
             editor.setText("")
@@ -1643,6 +1656,11 @@ public final class InteractiveMode {
         }
         if trimmed == "/hotkeys" {
             handleHotkeysCommand()
+            editor.setText("")
+            return
+        }
+        if trimmed == "/debug" {
+            handleDebugCommand()
             editor.setText("")
             return
         }
@@ -2043,6 +2061,152 @@ public final class InteractiveMode {
         showStatus("Session resume is not implemented yet")
     }
 
+    private struct OAuthLoginCancelled: Error, LocalizedError {
+        var errorDescription: String? { "Login cancelled" }
+    }
+
+    @MainActor
+    private func showOAuthSelector(_ mode: OAuthSelectorMode) {
+        guard let session else { return }
+        if mode == .logout {
+            let providers = session.modelRegistry.authStorage.list()
+            let loggedIn = providers.filter { provider in
+                if case .oauth = session.modelRegistry.authStorage.get(provider) {
+                    return true
+                }
+                return false
+            }
+            if loggedIn.isEmpty {
+                showStatus("No OAuth providers logged in. Use /login first.")
+                return
+            }
+        }
+
+        showSelector { done in
+            let selector = OAuthSelectorComponent(
+                mode: mode,
+                authStorage: session.modelRegistry.authStorage,
+                onSelect: { [weak self] providerId in
+                    done()
+                    Task { @MainActor in
+                        await self?.handleOAuthSelection(providerId: providerId, mode: mode)
+                    }
+                },
+                onCancel: { [weak self] in
+                    done()
+                    self?.ui.requestRender()
+                }
+            )
+            return (component: selector, focus: selector)
+        }
+    }
+
+    @MainActor
+    private func handleOAuthSelection(providerId: String, mode: OAuthSelectorMode) async {
+        guard let session else { return }
+        guard let provider = OAuthProvider(rawValue: providerId) else {
+            showError("Unknown OAuth provider: \(providerId)")
+            return
+        }
+
+        switch mode {
+        case .login:
+            await handleOAuthLogin(provider, authStorage: session.modelRegistry.authStorage)
+        case .logout:
+            handleOAuthLogout(provider, authStorage: session.modelRegistry.authStorage)
+        }
+    }
+
+    @MainActor
+    private func handleOAuthLogin(_ provider: OAuthProvider, authStorage: AuthStorage) async {
+        guard let tui, let editorContainer, let editor else { return }
+        let providerName = getOAuthProviders().first { $0.id == provider }?.name ?? provider.rawValue
+
+        let dialog = LoginDialogComponent(tui: tui, providerId: provider.rawValue) { _, _ in }
+        let savedText = editor.getText()
+        final class ManualInputState: @unchecked Sendable {
+            var task: Task<String, Error>?
+        }
+        let manualInputState = ManualInputState()
+
+        let restoreEditor: () -> Void = {
+            editorContainer.clear()
+            editorContainer.addChild(editor)
+            editor.setText(savedText)
+            tui.setFocus(editor)
+            tui.requestRender()
+        }
+
+        editorContainer.clear()
+        editorContainer.addChild(dialog)
+        tui.setFocus(dialog)
+        tui.requestRender()
+
+        let needsManualInput = provider == .openAICodex || provider == .googleGeminiCli || provider == .googleAntigravity
+
+        let manualInputProvider: (@Sendable () async throws -> String?)?
+        if needsManualInput {
+            manualInputProvider = { () async throws -> String? in
+                if let task = manualInputState.task {
+                    return try await task.value
+                }
+                let value = try await dialog.showManualInput("Paste redirect URL below, or complete login in browser:")
+                return value
+            }
+        } else {
+            manualInputProvider = nil
+        }
+
+        let callbacks = OAuthLoginCallbacks(
+            onAuth: { info in
+                if needsManualInput {
+                    manualInputState.task = Task { @MainActor in
+                        dialog.showAuth(info.url, info.instructions)
+                        return try await dialog.showManualInput("Paste redirect URL below, or complete login in browser:")
+                    }
+                } else {
+                    Task { @MainActor in
+                        dialog.showAuth(info.url, info.instructions)
+                        if provider == .githubCopilot {
+                            dialog.showWaiting("Waiting for browser authentication...")
+                        }
+                    }
+                }
+            },
+            onPrompt: { prompt in
+                try await dialog.showPrompt(prompt.message, prompt.placeholder)
+            },
+            onProgress: { message in
+                Task { @MainActor in
+                    dialog.showProgress(message)
+                }
+            },
+            onManualCodeInput: manualInputProvider,
+            signal: dialog.signal
+        )
+
+        do {
+            try await authStorage.login(provider, callbacks: callbacks)
+            session?.modelRegistry.refresh()
+            restoreEditor()
+            showStatus("Logged in to \(providerName). Credentials saved to \(getAuthPath())")
+        } catch {
+            restoreEditor()
+            let message = error.localizedDescription
+            if message != "Login cancelled" {
+                showError("Failed to login to \(providerName): \(message)")
+            }
+        }
+    }
+
+    @MainActor
+    private func handleOAuthLogout(_ provider: OAuthProvider, authStorage: AuthStorage) {
+        let providerName = getOAuthProviders().first { $0.id == provider }?.name ?? provider.rawValue
+        authStorage.logout(provider)
+        session?.modelRegistry.refresh()
+        showStatus("Logged out of \(providerName)")
+    }
+
     @MainActor
     private func handleExportCommand(_ text: String) {
         guard let session else { return }
@@ -2292,7 +2456,16 @@ public final class InteractiveMode {
 
     @MainActor
     private func handleDebugCommand() {
-        showStatus("Debug command not implemented")
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Text(getThemeDiagnostics(), paddingX: 1, paddingY: 0))
+        let sample = [
+            "Color sample:",
+            theme.fg(.accent, "accent"),
+            theme.fg(.muted, "muted"),
+            theme.bg(.selectedBg, " selectedBg "),
+        ].joined(separator: " ")
+        chatContainer.addChild(Text(sample, paddingX: 1, paddingY: 0))
+        scheduleRender()
     }
 
     @MainActor
