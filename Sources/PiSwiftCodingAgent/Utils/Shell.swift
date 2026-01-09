@@ -1,4 +1,5 @@
 import Foundation
+import PiSwiftAI
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -27,20 +28,16 @@ public enum ShellConfigError: Error, CustomStringConvertible {
     }
 }
 
-private final class ShellConfigState: @unchecked Sendable {
-    let lock = NSLock()
+private struct ShellConfigState: Sendable {
     var cached: ShellConfig?
 }
 
-private let shellConfigState = ShellConfigState()
+private let shellConfigState = LockedState(ShellConfigState())
 
 public func getShellConfig(settingsManager: SettingsManager = SettingsManager.create()) throws -> ShellConfig {
-    shellConfigState.lock.lock()
-    if let cached = shellConfigState.cached {
-        shellConfigState.lock.unlock()
+    if let cached = shellConfigState.withLock({ $0.cached }) {
         return cached
     }
-    shellConfigState.lock.unlock()
 
     if let customShellPath = settingsManager.getShellPath(), !customShellPath.isEmpty {
         if FileManager.default.fileExists(atPath: customShellPath) {
@@ -79,9 +76,9 @@ public func getShellConfig(settingsManager: SettingsManager = SettingsManager.cr
 }
 
 private func storeShellConfig(_ config: ShellConfig) {
-    shellConfigState.lock.lock()
-    shellConfigState.cached = config
-    shellConfigState.lock.unlock()
+    shellConfigState.withLock { state in
+        state.cached = config
+    }
 }
 
 #if os(Windows)

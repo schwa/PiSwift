@@ -41,10 +41,14 @@ public enum AuthCredential: Sendable {
     case oauth(OAuthCredential)
 }
 
-public final class AuthStorage: @unchecked Sendable {
-    private var data: [String: AuthCredential] = [:]
-    private var runtimeOverrides: [String: String] = [:]
-    private var fallbackResolver: ((String) -> String?)?
+public final class AuthStorage: Sendable {
+    private struct State: Sendable {
+        var data: [String: AuthCredential] = [:]
+        var runtimeOverrides: [String: String] = [:]
+        var fallbackResolver: (@Sendable (String) -> String?)?
+    }
+
+    private let state = LockedState(State())
     private let authPath: String
 
     public init(_ authPath: String) {
@@ -53,21 +57,21 @@ public final class AuthStorage: @unchecked Sendable {
     }
 
     public func setRuntimeApiKey(_ provider: String, _ apiKey: String) {
-        runtimeOverrides[provider] = apiKey
+        state.withLock { $0.runtimeOverrides[provider] = apiKey }
     }
 
     public func removeRuntimeApiKey(_ provider: String) {
-        runtimeOverrides.removeValue(forKey: provider)
+        state.withLock { $0.runtimeOverrides.removeValue(forKey: provider) }
     }
 
-    public func setFallbackResolver(_ resolver: @escaping (String) -> String?) {
-        fallbackResolver = resolver
+    public func setFallbackResolver(_ resolver: @escaping @Sendable (String) -> String?) {
+        state.withLock { $0.fallbackResolver = resolver }
     }
 
     public func reload() {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: authPath)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            self.data = [:]
+            state.withLock { $0.data = [:] }
             return
         }
 
@@ -97,49 +101,52 @@ public final class AuthStorage: @unchecked Sendable {
                 ))
             }
         }
-        self.data = loaded
+        state.withLock { $0.data = loaded }
     }
 
     public func get(_ provider: String) -> AuthCredential? {
-        data[provider]
+        state.withLock { $0.data[provider] }
     }
 
     public func set(_ provider: String, credential: AuthCredential) {
-        data[provider] = credential
+        state.withLock { $0.data[provider] = credential }
         save()
     }
 
     public func remove(_ provider: String) {
-        data.removeValue(forKey: provider)
+        state.withLock { $0.data.removeValue(forKey: provider) }
         save()
     }
 
     public func list() -> [String] {
-        Array(data.keys)
+        state.withLock { Array($0.data.keys) }
     }
 
     public func has(_ provider: String) -> Bool {
-        data[provider] != nil
+        state.withLock { $0.data[provider] != nil }
     }
 
     public func hasAuth(_ provider: String) -> Bool {
-        if runtimeOverrides[provider] != nil {
+        let snapshot = state.withLock { state in
+            (runtime: state.runtimeOverrides[provider], credential: state.data[provider], fallback: state.fallbackResolver)
+        }
+        if snapshot.runtime != nil {
             return true
         }
-        if data[provider] != nil {
+        if snapshot.credential != nil {
             return true
         }
         if getEnvApiKey(provider: provider) != nil {
             return true
         }
-        if fallbackResolver?(provider) != nil {
+        if snapshot.fallback?(provider) != nil {
             return true
         }
         return false
     }
 
     public func getAll() -> [String: AuthCredential] {
-        data
+        state.withLock { $0.data }
     }
 
     public func login(_ provider: OAuthProvider, callbacks: OAuthLoginCallbacks) async throws {
@@ -160,10 +167,14 @@ public final class AuthStorage: @unchecked Sendable {
     }
 
     public func getApiKey(_ provider: String) async -> String? {
-        if let runtime = runtimeOverrides[provider] {
+        let snapshot = state.withLock { state in
+            (runtime: state.runtimeOverrides[provider], credential: state.data[provider], fallback: state.fallbackResolver)
+        }
+
+        if let runtime = snapshot.runtime {
             return runtime
         }
-        if let credential = data[provider] {
+        if let credential = snapshot.credential {
             switch credential {
             case .apiKey(let apiKey):
                 return apiKey.key
@@ -202,12 +213,13 @@ public final class AuthStorage: @unchecked Sendable {
             return value
         }
 
-        return fallbackResolver?(provider)
+        return snapshot.fallback?(provider)
     }
 
     private func save() {
         var json: [String: Any] = [:]
-        for (provider, credential) in data {
+        let credentials = state.withLock { $0.data }
+        for (provider, credential) in credentials {
             switch credential {
             case .apiKey(let apiKey):
                 json[provider] = ["type": "api_key", "key": apiKey.key]
@@ -239,7 +251,8 @@ public final class AuthStorage: @unchecked Sendable {
         try await withAuthLock {
             self.reload()
 
-            guard case .oauth(let oauth) = self.data[provider.rawValue] else {
+            let credential = self.state.withLock { $0.data[provider.rawValue] }
+            guard case .oauth(let oauth) = credential else {
                 return nil
             }
 
@@ -263,7 +276,9 @@ public final class AuthStorage: @unchecked Sendable {
             let oauthCreds = self.oauthCredentialsMap()
             let result = try await getOAuthApiKey(provider: provider, credentials: oauthCreds)
             if let result {
-                self.data[provider.rawValue] = .oauth(OAuthCredential(result.newCredentials))
+                self.state.withLock { state in
+                    state.data[provider.rawValue] = .oauth(OAuthCredential(result.newCredentials))
+                }
                 self.save()
                 return (apiKey: result.apiKey, newCredentials: result.newCredentials)
             }
@@ -274,7 +289,8 @@ public final class AuthStorage: @unchecked Sendable {
 
     private func oauthCredentialsMap() -> [String: OAuthCredentials] {
         var creds: [String: OAuthCredentials] = [:]
-        for (provider, credential) in data {
+        let credentials = state.withLock { $0.data }
+        for (provider, credential) in credentials {
             guard case .oauth(let oauth) = credential,
                   let refresh = oauth.refresh else { continue }
             let expires = oauth.expires ?? 0

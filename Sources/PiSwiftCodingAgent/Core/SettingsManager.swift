@@ -1,4 +1,5 @@
 import Foundation
+import PiSwiftAI
 
 public struct CompactionSettingsOverrides: Sendable {
     public var enabled: Bool?
@@ -66,19 +67,45 @@ public struct Settings: Sendable {
     public init() {}
 }
 
-public final class SettingsManager: @unchecked Sendable {
-    private var settingsPath: String?
-    private var projectSettingsPath: String?
-    private var globalSettings: Settings
-    private var settings: Settings
+public final class SettingsManager: Sendable {
+    private struct State: Sendable {
+        var settingsPath: String?
+        var projectSettingsPath: String?
+        var globalSettings: Settings
+        var settings: Settings
+    }
+
+    private let state: LockedState<State>
     private let persist: Bool
 
+    private var settingsPath: String? {
+        get { state.withLock { $0.settingsPath } }
+        set { state.withLock { $0.settingsPath = newValue } }
+    }
+
+    private var projectSettingsPath: String? {
+        get { state.withLock { $0.projectSettingsPath } }
+        set { state.withLock { $0.projectSettingsPath = newValue } }
+    }
+
+    private var globalSettings: Settings {
+        get { state.withLock { $0.globalSettings } }
+        set { state.withLock { $0.globalSettings = newValue } }
+    }
+
+    private var settings: Settings {
+        get { state.withLock { $0.settings } }
+        set { state.withLock { $0.settings = newValue } }
+    }
+
     private init(settingsPath: String?, projectSettingsPath: String?, initial: Settings, persist: Bool) {
-        self.settingsPath = settingsPath
-        self.projectSettingsPath = projectSettingsPath
-        self.globalSettings = initial
-        self.settings = initial
         self.persist = persist
+        self.state = LockedState(State(
+            settingsPath: settingsPath,
+            projectSettingsPath: projectSettingsPath,
+            globalSettings: initial,
+            settings: initial
+        ))
         let projectSettings = loadProjectSettings()
         self.settings = mergeSettings(globalSettings, projectSettings)
     }

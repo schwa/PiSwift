@@ -171,13 +171,31 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             fputs("Failed to load custom tool \"\(error.path)\": \(error.error)\n", stderr)
         }
 
-        let contextProvider = CustomToolContextProvider(
-            sessionManager: sessionManager,
-            modelRegistry: modelRegistry,
-            eventBus: eventBus
-        )
+        let agentBox = LockedState<Agent?>(nil)
+        let sessionBox = LockedState<AgentSession?>(nil)
+        let sendMessageHandlerBox = LockedState<HookSendMessageHandler>({ _, _ in })
         let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
-            contextProvider.buildContext()
+            let agent = agentBox.withLock { $0 }
+            let session = sessionBox.withLock { $0 }
+            let handler = sendMessageHandlerBox.withLock { $0 }
+            return CustomToolContext(
+                sessionManager: sessionManager,
+                modelRegistry: modelRegistry,
+                model: agent?.state.model,
+                isIdle: {
+                    !(session?.isStreaming ?? true)
+                },
+                hasPendingMessages: {
+                    (session?.pendingMessageCount ?? 0) > 0
+                },
+                abort: {
+                    Task { await session?.abort() }
+                },
+                events: eventBus,
+                sendMessage: { message, options in
+                    handler(message, options)
+                }
+            )
         }
 
         var toolRegistry: [String: AgentTool] = [:]
@@ -250,7 +268,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 return await authStorage.getApiKey(provider)
             }
         ))
-        contextProvider.agent = createdAgent
+        agentBox.withLock { $0 = createdAgent }
 
         if initialThinking != .off && !createdAgent.state.model.reasoning {
             createdAgent.setThinkingLevel(.off)
@@ -290,7 +308,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             toolRegistry: toolRegistry,
             rebuildSystemPrompt: rebuildSystemPrompt
         ))
-        contextProvider.session = createdSession
+        sessionBox.withLock { $0 = createdSession }
         let sendMessageHandler: HookSendMessageHandler = { [weak createdSession] message, options in
             guard let session = createdSession else { return }
             Task {
@@ -298,7 +316,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             }
         }
         customToolsResult.setSendMessageHandler(sendMessageHandler)
-        contextProvider.setSendMessageHandler(sendMessageHandler)
+        sendMessageHandlerBox.withLock { $0 = sendMessageHandler }
 
         if mode == .rpc {
             await runRpcMode(createdSession)
@@ -583,46 +601,5 @@ private func printAssistantOutput(_ session: AgentSession) {
                 print(text.text)
             }
         }
-    }
-}
-
-private final class CustomToolContextProvider: @unchecked Sendable {
-    weak var agent: Agent?
-    weak var session: AgentSession?
-    private let sessionManager: SessionManager
-    private let modelRegistry: ModelRegistry
-    private let eventBus: EventBus
-    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
-
-    init(sessionManager: SessionManager, modelRegistry: ModelRegistry, eventBus: EventBus) {
-        self.sessionManager = sessionManager
-        self.modelRegistry = modelRegistry
-        self.eventBus = eventBus
-    }
-
-    func buildContext() -> CustomToolContext {
-        CustomToolContext(
-            sessionManager: sessionManager,
-            modelRegistry: modelRegistry,
-            model: agent?.state.model,
-            isIdle: { [weak self] in
-                !(self?.session?.isStreaming ?? true)
-            },
-            hasPendingMessages: { [weak self] in
-                (self?.session?.pendingMessageCount ?? 0) > 0
-            },
-            abort: { [weak self] in
-                Task { await self?.session?.abort() }
-            },
-            events: eventBus,
-            sendMessage: { [weak self] message, options in
-                guard let self else { return }
-                self.sendMessageHandler(message, options)
-            }
-        )
-    }
-
-    func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
-        sendMessageHandler = handler
     }
 }

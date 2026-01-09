@@ -78,7 +78,7 @@ public struct HookFlagOptions: Sendable {
 
 public typealias HookWidgetFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
 
-public enum HookWidgetContent: @unchecked Sendable {
+public enum HookWidgetContent {
     case lines([String])
     case component(HookWidgetFactory)
 }
@@ -125,14 +125,14 @@ public struct HookMessageInput: Sendable {
 
 public typealias HookSendMessageHandler = @Sendable (_ message: HookMessageInput, _ options: HookSendMessageOptions?) -> Void
 public typealias HookAppendEntryHandler = @Sendable (_ customType: String, _ data: [String: Any]) -> Void
-public typealias HookSendMessageSetter = (@escaping HookSendMessageHandler) -> Void
-public typealias HookAppendEntrySetter = (@escaping HookAppendEntryHandler) -> Void
+public typealias HookSendMessageSetter = @Sendable (@escaping HookSendMessageHandler) -> Void
+public typealias HookAppendEntrySetter = @Sendable (@escaping HookAppendEntryHandler) -> Void
 public typealias HookGetActiveToolsHandler = @Sendable () -> [String]
 public typealias HookGetAllToolsHandler = @Sendable () -> [String]
 public typealias HookSetActiveToolsHandler = @Sendable (_ toolNames: [String]) -> Void
-public typealias HookGetActiveToolsSetter = (@escaping HookGetActiveToolsHandler) -> Void
-public typealias HookGetAllToolsSetter = (@escaping HookGetAllToolsHandler) -> Void
-public typealias HookSetActiveToolsSetter = (@escaping HookSetActiveToolsHandler) -> Void
+public typealias HookGetActiveToolsSetter = @Sendable (@escaping HookGetActiveToolsHandler) -> Void
+public typealias HookGetAllToolsSetter = @Sendable (@escaping HookGetAllToolsHandler) -> Void
+public typealias HookSetActiveToolsSetter = @Sendable (@escaping HookSetActiveToolsHandler) -> Void
 public typealias HookSetFlagValue = @Sendable (_ name: String, _ value: HookFlagValue) -> Void
 
 public struct HookCommandResult: Sendable {
@@ -181,15 +181,15 @@ public protocol HookDisposableComponent {
     func dispose()
 }
 
-public struct HookCustomResult: @unchecked Sendable {
-    public var value: Any?
+public struct HookCustomResult: Sendable {
+    public var value: (any Sendable)?
 
-    public init(_ value: Any?) {
+    public init(_ value: (any Sendable)?) {
         self.value = value
     }
 }
 
-public typealias HookCustomClose = @MainActor @Sendable (Any?) -> Void
+public typealias HookCustomClose = @MainActor @Sendable ((any Sendable)?) -> Void
 public typealias HookCustomFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme, _ done: @escaping HookCustomClose) async -> HookComponent
 
 @MainActor
@@ -661,7 +661,7 @@ public struct HookError: Sendable {
     }
 }
 
-public struct LoadedHook: @unchecked Sendable {
+public struct LoadedHook: Sendable {
     public var path: String
     public var resolvedPath: String
     public var handlers: [String: [HookHandler]]
@@ -723,27 +723,109 @@ public struct TreePreparation: Sendable {
     }
 }
 
-public final class HookAPI: @unchecked Sendable {
+public final class HookAPI: Sendable {
     public let events: EventBus
-    public private(set) var handlers: [String: [HookHandler]] = [:]
-    public private(set) var messageRenderers: [String: HookMessageRenderer] = [:]
-    public private(set) var commands: [String: RegisteredCommand] = [:]
-    public private(set) var flags: [String: HookFlag] = [:]
-    public private(set) var shortcuts: [KeyId: HookShortcut] = [:]
-    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
-    private var appendEntryHandler: HookAppendEntryHandler = { _, _ in }
-    private var getActiveToolsHandler: HookGetActiveToolsHandler = { [] }
-    private var getAllToolsHandler: HookGetAllToolsHandler = { [] }
-    private var setActiveToolsHandler: HookSetActiveToolsHandler = { _ in }
-    private var flagValues: [String: HookFlagValue] = [:]
-    private var execCwd: String?
-    private var hookPath: String = "<hook>"
+    private let state: LockedState<State>
+
+    private struct State: Sendable {
+        var handlers: [String: [HookHandler]]
+        var messageRenderers: [String: HookMessageRenderer]
+        var commands: [String: RegisteredCommand]
+        var flags: [String: HookFlag]
+        var shortcuts: [KeyId: HookShortcut]
+        var sendMessageHandler: HookSendMessageHandler
+        var appendEntryHandler: HookAppendEntryHandler
+        var getActiveToolsHandler: HookGetActiveToolsHandler
+        var getAllToolsHandler: HookGetAllToolsHandler
+        var setActiveToolsHandler: HookSetActiveToolsHandler
+        var flagValues: [String: HookFlagValue]
+        var execCwd: String?
+        var hookPath: String
+    }
+
+    public private(set) var handlers: [String: [HookHandler]] {
+        get { state.withLock { $0.handlers } }
+        set { state.withLock { $0.handlers = newValue } }
+    }
+
+    public private(set) var messageRenderers: [String: HookMessageRenderer] {
+        get { state.withLock { $0.messageRenderers } }
+        set { state.withLock { $0.messageRenderers = newValue } }
+    }
+
+    public private(set) var commands: [String: RegisteredCommand] {
+        get { state.withLock { $0.commands } }
+        set { state.withLock { $0.commands = newValue } }
+    }
+
+    public private(set) var flags: [String: HookFlag] {
+        get { state.withLock { $0.flags } }
+        set { state.withLock { $0.flags = newValue } }
+    }
+
+    public private(set) var shortcuts: [KeyId: HookShortcut] {
+        get { state.withLock { $0.shortcuts } }
+        set { state.withLock { $0.shortcuts = newValue } }
+    }
+
+    private var sendMessageHandler: HookSendMessageHandler {
+        get { state.withLock { $0.sendMessageHandler } }
+        set { state.withLock { $0.sendMessageHandler = newValue } }
+    }
+
+    private var appendEntryHandler: HookAppendEntryHandler {
+        get { state.withLock { $0.appendEntryHandler } }
+        set { state.withLock { $0.appendEntryHandler = newValue } }
+    }
+
+    private var getActiveToolsHandler: HookGetActiveToolsHandler {
+        get { state.withLock { $0.getActiveToolsHandler } }
+        set { state.withLock { $0.getActiveToolsHandler = newValue } }
+    }
+
+    private var getAllToolsHandler: HookGetAllToolsHandler {
+        get { state.withLock { $0.getAllToolsHandler } }
+        set { state.withLock { $0.getAllToolsHandler = newValue } }
+    }
+
+    private var setActiveToolsHandler: HookSetActiveToolsHandler {
+        get { state.withLock { $0.setActiveToolsHandler } }
+        set { state.withLock { $0.setActiveToolsHandler = newValue } }
+    }
+
+    private var flagValues: [String: HookFlagValue] {
+        get { state.withLock { $0.flagValues } }
+        set { state.withLock { $0.flagValues = newValue } }
+    }
+
+    private var execCwd: String? {
+        get { state.withLock { $0.execCwd } }
+        set { state.withLock { $0.execCwd = newValue } }
+    }
+
+    private var hookPath: String {
+        get { state.withLock { $0.hookPath } }
+        set { state.withLock { $0.hookPath = newValue } }
+    }
 
     public init(events: EventBus = createEventBus(), hookPath: String? = nil) {
         self.events = events
-        if let hookPath {
-            self.hookPath = hookPath
-        }
+        let resolvedHookPath = hookPath ?? "<hook>"
+        self.state = LockedState(State(
+            handlers: [:],
+            messageRenderers: [:],
+            commands: [:],
+            flags: [:],
+            shortcuts: [:],
+            sendMessageHandler: { _, _ in },
+            appendEntryHandler: { _, _ in },
+            getActiveToolsHandler: { [] },
+            getAllToolsHandler: { [] },
+            setActiveToolsHandler: { _ in },
+            flagValues: [:],
+            execCwd: nil,
+            hookPath: resolvedHookPath
+        ))
     }
 
     public func setExecCwd(_ cwd: String) {

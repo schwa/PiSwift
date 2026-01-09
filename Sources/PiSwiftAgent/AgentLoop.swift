@@ -76,7 +76,7 @@ public func agentLoopContinue(
     return stream
 }
 
-private final class StreamFnBox: @unchecked Sendable {
+private final class StreamFnBox: Sendable {
     let value: StreamFn?
 
     init(_ value: StreamFn?) {

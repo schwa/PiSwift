@@ -27,19 +27,19 @@ import PiSwiftAgent
 
 @Test func subscribe() {
     let agent = Agent()
-    var eventCount = 0
+    let eventCount = LockedState(0)
     let unsubscribe = agent.subscribe { _ in
-        eventCount += 1
+        eventCount.withLock { $0 += 1 }
     }
 
-    #expect(eventCount == 0)
+    #expect(eventCount.withLock { $0 } == 0)
     agent.setSystemPrompt("Test prompt")
-    #expect(eventCount == 0)
+    #expect(eventCount.withLock { $0 } == 0)
     #expect(agent.state.systemPrompt == "Test prompt")
 
     unsubscribe()
     agent.setSystemPrompt("Another prompt")
-    #expect(eventCount == 0)
+    #expect(eventCount.withLock { $0 } == 0)
 }
 
 @Test func stateMutators() {

@@ -78,17 +78,17 @@ public struct OAuthProviderInfo: Sendable {
 }
 
 public struct OAuthLoginCallbacks: Sendable {
-    public var onAuth: @Sendable (OAuthAuthInfo) -> Void
-    public var onPrompt: @Sendable (OAuthPrompt) async throws -> String
-    public var onProgress: (@Sendable (String) -> Void)?
-    public var onManualCodeInput: (@Sendable () async throws -> String?)?
+    public var onAuth: @MainActor @Sendable (OAuthAuthInfo) -> Void
+    public var onPrompt: @MainActor @Sendable (OAuthPrompt) async throws -> String
+    public var onProgress: (@MainActor @Sendable (String) -> Void)?
+    public var onManualCodeInput: (@MainActor @Sendable () async throws -> String?)?
     public var signal: CancellationToken?
 
     public init(
-        onAuth: @escaping @Sendable (OAuthAuthInfo) -> Void,
-        onPrompt: @escaping @Sendable (OAuthPrompt) async throws -> String,
-        onProgress: (@Sendable (String) -> Void)? = nil,
-        onManualCodeInput: (@Sendable () async throws -> String?)? = nil,
+        onAuth: @escaping @MainActor @Sendable (OAuthAuthInfo) -> Void,
+        onPrompt: @escaping @MainActor @Sendable (OAuthPrompt) async throws -> String,
+        onProgress: (@MainActor @Sendable (String) -> Void)? = nil,
+        onManualCodeInput: (@MainActor @Sendable () async throws -> String?)? = nil,
         signal: CancellationToken? = nil
     ) {
         self.onAuth = onAuth
@@ -197,7 +197,7 @@ public func oauthApiKey(provider: OAuthProvider, credentials: OAuthCredentials) 
 public func loginAnthropic(_ callbacks: OAuthLoginCallbacks) async throws -> OAuthCredentials {
     let pkce = try generatePKCE()
     let authUrl = anthropicAuthorizeUrl(verifier: pkce.verifier, challenge: pkce.challenge)
-    callbacks.onAuth(OAuthAuthInfo(url: authUrl))
+    await callbacks.onAuth(OAuthAuthInfo(url: authUrl))
 
     if callbacks.signal?.isCancelled == true {
         throw OAuthError.cancelled
@@ -235,12 +235,16 @@ public func loginOpenAICodex(_ callbacks: OAuthLoginCallbacks) async throws -> O
     let flow = try createOpenAICodexAuthorizationFlow()
     let server = await OpenAICodexCallbackServer.start(state: flow.state)
 
-    callbacks.onAuth(OAuthAuthInfo(
+    await callbacks.onAuth(OAuthAuthInfo(
         url: flow.url,
         instructions: "A browser window should open. Complete login to finish."
     ))
 
-    defer { server?.close() }
+    defer {
+        if let server {
+            Task { await server.close() }
+        }
+    }
 
     if callbacks.signal?.isCancelled == true {
         throw OAuthError.cancelled
@@ -598,7 +602,7 @@ private func decodeJwt(_ token: String) -> [String: Any]? {
 }
 
 #if canImport(Network)
-private final class OpenAICodexCallbackServer: @unchecked Sendable {
+private actor OpenAICodexCallbackServer {
     private let listener: NWListener
     private let state: String
     private let queue = DispatchQueue(label: "pi.oauth.openai-codex")
@@ -659,14 +663,14 @@ private final class OpenAICodexCallbackServer: @unchecked Sendable {
                 }
             }
             listener.newConnectionHandler = { [weak self] connection in
-                self?.handle(connection)
+                Task { await self?.handle(connection) }
             }
             listener.start(queue: queue)
         }
     }
 
-    private final class ConnectionState: @unchecked Sendable {
-        var buffer = Data()
+    private final class ConnectionState: Sendable {
+        let buffer = LockedState(Data())
     }
 
     private func handle(_ connection: NWConnection) {
@@ -677,19 +681,24 @@ private final class OpenAICodexCallbackServer: @unchecked Sendable {
 
     private func scheduleReceive(_ connection: NWConnection, state: ConnectionState) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, _ in
-            if let data {
-                state.buffer.append(data)
+            var requestLine: String?
+            state.buffer.withLock { buffer in
+                if let data {
+                    buffer.append(data)
+                }
+                if let range = buffer.range(of: Data("\r\n".utf8)) {
+                    requestLine = String(data: buffer[..<range.lowerBound], encoding: .utf8) ?? ""
+                }
             }
-            if let range = state.buffer.range(of: Data("\r\n".utf8)) {
-                let line = String(data: state.buffer[..<range.lowerBound], encoding: .utf8) ?? ""
-                self?.handleRequestLine(line, connection: connection)
+            if let requestLine {
+                Task { await self?.handleRequestLine(requestLine, connection: connection) }
                 return
             }
             if isComplete {
                 connection.cancel()
                 return
             }
-            self?.scheduleReceive(connection, state: state)
+            Task { await self?.scheduleReceive(connection, state: state) }
         }
     }
 

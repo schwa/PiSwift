@@ -1,17 +1,21 @@
 import Foundation
 
-public final class EventStream<Element: Sendable, Result: Sendable>: AsyncSequence, @unchecked Sendable {
+public final class EventStream<Element: Sendable, Result: Sendable>: AsyncSequence, Sendable {
     public typealias AsyncIterator = AsyncStream<Element>.Iterator
 
     private let stream: AsyncStream<Element>
-    private var continuation: AsyncStream<Element>.Continuation
-    private var done = false
-    private let isComplete: (Element) -> Bool
-    private let extractResult: (Element) -> Result
-    private var resultValue: Result?
-    private var resultContinuation: CheckedContinuation<Result, Never>?
+    private let continuation: AsyncStream<Element>.Continuation
+    private let isComplete: @Sendable (Element) -> Bool
+    private let extractResult: @Sendable (Element) -> Result
+    private let state = LockedState(State())
 
-    public init(isComplete: @escaping (Element) -> Bool, extractResult: @escaping (Element) -> Result) {
+    private struct State: Sendable {
+        var done = false
+        var resultValue: Result?
+        var resultContinuation: CheckedContinuation<Result, Never>?
+    }
+
+    public init(isComplete: @escaping @Sendable (Element) -> Bool, extractResult: @escaping @Sendable (Element) -> Result) {
         self.isComplete = isComplete
         self.extractResult = extractResult
         var capturedContinuation: AsyncStream<Element>.Continuation!
@@ -22,42 +26,68 @@ public final class EventStream<Element: Sendable, Result: Sendable>: AsyncSequen
     }
 
     public func push(_ event: Element) {
-        guard !done else { return }
-
-        if isComplete(event) {
-            let result = extractResult(event)
-            resultValue = result
-            if let continuation = resultContinuation {
-                resultContinuation = nil
-                continuation.resume(returning: result)
+        var resumeContinuation: CheckedContinuation<Result, Never>?
+        var resumeValue: Result?
+        let shouldProcess = state.withLock { state in
+            guard !state.done else { return false }
+            if isComplete(event) {
+                let result = extractResult(event)
+                state.resultValue = result
+                resumeContinuation = state.resultContinuation
+                state.resultContinuation = nil
+                resumeValue = result
             }
+            return true
         }
 
+        if let resumeContinuation, let resumeValue {
+            resumeContinuation.resume(returning: resumeValue)
+        }
+
+        guard shouldProcess else { return }
         _ = continuation.yield(event)
     }
 
     public func end(_ result: Result? = nil) {
-        guard !done else { return }
-        done = true
-
-        if let result = result {
-            resultValue = result
-            if let continuation = resultContinuation {
-                resultContinuation = nil
-                continuation.resume(returning: result)
+        var resumeContinuation: CheckedContinuation<Result, Never>?
+        var resumeValue: Result?
+        let shouldFinish = state.withLock { state in
+            guard !state.done else { return false }
+            state.done = true
+            if let result {
+                state.resultValue = result
+                resumeContinuation = state.resultContinuation
+                state.resultContinuation = nil
+                resumeValue = result
             }
+            return true
         }
 
+        if let resumeContinuation, let resumeValue {
+            resumeContinuation.resume(returning: resumeValue)
+        }
+
+        guard shouldFinish else { return }
         continuation.finish()
     }
 
     public func result() async -> Result {
-        if let existing = resultValue {
+        if let existing = state.withLock({ $0.resultValue }) {
             return existing
         }
 
         return await withCheckedContinuation { continuation in
-            resultContinuation = continuation
+            var immediate: Result?
+            state.withLock { state in
+                if let value = state.resultValue {
+                    immediate = value
+                } else {
+                    state.resultContinuation = continuation
+                }
+            }
+            if let immediate {
+                continuation.resume(returning: immediate)
+            }
         }
     }
 
@@ -66,7 +96,7 @@ public final class EventStream<Element: Sendable, Result: Sendable>: AsyncSequen
     }
 }
 
-public final class AssistantMessageEventStream: AsyncSequence, @unchecked Sendable {
+public final class AssistantMessageEventStream: AsyncSequence, Sendable {
     public typealias Element = AssistantMessageEvent
     public typealias AsyncIterator = AsyncStream<Element>.Iterator
 

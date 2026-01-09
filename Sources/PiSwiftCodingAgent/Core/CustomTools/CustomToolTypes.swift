@@ -77,7 +77,7 @@ public typealias CustomToolSessionHandler = @Sendable (_ event: CustomToolSessio
 public typealias CustomToolRenderCall = @Sendable (_ args: [String: AnyCodable], _ theme: Theme) throws -> HookComponent?
 public typealias CustomToolRenderResult = @Sendable (_ result: CustomToolResult, _ options: RenderResultOptions, _ theme: Theme) throws -> HookComponent?
 
-public struct CustomTool: @unchecked Sendable {
+public struct CustomTool: Sendable {
     public var name: String
     public var label: String
     public var description: String
@@ -140,7 +140,7 @@ public struct CustomToolLoadError: Sendable {
     }
 }
 
-public struct CustomToolsLoadResult: @unchecked Sendable {
+public struct CustomToolsLoadResult: Sendable {
     public var tools: [LoadedCustomTool]
     public var errors: [CustomToolLoadError]
     public var setUIContext: (@Sendable (_ uiContext: CustomToolUIContext, _ hasUI: Bool) -> Void)
@@ -159,20 +159,23 @@ public struct CustomToolsLoadResult: @unchecked Sendable {
     }
 }
 
-public protocol CustomToolPlugin: AnyObject {
+public protocol CustomToolPlugin: AnyObject, Sendable {
     init()
     func register(_ api: CustomToolAPI)
 }
 
-public final class CustomToolAPI: @unchecked Sendable {
+public final class CustomToolAPI: Sendable {
     public let cwd: String
     public let events: EventBus
 
-    private let lock = NSLock()
-    private var uiContext: CustomToolUIContext
-    private var hasUIValue: Bool
-    private var registeredTools: [CustomTool] = []
-    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
+    private struct State: Sendable {
+        var uiContext: CustomToolUIContext
+        var hasUIValue: Bool
+        var registeredTools: [CustomTool]
+        var sendMessageHandler: HookSendMessageHandler
+    }
+
+    private let state: LockedState<State>
 
     public init(
         cwd: String,
@@ -182,65 +185,52 @@ public final class CustomToolAPI: @unchecked Sendable {
     ) {
         self.cwd = cwd
         self.events = events
-        self.uiContext = ui
-        self.hasUIValue = hasUI
+        self.state = LockedState(State(
+            uiContext: ui,
+            hasUIValue: hasUI,
+            registeredTools: [],
+            sendMessageHandler: { _, _ in }
+        ))
     }
 
     public var ui: CustomToolUIContext {
         get {
-            lock.lock()
-            defer { lock.unlock() }
-            return uiContext
+            state.withLock { $0.uiContext }
         }
         set {
-            lock.lock()
-            uiContext = newValue
-            lock.unlock()
+            state.withLock { $0.uiContext = newValue }
         }
     }
 
     public var hasUI: Bool {
         get {
-            lock.lock()
-            defer { lock.unlock() }
-            return hasUIValue
+            state.withLock { $0.hasUIValue }
         }
         set {
-            lock.lock()
-            hasUIValue = newValue
-            lock.unlock()
+            state.withLock { $0.hasUIValue = newValue }
         }
     }
 
     public func register(_ tool: CustomTool) {
-        lock.lock()
-        registeredTools.append(tool)
-        lock.unlock()
+        state.withLock { $0.registeredTools.append(tool) }
     }
 
     public func register(_ tools: [CustomTool]) {
-        lock.lock()
-        registeredTools.append(contentsOf: tools)
-        lock.unlock()
+        state.withLock { state in
+            state.registeredTools.append(contentsOf: tools)
+        }
     }
 
     public func toolsSnapshot() -> [CustomTool] {
-        lock.lock()
-        let snapshot = registeredTools
-        lock.unlock()
-        return snapshot
+        state.withLock { $0.registeredTools }
     }
 
     public func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
-        lock.lock()
-        sendMessageHandler = handler
-        lock.unlock()
+        state.withLock { $0.sendMessageHandler = handler }
     }
 
     public func sendMessage(_ message: HookMessageInput, options: HookSendMessageOptions? = nil) {
-        lock.lock()
-        let handler = sendMessageHandler
-        lock.unlock()
+        let handler = state.withLock { $0.sendMessageHandler }
         handler(message, options)
     }
 

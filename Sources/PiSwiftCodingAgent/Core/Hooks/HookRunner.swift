@@ -3,7 +3,7 @@ import Darwin
 import PiSwiftAI
 import PiSwiftAgent
 
-public final class HookRunner: @unchecked Sendable {
+public final class HookRunner: Sendable {
     private static let reservedShortcuts: Set<String> = [
         "ctrl+c",
         "ctrl+d",
@@ -21,42 +21,108 @@ public final class HookRunner: @unchecked Sendable {
         "enter",
     ]
 
-    private var hooks: [LoadedHook]
     private let cwd: String
     private let sessionManager: SessionManager
     private let modelRegistry: ModelRegistry
-    private var getModel: () -> Model?
-    private var isIdle: () -> Bool
-    private var waitForIdle: () async -> Void
-    private var abort: () -> Void
-    private var hasPendingMessages: () -> Bool
-    private var newSessionHandler: HookNewSessionHandler
-    private var branchHandler: HookBranchHandler
-    private var navigateTreeHandler: HookNavigateTreeHandler
-    private var uiContext: HookUIContext
-    private var hasUI: Bool
-    private var errorListeners: [UUID: (HookError) -> Void]
+    private let state: LockedState<State>
+
+    private struct State: Sendable {
+        var hooks: [LoadedHook]
+        var getModel: @Sendable () -> Model?
+        var isIdle: @Sendable () -> Bool
+        var waitForIdle: @Sendable () async -> Void
+        var abort: @Sendable () -> Void
+        var hasPendingMessages: @Sendable () -> Bool
+        var newSessionHandler: HookNewSessionHandler
+        var branchHandler: HookBranchHandler
+        var navigateTreeHandler: HookNavigateTreeHandler
+        var uiContext: HookUIContext
+        var hasUI: Bool
+        var errorListeners: [UUID: @Sendable (HookError) -> Void]
+    }
+
+    private var hooks: [LoadedHook] {
+        get { state.withLock { $0.hooks } }
+        set { state.withLock { $0.hooks = newValue } }
+    }
+
+    private var getModel: @Sendable () -> Model? {
+        get { state.withLock { $0.getModel } }
+        set { state.withLock { $0.getModel = newValue } }
+    }
+
+    private var isIdle: @Sendable () -> Bool {
+        get { state.withLock { $0.isIdle } }
+        set { state.withLock { $0.isIdle = newValue } }
+    }
+
+    private var waitForIdle: @Sendable () async -> Void {
+        get { state.withLock { $0.waitForIdle } }
+        set { state.withLock { $0.waitForIdle = newValue } }
+    }
+
+    private var abort: @Sendable () -> Void {
+        get { state.withLock { $0.abort } }
+        set { state.withLock { $0.abort = newValue } }
+    }
+
+    private var hasPendingMessages: @Sendable () -> Bool {
+        get { state.withLock { $0.hasPendingMessages } }
+        set { state.withLock { $0.hasPendingMessages = newValue } }
+    }
+
+    private var newSessionHandler: HookNewSessionHandler {
+        get { state.withLock { $0.newSessionHandler } }
+        set { state.withLock { $0.newSessionHandler = newValue } }
+    }
+
+    private var branchHandler: HookBranchHandler {
+        get { state.withLock { $0.branchHandler } }
+        set { state.withLock { $0.branchHandler = newValue } }
+    }
+
+    private var navigateTreeHandler: HookNavigateTreeHandler {
+        get { state.withLock { $0.navigateTreeHandler } }
+        set { state.withLock { $0.navigateTreeHandler = newValue } }
+    }
+
+    private var uiContext: HookUIContext {
+        get { state.withLock { $0.uiContext } }
+        set { state.withLock { $0.uiContext = newValue } }
+    }
+
+    private var hasUI: Bool {
+        get { state.withLock { $0.hasUI } }
+        set { state.withLock { $0.hasUI = newValue } }
+    }
+
+    private var errorListeners: [UUID: @Sendable (HookError) -> Void] {
+        get { state.withLock { $0.errorListeners } }
+        set { state.withLock { $0.errorListeners = newValue } }
+    }
 
     public init(_ hooks: [LoadedHook], _ cwd: String, _ sessionManager: SessionManager, _ modelRegistry: ModelRegistry) {
-        self.hooks = hooks
         self.cwd = cwd
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
-        self.getModel = { nil }
-        self.isIdle = { true }
-        self.waitForIdle = {}
-        self.abort = {}
-        self.hasPendingMessages = { false }
-        self.newSessionHandler = { _ in HookCommandResult(cancelled: false) }
-        self.branchHandler = { _ in HookCommandResult(cancelled: false) }
-        self.navigateTreeHandler = { _, _ in HookCommandResult(cancelled: false) }
-        self.uiContext = NoOpHookUIContext()
-        self.hasUI = false
-        self.errorListeners = [:]
+        self.state = LockedState(State(
+            hooks: hooks,
+            getModel: { nil },
+            isIdle: { true },
+            waitForIdle: {},
+            abort: {},
+            hasPendingMessages: { false },
+            newSessionHandler: { _ in HookCommandResult(cancelled: false) },
+            branchHandler: { _ in HookCommandResult(cancelled: false) },
+            navigateTreeHandler: { _, _ in HookCommandResult(cancelled: false) },
+            uiContext: NoOpHookUIContext(),
+            hasUI: false,
+            errorListeners: [:]
+        ))
     }
 
     public func initialize(
-        getModel: @escaping () -> Model?,
+        getModel: @escaping @Sendable () -> Model?,
         sendMessageHandler: @escaping HookSendMessageHandler = { _, _ in },
         appendEntryHandler: @escaping HookAppendEntryHandler = { _, _ in },
         getActiveToolsHandler: HookGetActiveToolsHandler? = nil,
@@ -65,10 +131,10 @@ public final class HookRunner: @unchecked Sendable {
         newSessionHandler: HookNewSessionHandler? = nil,
         branchHandler: HookBranchHandler? = nil,
         navigateTreeHandler: HookNavigateTreeHandler? = nil,
-        isIdle: (() -> Bool)? = nil,
-        waitForIdle: (() async -> Void)? = nil,
-        abort: (() -> Void)? = nil,
-        hasPendingMessages: (() -> Bool)? = nil,
+        isIdle: (@Sendable () -> Bool)? = nil,
+        waitForIdle: (@Sendable () async -> Void)? = nil,
+        abort: (@Sendable () -> Void)? = nil,
+        hasPendingMessages: (@Sendable () -> Bool)? = nil,
         uiContext: HookUIContext? = nil,
         hasUI: Bool = false
     ) {
@@ -172,7 +238,7 @@ public final class HookRunner: @unchecked Sendable {
         return nil
     }
 
-    public func onError(_ listener: @escaping (HookError) -> Void) -> () -> Void {
+    public func onError(_ listener: @escaping @Sendable (HookError) -> Void) -> @Sendable () -> Void {
         let id = UUID()
         errorListeners[id] = listener
         return { [weak self] in

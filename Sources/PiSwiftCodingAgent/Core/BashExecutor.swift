@@ -133,37 +133,30 @@ public func executeBash(_ command: String, options: BashExecutorOptions? = nil) 
     }
 }
 
-private final class ManagedAtomic: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
+private final class ManagedAtomic: Sendable {
+    private let state: LockedState<Bool>
 
     init(_ initial: Bool) {
-        value = initial
+        state = LockedState(initial)
     }
 
     func store(_ newValue: Bool) {
-        lock.lock()
-        value = newValue
-        lock.unlock()
+        state.withLock { $0 = newValue }
     }
 
     func load() -> Bool {
-        lock.lock()
-        let current = value
-        lock.unlock()
-        return current
+        state.withLock { $0 }
     }
 }
 
-private final class OutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+private final class OutputBuffer: Sendable {
+    private let state = LockedState(Data())
 
     func append(_ chunk: Data, onChunk: (@Sendable (String) -> Void)?) {
         guard !chunk.isEmpty else { return }
-        lock.lock()
-        data.append(chunk)
-        lock.unlock()
+        state.withLock { data in
+            data.append(chunk)
+        }
         if let text = String(data: chunk, encoding: .utf8) {
             let sanitized = sanitizeBinaryOutput(text.replacingOccurrences(of: "\r", with: ""))
             onChunk?(sanitized)
@@ -171,10 +164,7 @@ private final class OutputBuffer: @unchecked Sendable {
     }
 
     func snapshot() -> Data {
-        lock.lock()
-        let copy = data
-        lock.unlock()
-        return copy
+        state.withLock { $0 }
     }
 }
 #endif

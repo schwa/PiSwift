@@ -1,9 +1,10 @@
 import Foundation
+import PiSwiftAI
 
-public typealias EventBusHandler = @Sendable (Any?) async throws -> Void
+public typealias EventBusHandler = @Sendable ((any Sendable)?) async throws -> Void
 
 public protocol EventBus: Sendable {
-    func emit(_ channel: String, _ data: Any?)
+    func emit(_ channel: String, _ data: (any Sendable)?)
     @discardableResult func on(_ channel: String, _ handler: @escaping EventBusHandler) -> () -> Void
 }
 
@@ -11,23 +12,21 @@ public protocol EventBusController: EventBus {
     func clear()
 }
 
-public final class EventBusImpl: @unchecked Sendable, EventBusController {
-    private let lock = NSLock()
-    private var handlers: [String: [(UUID, EventBusHandler)]] = [:]
+public final class EventBusImpl: Sendable, EventBusController {
+    private let state = LockedState([String: [(UUID, EventBusHandler)]]())
 
     public init() {}
 
-    public func emit(_ channel: String, _ data: Any?) {
-        let payload = AnySendable(value: data)
-        let snapshot: [(UUID, EventBusHandler)]
-        lock.lock()
-        snapshot = handlers[channel] ?? []
-        lock.unlock()
+    public func emit(_ channel: String, _ data: (any Sendable)?) {
+        let payload = data
+        let snapshot = state.withLock { handlers in
+            handlers[channel] ?? []
+        }
 
         for (_, handler) in snapshot {
             Task { [payload] in
                 do {
-                    try await handler(payload.value)
+                    try await handler(payload)
                 } catch {
                     logEventBusError(channel, error)
                 }
@@ -37,36 +36,32 @@ public final class EventBusImpl: @unchecked Sendable, EventBusController {
 
     public func on(_ channel: String, _ handler: @escaping EventBusHandler) -> () -> Void {
         let id = UUID()
-        lock.lock()
-        handlers[channel, default: []].append((id, handler))
-        lock.unlock()
+        state.withLock { handlers in
+            handlers[channel, default: []].append((id, handler))
+        }
         return { [weak self] in
             self?.removeHandler(channel, id)
         }
     }
 
     public func clear() {
-        lock.lock()
-        handlers.removeAll()
-        lock.unlock()
+        state.withLock { handlers in
+            handlers.removeAll()
+        }
     }
 
     private func removeHandler(_ channel: String, _ id: UUID) {
-        lock.lock()
-        if var list = handlers[channel] {
-            list.removeAll { $0.0 == id }
-            handlers[channel] = list
+        state.withLock { handlers in
+            if var list = handlers[channel] {
+                list.removeAll { $0.0 == id }
+                handlers[channel] = list
+            }
         }
-        lock.unlock()
     }
 }
 
 public func createEventBus() -> EventBusController {
     EventBusImpl()
-}
-
-private struct AnySendable: @unchecked Sendable {
-    let value: Any?
 }
 
 private func logEventBusError(_ channel: String, _ error: Error) {

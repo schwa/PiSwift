@@ -1,7 +1,7 @@
 import Foundation
 import PiSwiftAI
 
-public typealias StreamFn = (Model, Context, SimpleStreamOptions) async throws -> AssistantMessageEventStream
+public typealias StreamFn = @Sendable (Model, Context, SimpleStreamOptions) async throws -> AssistantMessageEventStream
 
 public enum ThinkingLevel: String, Sendable {
     case off
@@ -91,15 +91,15 @@ public struct AgentToolResult: Sendable {
     }
 }
 
-public typealias AgentToolUpdateCallback = (AgentToolResult) -> Void
-public typealias AgentToolExecute = (
+public typealias AgentToolUpdateCallback = @Sendable (AgentToolResult) -> Void
+public typealias AgentToolExecute = @Sendable (
     _ toolCallId: String,
     _ params: [String: AnyCodable],
     _ signal: CancellationToken?,
     _ onUpdate: AgentToolUpdateCallback?
 ) async throws -> AgentToolResult
 
-public struct AgentTool: @unchecked Sendable {
+public struct AgentTool: Sendable {
     public var label: String
     public var name: String
     public var description: String
@@ -150,17 +150,17 @@ public enum AgentEvent: Sendable {
     case toolExecutionEnd(toolCallId: String, toolName: String, result: AgentToolResult, isError: Bool)
 }
 
-public struct AgentLoopConfig: @unchecked Sendable {
+public struct AgentLoopConfig: Sendable {
     public var model: Model
     public var temperature: Double?
     public var maxTokens: Int?
     public var reasoning: ReasoningEffort?
     public var apiKey: String?
-    public var convertToLlm: ([AgentMessage]) async throws -> [Message]
-    public var transformContext: (([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
-    public var getApiKey: ((String) async -> String?)?
-    public var getSteeringMessages: (() async -> [AgentMessage])?
-    public var getFollowUpMessages: (() async -> [AgentMessage])?
+    public var convertToLlm: @Sendable ([AgentMessage]) async throws -> [Message]
+    public var transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
+    public var getApiKey: (@Sendable (String) async -> String?)?
+    public var getSteeringMessages: (@Sendable () async -> [AgentMessage])?
+    public var getFollowUpMessages: (@Sendable () async -> [AgentMessage])?
 
     public init(
         model: Model,
@@ -168,11 +168,11 @@ public struct AgentLoopConfig: @unchecked Sendable {
         maxTokens: Int? = nil,
         reasoning: ReasoningEffort? = nil,
         apiKey: String? = nil,
-        convertToLlm: @escaping ([AgentMessage]) async throws -> [Message],
-        transformContext: (([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? = nil,
-        getApiKey: ((String) async -> String?)? = nil,
-        getSteeringMessages: (() async -> [AgentMessage])? = nil,
-        getFollowUpMessages: (() async -> [AgentMessage])? = nil
+        convertToLlm: @escaping @Sendable ([AgentMessage]) async throws -> [Message],
+        transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? = nil,
+        getApiKey: (@Sendable (String) async -> String?)? = nil,
+        getSteeringMessages: (@Sendable () async -> [AgentMessage])? = nil,
+        getFollowUpMessages: (@Sendable () async -> [AgentMessage])? = nil
     ) {
         self.model = model
         self.temperature = temperature

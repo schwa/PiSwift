@@ -1,4 +1,5 @@
 import Foundation
+import PiSwiftAI
 import Dispatch
 import Darwin
 
@@ -400,7 +401,7 @@ private func resolveThemeColors(
 }
 
 private func getBuiltinThemeData() -> [String: ThemeJson] {
-    if let cached = themeState.builtinThemes {
+    if let cached = withThemeState({ $0.builtinThemes }) {
         return cached
     }
 
@@ -424,7 +425,7 @@ private func getBuiltinThemeData() -> [String: ThemeJson] {
         }
     }
 
-    themeState.builtinThemes = builtins
+    withThemeState { $0.builtinThemes = builtins }
     return builtins
 }
 
@@ -497,39 +498,43 @@ private func getDefaultTheme() -> String {
     detectTerminalBackground()
 }
 
-private final class ThemeState: @unchecked Sendable {
+private struct ThemeState: Sendable {
     var theme: Theme = Theme.fallback()
     var builtinThemes: [String: ThemeJson]?
     var currentThemeName: String?
     var themeWatcher: DispatchSourceFileSystemObject?
     var themeWatcherFd: Int32 = -1
-    var onThemeChangeCallback: (() -> Void)?
-    var themeReloadWorkItem: DispatchWorkItem?
+    var onThemeChangeCallback: (@Sendable () -> Void)?
+    var themeReloadTask: Task<Void, Never>?
 }
 
-private let themeState = ThemeState()
+private let themeState = LockedState(ThemeState())
+
+private func withThemeState<T>(_ body: (inout sending ThemeState) throws -> sending T) rethrows -> sending T {
+    try themeState.withLock(body)
+}
 
 public var theme: Theme {
-    get { themeState.theme }
-    set { themeState.theme = newValue }
+    get { withThemeState { $0.theme } }
+    set { withThemeState { $0.theme = newValue } }
 }
 
 public func initTheme(_ name: String? = nil, enableWatcher: Bool = false) {
     let themeName = name ?? getDefaultTheme()
-    themeState.currentThemeName = themeName
+    withThemeState { $0.currentThemeName = themeName }
     do {
         theme = try loadTheme(themeName)
         if enableWatcher {
             startThemeWatcher()
         }
     } catch {
-        themeState.currentThemeName = "dark"
+        withThemeState { $0.currentThemeName = "dark" }
         theme = (try? loadTheme("dark")) ?? Theme.fallback()
     }
 }
 
 public func setTheme(_ name: String, enableWatcher: Bool = false) -> (success: Bool, error: String?) {
-    themeState.currentThemeName = name
+    withThemeState { $0.currentThemeName = name }
     do {
         theme = try loadTheme(name)
         if enableWatcher {
@@ -537,20 +542,20 @@ public func setTheme(_ name: String, enableWatcher: Bool = false) -> (success: B
         }
         return (true, nil)
     } catch {
-        themeState.currentThemeName = "dark"
+        withThemeState { $0.currentThemeName = "dark" }
         theme = (try? loadTheme("dark")) ?? Theme.fallback()
         return (false, (error as? ThemeLoadError)?.description ?? error.localizedDescription)
     }
 }
 
-public func onThemeChange(_ callback: @escaping () -> Void) {
-    themeState.onThemeChangeCallback = callback
+public func onThemeChange(_ callback: @escaping @Sendable () -> Void) {
+    withThemeState { $0.onThemeChangeCallback = callback }
 }
 
 private func startThemeWatcher() {
     stopThemeWatcher()
 
-    guard let themeName = themeState.currentThemeName,
+    guard let themeName = withThemeState({ $0.currentThemeName }),
           themeName != "dark",
           themeName != "light" else {
         return
@@ -562,13 +567,14 @@ private func startThemeWatcher() {
         return
     }
 
-    themeState.themeWatcherFd = open(path, O_EVTONLY)
-    guard themeState.themeWatcherFd >= 0 else {
+    let fd = open(path, O_EVTONLY)
+    guard fd >= 0 else {
         return
     }
+    withThemeState { $0.themeWatcherFd = fd }
 
     let source = DispatchSource.makeFileSystemObjectSource(
-        fileDescriptor: themeState.themeWatcherFd,
+        fileDescriptor: fd,
         eventMask: [.write, .delete, .rename],
         queue: DispatchQueue.global()
     )
@@ -576,43 +582,58 @@ private func startThemeWatcher() {
     source.setEventHandler {
         let flags = source.data
         if flags.contains(.delete) || flags.contains(.rename) {
-            themeState.currentThemeName = "dark"
+            withThemeState { $0.currentThemeName = "dark" }
             theme = (try? loadTheme("dark")) ?? Theme.fallback()
             stopThemeWatcher()
-            themeState.onThemeChangeCallback?()
+            withThemeState { $0.onThemeChangeCallback?() }
             return
         }
 
-        themeState.themeReloadWorkItem?.cancel()
-        let workItem = DispatchWorkItem {
-            guard let current = themeState.currentThemeName else { return }
+        let previousTask = withThemeState { state in
+            let task = state.themeReloadTask
+            state.themeReloadTask = nil
+            return task
+        }
+        previousTask?.cancel()
+        let task = Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            guard let current = withThemeState({ $0.currentThemeName }) else { return }
             if let loaded = try? loadTheme(current) {
                 theme = loaded
-                themeState.onThemeChangeCallback?()
+                withThemeState { $0.onThemeChangeCallback?() }
             }
         }
-        themeState.themeReloadWorkItem = workItem
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        withThemeState { $0.themeReloadTask = task }
     }
 
     source.setCancelHandler {
-        if themeState.themeWatcherFd >= 0 {
-            close(themeState.themeWatcherFd)
-            themeState.themeWatcherFd = -1
+        let closeFd = withThemeState { state -> Int32 in
+            let fd = state.themeWatcherFd
+            if fd >= 0 {
+                state.themeWatcherFd = -1
+            }
+            return fd
+        }
+        if closeFd >= 0 {
+            close(closeFd)
         }
     }
 
-    themeState.themeWatcher = source
+    withThemeState { $0.themeWatcher = source }
     source.resume()
 }
 
 public func stopThemeWatcher() {
-    themeState.themeReloadWorkItem?.cancel()
-    themeState.themeReloadWorkItem = nil
-    if let watcher = themeState.themeWatcher {
-        watcher.cancel()
-        themeState.themeWatcher = nil
+    let (task, watcher) = withThemeState { state -> (Task<Void, Never>?, DispatchSourceFileSystemObject?) in
+        let task = state.themeReloadTask
+        let watcher = state.themeWatcher
+        state.themeReloadTask = nil
+        state.themeWatcher = nil
+        return (task, watcher)
     }
+    task?.cancel()
+    watcher?.cancel()
 }
 
 public func getAvailableThemes() -> [String] {
@@ -742,7 +763,7 @@ public func getThemeDiagnostics() -> String {
 
     let lines = [
         "Theme diagnostics:",
-        "currentTheme=\(themeState.currentThemeName ?? "nil")",
+        "currentTheme=\(withThemeState { $0.currentThemeName } ?? "nil")",
         "colorMode=\(theme.getColorMode())",
         "fg.accent=\(escapeAnsiForDebug(accentAnsi)) default=\(accentDefault)",
         "bg.selectedBg=\(escapeAnsiForDebug(selectedBgAnsi)) default=\(selectedBgDefault)",

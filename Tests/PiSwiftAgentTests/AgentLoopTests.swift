@@ -54,17 +54,18 @@ import PiSwiftAgent
     let context = AgentContext(systemPrompt: "You are helpful.", messages: [notification], tools: [])
     let userPrompt = createUserMessage("Hello")
 
-    var converted: [Message] = []
+    let converted = LockedState<[Message]>([])
     let config = AgentLoopConfig(
         model: createModel(),
         convertToLlm: { messages in
-            converted = messages.compactMap { message in
+            let result = messages.compactMap { message -> Message? in
                 if case .custom(let custom) = message, custom.role == "notification" {
                     return nil
                 }
                 return message.asMessage
             }
-            return converted
+            converted.withLock { $0 = result }
+            return result
         }
     )
 
@@ -76,8 +77,8 @@ import PiSwiftAgent
     let stream = agentLoop(prompts: [userPrompt], context: context, config: config, streamFn: streamFn)
     for await _ in stream {}
 
-    #expect(converted.count == 1)
-    #expect(converted.first?.role == "user")
+    #expect(converted.withLock { $0.count } == 1)
+    #expect(converted.withLock { $0.first?.role } == "user")
 }
 
 @Test func transformContextBeforeConvert() async {
@@ -94,18 +95,22 @@ import PiSwiftAgent
 
     let userPrompt = createUserMessage("new message")
 
-    var transformed: [AgentMessage] = []
-    var converted: [Message] = []
+    let transformed = LockedState<[AgentMessage]>([])
+    let converted = LockedState<[Message]>([])
 
     let config = AgentLoopConfig(
         model: createModel(),
         convertToLlm: { messages in
-            converted = messages.compactMap { $0.asMessage }
-            return converted
+            let result = messages.compactMap { message -> Message? in
+                message.asMessage
+            }
+            converted.withLock { $0 = result }
+            return result
         },
         transformContext: { messages, _ in
-            transformed = Array(messages.suffix(2))
-            return transformed
+            let result = Array(messages.suffix(2))
+            transformed.withLock { $0 = result }
+            return result
         }
     )
 
@@ -117,12 +122,12 @@ import PiSwiftAgent
     let stream = agentLoop(prompts: [userPrompt], context: context, config: config, streamFn: streamFn)
     for await _ in stream {}
 
-    #expect(transformed.count == 2)
-    #expect(converted.count == 2)
+    #expect(transformed.withLock { $0.count } == 2)
+    #expect(converted.withLock { $0.count } == 2)
 }
 
 @Test func toolCallsAndResults() async {
-    var executed: [String] = []
+    let executed = LockedState<[String]>([])
     let tool = AgentTool(
         label: "Echo",
         name: "echo",
@@ -130,7 +135,7 @@ import PiSwiftAgent
         parameters: ["type": AnyCodable("object")]
     ) { _, params, _, _ in
         let value = params["value"]?.value as? String ?? ""
-        executed.append(value)
+        executed.withLock { $0.append(value) }
         return AgentToolResult(content: [.text(TextContent(text: "echoed: \(value)"))], details: AnyCodable(["value": value]))
     }
 
@@ -138,10 +143,11 @@ import PiSwiftAgent
     let userPrompt = createUserMessage("echo something")
     let config = AgentLoopConfig(model: createModel(), convertToLlm: identityConverter)
 
-    var callIndex = 0
+    let callIndex = LockedState(0)
     let streamFn: StreamFn = { _, _, _ in
         let stream = AssistantMessageEventStream()
-        if callIndex == 0 {
+        let index = callIndex.withLock { $0 }
+        if index == 0 {
             let toolCall = ToolCall(id: "tool-1", name: "echo", arguments: ["value": AnyCodable("hello")])
             let message = createAssistantMessage(content: [.toolCall(toolCall)], stopReason: .toolUse)
             stream.push(.done(reason: .toolUse, message: message))
@@ -151,7 +157,7 @@ import PiSwiftAgent
             stream.push(.done(reason: .stop, message: message))
             stream.end(message)
         }
-        callIndex += 1
+        callIndex.withLock { $0 += 1 }
         return stream
     }
 
@@ -161,7 +167,7 @@ import PiSwiftAgent
         events.append(event)
     }
 
-    #expect(executed == ["hello"])
+    #expect(executed.withLock { $0 } == ["hello"])
 
     let toolStart = events.first { if case .toolExecutionStart = $0 { return true } else { return false } }
     let toolEnd = events.first { if case .toolExecutionEnd = $0 { return true } else { return false } }
@@ -174,7 +180,7 @@ import PiSwiftAgent
 }
 
 @Test func steeringMessagesSkipRemainingTools() async {
-    var executed: [String] = []
+    let executed = LockedState<[String]>([])
     let tool = AgentTool(
         label: "Echo",
         name: "echo",
@@ -182,7 +188,7 @@ import PiSwiftAgent
         parameters: ["type": AnyCodable("object")]
     ) { _, params, _, _ in
         let value = params["value"]?.value as? String ?? ""
-        executed.append(value)
+        executed.withLock { $0.append(value) }
         return AgentToolResult(content: [.text(TextContent(text: "ok:\(value)"))])
     }
 
@@ -190,16 +196,23 @@ import PiSwiftAgent
     let userPrompt = createUserMessage("start")
     let steeringUserMessage = createUserMessage("interrupt")
 
-    var steeringDelivered = false
-    var callIndex = 0
-    var sawInterruptInContext = false
+    let steeringDelivered = LockedState(false)
+    let callIndex = LockedState(0)
+    let sawInterruptInContext = LockedState(false)
 
     let config = AgentLoopConfig(
         model: createModel(),
         convertToLlm: identityConverter,
         getSteeringMessages: {
-            if executed.count == 1 && !steeringDelivered {
-                steeringDelivered = true
+            let executedCount = executed.withLock { $0.count }
+            let shouldDeliver = steeringDelivered.withLock { delivered in
+                if executedCount == 1 && !delivered {
+                    delivered = true
+                    return true
+                }
+                return false
+            }
+            if shouldDeliver {
                 return [steeringUserMessage]
             }
             return []
@@ -207,17 +220,19 @@ import PiSwiftAgent
     )
 
     let streamFn: StreamFn = { _, ctx, _ in
-        if callIndex == 1 {
-            sawInterruptInContext = ctx.messages.contains { message in
+        let index = callIndex.withLock { $0 }
+        if index == 1 {
+            let sawInterrupt = ctx.messages.contains { message in
                 if case .user(let user) = message, case .text(let text) = user.content {
                     return text == "interrupt"
                 }
                 return false
             }
+            sawInterruptInContext.withLock { $0 = sawInterrupt }
         }
 
         let stream = AssistantMessageEventStream()
-        if callIndex == 0 {
+        if index == 0 {
             let first = ToolCall(id: "tool-1", name: "echo", arguments: ["value": AnyCodable("first")])
             let second = ToolCall(id: "tool-2", name: "echo", arguments: ["value": AnyCodable("second")])
             let message = createAssistantMessage(content: [.toolCall(first), .toolCall(second)], stopReason: .toolUse)
@@ -228,7 +243,7 @@ import PiSwiftAgent
             stream.push(.done(reason: .stop, message: message))
             stream.end(message)
         }
-        callIndex += 1
+        callIndex.withLock { $0 += 1 }
         return stream
     }
 
@@ -238,7 +253,7 @@ import PiSwiftAgent
         events.append(event)
     }
 
-    #expect(executed == ["first"])
+    #expect(executed.withLock { $0 } == ["first"])
 
     let toolEnds = events.compactMap { event -> (AgentToolResult, Bool)? in
         if case .toolExecutionEnd(_, _, let result, let isError) = event {
@@ -263,7 +278,7 @@ import PiSwiftAgent
         return false
     }
     #expect(steeringEvent != nil)
-    #expect(sawInterruptInContext)
+    #expect(sawInterruptInContext.withLock { $0 })
 }
 
 @Test func agentLoopContinueValidations() {

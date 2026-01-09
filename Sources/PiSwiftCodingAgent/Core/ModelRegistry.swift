@@ -1,11 +1,15 @@
 import Foundation
 import PiSwiftAI
 
-public final class ModelRegistry: @unchecked Sendable {
+public final class ModelRegistry: Sendable {
     public let authStorage: AuthStorage
-    private var models: [Model] = []
-    private var errorMessage: String?
     private let modelsDir: String?
+    private let state = LockedState(State())
+
+    private struct State: Sendable {
+        var models: [Model] = []
+        var errorMessage: String?
+    }
 
     public init(_ authStorage: AuthStorage, _ modelsDir: String? = nil) {
         self.authStorage = authStorage
@@ -15,21 +19,23 @@ public final class ModelRegistry: @unchecked Sendable {
     }
 
     public func getError() -> String? {
-        errorMessage
+        state.withLock { $0.errorMessage }
     }
 
     public func refresh() {
-        errorMessage = nil
+        state.withLock { $0.errorMessage = nil }
         loadDefaultModels()
         loadCustomModelsIfNeeded()
     }
 
     public func find(_ provider: String, _ modelId: String) -> Model? {
-        models.first { $0.provider.lowercased() == provider.lowercased() && $0.id.lowercased() == modelId.lowercased() }
+        state.withLock { state in
+            state.models.first { $0.provider.lowercased() == provider.lowercased() && $0.id.lowercased() == modelId.lowercased() }
+        }
     }
 
     public func getAvailable() async -> [Model] {
-        models
+        state.withLock { $0.models }
     }
 
     public func getApiKey(_ provider: String) async -> String? {
@@ -41,7 +47,7 @@ public final class ModelRegistry: @unchecked Sendable {
         for provider in getProviders() {
             loaded.append(contentsOf: getModels(provider: provider))
         }
-        models = loaded
+        state.withLock { $0.models = loaded }
     }
 
     private func loadCustomModelsIfNeeded() {
@@ -55,7 +61,7 @@ public final class ModelRegistry: @unchecked Sendable {
             return
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            errorMessage = "models.json parse error"
+            state.withLock { $0.errorMessage = "models.json parse error" }
             return
         }
         var custom: [Model] = []
@@ -94,6 +100,8 @@ public final class ModelRegistry: @unchecked Sendable {
             )
             custom.append(model)
         }
-        models.append(contentsOf: custom)
+        state.withLock { state in
+            state.models.append(contentsOf: custom)
+        }
     }
 }

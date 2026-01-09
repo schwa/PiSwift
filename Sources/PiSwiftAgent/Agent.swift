@@ -5,23 +5,23 @@ private func defaultConvertToLlm(messages: [AgentMessage]) async -> [Message] {
     messages.compactMap { $0.asMessage }
 }
 
-public struct AgentOptions: @unchecked Sendable {
+public struct AgentOptions: Sendable {
     public var initialState: AgentState?
-    public var convertToLlm: (([AgentMessage]) async throws -> [Message])?
-    public var transformContext: (([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
+    public var convertToLlm: (@Sendable ([AgentMessage]) async throws -> [Message])?
+    public var transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
     public var steeringMode: AgentSteeringMode?
     public var followUpMode: AgentFollowUpMode?
     public var streamFn: StreamFn?
-    public var getApiKey: ((String) async -> String?)?
+    public var getApiKey: (@Sendable (String) async -> String?)?
 
     public init(
         initialState: AgentState? = nil,
-        convertToLlm: (([AgentMessage]) async throws -> [Message])? = nil,
-        transformContext: (([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? = nil,
+        convertToLlm: (@Sendable ([AgentMessage]) async throws -> [Message])? = nil,
+        transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? = nil,
         steeringMode: AgentSteeringMode? = nil,
         followUpMode: AgentFollowUpMode? = nil,
         streamFn: StreamFn? = nil,
-        getApiKey: ((String) async -> String?)? = nil
+        getApiKey: (@Sendable (String) async -> String?)? = nil
     ) {
         self.initialState = initialState
         self.convertToLlm = convertToLlm
@@ -33,39 +33,113 @@ public struct AgentOptions: @unchecked Sendable {
     }
 }
 
-public final class Agent: @unchecked Sendable {
-    private var _state: AgentState
-    private var listeners: [UUID: (AgentEvent) -> Void] = [:]
-    private var abortToken: CancellationToken?
-    private var convertToLlm: ([AgentMessage]) async throws -> [Message]
-    private var transformContext: (([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
-    private var steeringQueue: [AgentMessage] = []
-    private var followUpQueue: [AgentMessage] = []
-    private var steeringMode: AgentSteeringMode
-    private var followUpMode: AgentFollowUpMode
-    public var streamFn: StreamFn
-    public var getApiKey: ((String) async -> String?)?
-    private var runningTask: Task<Void, Never>?
+public final class Agent: Sendable {
+    private struct State: Sendable {
+        var agentState: AgentState
+        var listeners: [UUID: @Sendable (AgentEvent) -> Void]
+        var abortToken: CancellationToken?
+        var convertToLlm: @Sendable ([AgentMessage]) async throws -> [Message]
+        var transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
+        var steeringQueue: [AgentMessage]
+        var followUpQueue: [AgentMessage]
+        var steeringMode: AgentSteeringMode
+        var followUpMode: AgentFollowUpMode
+        var streamFn: StreamFn
+        var getApiKey: (@Sendable (String) async -> String?)?
+        var runningTask: Task<Void, Never>?
+    }
+
+    private let stateBox: LockedState<State>
+
+    private var _state: AgentState {
+        get { stateBox.withLock { $0.agentState } }
+        set { stateBox.withLock { $0.agentState = newValue } }
+    }
+
+    private var listeners: [UUID: @Sendable (AgentEvent) -> Void] {
+        get { stateBox.withLock { $0.listeners } }
+        set { stateBox.withLock { $0.listeners = newValue } }
+    }
+
+    private var abortToken: CancellationToken? {
+        get { stateBox.withLock { $0.abortToken } }
+        set { stateBox.withLock { $0.abortToken = newValue } }
+    }
+
+    private var convertToLlm: @Sendable ([AgentMessage]) async throws -> [Message] {
+        get { stateBox.withLock { $0.convertToLlm } }
+        set { stateBox.withLock { $0.convertToLlm = newValue } }
+    }
+
+    private var transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? {
+        get { stateBox.withLock { $0.transformContext } }
+        set { stateBox.withLock { $0.transformContext = newValue } }
+    }
+
+    private var steeringQueue: [AgentMessage] {
+        get { stateBox.withLock { $0.steeringQueue } }
+        set { stateBox.withLock { $0.steeringQueue = newValue } }
+    }
+
+    private var followUpQueue: [AgentMessage] {
+        get { stateBox.withLock { $0.followUpQueue } }
+        set { stateBox.withLock { $0.followUpQueue = newValue } }
+    }
+
+    private var steeringMode: AgentSteeringMode {
+        get { stateBox.withLock { $0.steeringMode } }
+        set { stateBox.withLock { $0.steeringMode = newValue } }
+    }
+
+    private var followUpMode: AgentFollowUpMode {
+        get { stateBox.withLock { $0.followUpMode } }
+        set { stateBox.withLock { $0.followUpMode = newValue } }
+    }
+
+    public var streamFn: StreamFn {
+        get { stateBox.withLock { $0.streamFn } }
+        set { stateBox.withLock { $0.streamFn = newValue } }
+    }
+
+    public var getApiKey: (@Sendable (String) async -> String?)? {
+        get { stateBox.withLock { $0.getApiKey } }
+        set { stateBox.withLock { $0.getApiKey = newValue } }
+    }
+
+    private var runningTask: Task<Void, Never>? {
+        get { stateBox.withLock { $0.runningTask } }
+        set { stateBox.withLock { $0.runningTask = newValue } }
+    }
 
     public init(_ options: AgentOptions = AgentOptions()) {
-        self._state = options.initialState ?? AgentState()
-        self.convertToLlm = options.convertToLlm ?? { messages in
+        let initialState = options.initialState ?? AgentState()
+        let convert = options.convertToLlm ?? { messages in
             await defaultConvertToLlm(messages: messages)
         }
-        self.transformContext = options.transformContext
-        self.steeringMode = options.steeringMode ?? .oneAtATime
-        self.followUpMode = options.followUpMode ?? .oneAtATime
-        self.streamFn = options.streamFn ?? { model, context, options in
+        let stream = options.streamFn ?? { model, context, options in
             try streamSimple(model: model, context: context, options: options)
         }
-        self.getApiKey = options.getApiKey
+        self.stateBox = LockedState(State(
+            agentState: initialState,
+            listeners: [:],
+            abortToken: nil,
+            convertToLlm: convert,
+            transformContext: options.transformContext,
+            steeringQueue: [],
+            followUpQueue: [],
+            steeringMode: options.steeringMode ?? .oneAtATime,
+            followUpMode: options.followUpMode ?? .oneAtATime,
+            streamFn: stream,
+            getApiKey: options.getApiKey,
+            runningTask: nil
+        ))
     }
 
     public var state: AgentState {
         _state
     }
 
-    public func subscribe(_ fn: @escaping (AgentEvent) -> Void) -> () -> Void {
+    public func subscribe(_ fn: @escaping @Sendable (AgentEvent) -> Void) -> @Sendable () -> Void {
         let id = UUID()
         listeners[id] = fn
         return { [weak self] in

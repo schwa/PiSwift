@@ -1,6 +1,7 @@
 import Foundation
+import PiSwiftAI
 
-public protocol HookPlugin: AnyObject {
+public protocol HookPlugin: AnyObject, Sendable {
     init()
     func register(_ api: HookAPI)
 }
@@ -25,15 +26,14 @@ public struct LoadHooksResult: Sendable {
     }
 }
 
-private final class HookPluginStore: @unchecked Sendable {
+private final class HookPluginStore: Sendable {
     static let shared = HookPluginStore()
-    private let lock = NSLock()
-    private var plugins: [AnyObject] = []
+    private let state = LockedState<[any HookPlugin]>([])
 
-    func add(_ plugin: AnyObject) {
-        lock.lock()
-        plugins.append(plugin)
-        lock.unlock()
+    func add(_ plugin: any HookPlugin) {
+        state.withLock { plugins in
+            plugins.append(plugin)
+        }
     }
 }
 

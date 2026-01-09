@@ -1,4 +1,5 @@
 import Testing
+import PiSwiftAI
 import PiSwiftCodingAgent
 
 @Test func manualCompactionWorks() async throws {
@@ -95,15 +96,17 @@ import PiSwiftCodingAgent
     let ctx = createTestSession()
     defer { ctx.cleanup() }
 
-    var events: [AgentSessionEvent] = []
+    let events = LockedState<[AgentSessionEvent]>([])
     _ = ctx.session.subscribe { event in
-        events.append(event)
+        events.withLock { $0.append(event) }
     }
 
     try await ctx.session.prompt("Say hello")
     await ctx.session.agent.waitForIdle()
     _ = try await ctx.session.compact()
 
-    let autoEvents = events.filter { $0.type == "auto_compaction_start" || $0.type == "auto_compaction_end" }
+    let autoEvents = events.withLock { events in
+        events.filter { $0.type == "auto_compaction_start" || $0.type == "auto_compaction_end" }
+    }
     #expect(autoEvents.isEmpty)
 }

@@ -160,33 +160,124 @@ public struct ModelCycleResult: Sendable {
     }
 }
 
-public final class AgentSession: @unchecked Sendable {
+public final class AgentSession: Sendable {
     public let agent: Agent
     public let sessionManager: SessionManager
     public let settingsManager: SettingsManager
     public let modelRegistry: ModelRegistry
     public let eventBus: EventBus
-    private var _hookRunner: HookRunner?
-    private var customToolsInternal: [LoadedCustomTool]
-    private var scopedModels: [ScopedModel]
-    private var fileCommands: [FileSlashCommand]
+    private let state: LockedState<State>
 
-    private var unsubscribeAgent: (() -> Void)?
-    private var eventListeners: [UUID: (AgentSessionEvent) -> Void] = [:]
+    private struct State: Sendable {
+        var hookRunner: HookRunner?
+        var customToolsInternal: [LoadedCustomTool]
+        var scopedModels: [ScopedModel]
+        var fileCommands: [FileSlashCommand]
+        var unsubscribeAgent: (@Sendable () -> Void)?
+        var eventListeners: [UUID: @Sendable (AgentSessionEvent) -> Void]
+        var steeringMessages: [String]
+        var followUpMessages: [String]
+        var pendingNextTurnMessages: [HookMessage]
+        var compactionAbort: CancellationToken?
+        var branchSummaryAbort: CancellationToken?
+        var bashAbort: CancellationToken?
+        var pendingBashMessages: [BashExecutionMessage]
+        var isCompactingInternal: Bool
+        var turnIndex: Int
+        var baseSystemPrompt: String
+        var toolRegistry: [String: AgentTool]
+        var rebuildSystemPrompt: (@Sendable ([String]) -> String)?
+    }
 
-    private var steeringMessages: [String] = []
-    private var followUpMessages: [String] = []
-    private var pendingNextTurnMessages: [HookMessage] = []
+    private var _hookRunner: HookRunner? {
+        get { state.withLock { $0.hookRunner } }
+        set { state.withLock { $0.hookRunner = newValue } }
+    }
 
-    private var compactionAbort: CancellationToken?
-    private var branchSummaryAbort: CancellationToken?
-    private var bashAbort: CancellationToken?
-    private var pendingBashMessages: [BashExecutionMessage] = []
-    private var isCompactingInternal = false
-    private var turnIndex = 0
-    private var baseSystemPrompt: String
-    private var toolRegistry: [String: AgentTool]
-    private var rebuildSystemPrompt: (@Sendable ([String]) -> String)?
+    private var customToolsInternal: [LoadedCustomTool] {
+        get { state.withLock { $0.customToolsInternal } }
+        set { state.withLock { $0.customToolsInternal = newValue } }
+    }
+
+    private var scopedModels: [ScopedModel] {
+        get { state.withLock { $0.scopedModels } }
+        set { state.withLock { $0.scopedModels = newValue } }
+    }
+
+    private var fileCommands: [FileSlashCommand] {
+        get { state.withLock { $0.fileCommands } }
+        set { state.withLock { $0.fileCommands = newValue } }
+    }
+
+    private var unsubscribeAgent: (@Sendable () -> Void)? {
+        get { state.withLock { $0.unsubscribeAgent } }
+        set { state.withLock { $0.unsubscribeAgent = newValue } }
+    }
+
+    private var eventListeners: [UUID: @Sendable (AgentSessionEvent) -> Void] {
+        get { state.withLock { $0.eventListeners } }
+        set { state.withLock { $0.eventListeners = newValue } }
+    }
+
+    private var steeringMessages: [String] {
+        get { state.withLock { $0.steeringMessages } }
+        set { state.withLock { $0.steeringMessages = newValue } }
+    }
+
+    private var followUpMessages: [String] {
+        get { state.withLock { $0.followUpMessages } }
+        set { state.withLock { $0.followUpMessages = newValue } }
+    }
+
+    private var pendingNextTurnMessages: [HookMessage] {
+        get { state.withLock { $0.pendingNextTurnMessages } }
+        set { state.withLock { $0.pendingNextTurnMessages = newValue } }
+    }
+
+    private var compactionAbort: CancellationToken? {
+        get { state.withLock { $0.compactionAbort } }
+        set { state.withLock { $0.compactionAbort = newValue } }
+    }
+
+    private var branchSummaryAbort: CancellationToken? {
+        get { state.withLock { $0.branchSummaryAbort } }
+        set { state.withLock { $0.branchSummaryAbort = newValue } }
+    }
+
+    private var bashAbort: CancellationToken? {
+        get { state.withLock { $0.bashAbort } }
+        set { state.withLock { $0.bashAbort = newValue } }
+    }
+
+    private var pendingBashMessages: [BashExecutionMessage] {
+        get { state.withLock { $0.pendingBashMessages } }
+        set { state.withLock { $0.pendingBashMessages = newValue } }
+    }
+
+    private var isCompactingInternal: Bool {
+        get { state.withLock { $0.isCompactingInternal } }
+        set { state.withLock { $0.isCompactingInternal = newValue } }
+    }
+
+    private var turnIndex: Int {
+        get { state.withLock { $0.turnIndex } }
+        set { state.withLock { $0.turnIndex = newValue } }
+    }
+
+    private var baseSystemPrompt: String {
+        get { state.withLock { $0.baseSystemPrompt } }
+        set { state.withLock { $0.baseSystemPrompt = newValue } }
+    }
+
+    private var toolRegistry: [String: AgentTool] {
+        get { state.withLock { $0.toolRegistry } }
+        set { state.withLock { $0.toolRegistry = newValue } }
+    }
+
+    private var rebuildSystemPrompt: (@Sendable ([String]) -> String)? {
+        get { state.withLock { $0.rebuildSystemPrompt } }
+        set { state.withLock { $0.rebuildSystemPrompt = newValue } }
+    }
 
     public init(config: AgentSessionConfig) {
         self.agent = config.agent
@@ -194,13 +285,26 @@ public final class AgentSession: @unchecked Sendable {
         self.settingsManager = config.settingsManager
         self.modelRegistry = config.modelRegistry
         self.eventBus = config.eventBus ?? createEventBus()
-        self._hookRunner = config.hookRunner
-        self.customToolsInternal = config.customTools ?? []
-        self.scopedModels = config.scopedModels ?? []
-        self.fileCommands = config.fileCommands ?? []
-        self.baseSystemPrompt = config.agent.state.systemPrompt
-        self.toolRegistry = config.toolRegistry ?? [:]
-        self.rebuildSystemPrompt = config.rebuildSystemPrompt
+        self.state = LockedState(State(
+            hookRunner: config.hookRunner,
+            customToolsInternal: config.customTools ?? [],
+            scopedModels: config.scopedModels ?? [],
+            fileCommands: config.fileCommands ?? [],
+            unsubscribeAgent: nil,
+            eventListeners: [:],
+            steeringMessages: [],
+            followUpMessages: [],
+            pendingNextTurnMessages: [],
+            compactionAbort: nil,
+            branchSummaryAbort: nil,
+            bashAbort: nil,
+            pendingBashMessages: [],
+            isCompactingInternal: false,
+            turnIndex: 0,
+            baseSystemPrompt: config.agent.state.systemPrompt,
+            toolRegistry: config.toolRegistry ?? [:],
+            rebuildSystemPrompt: config.rebuildSystemPrompt
+        ))
 
         self._hookRunner?.initialize(
             getModel: { [weak agent] in agent?.state.model },
@@ -264,7 +368,7 @@ public final class AgentSession: @unchecked Sendable {
         }
     }
 
-    public func subscribe(_ listener: @escaping (AgentSessionEvent) -> Void) -> () -> Void {
+    public func subscribe(_ listener: @escaping @Sendable (AgentSessionEvent) -> Void) -> @Sendable () -> Void {
         let id = UUID()
         eventListeners[id] = listener
         return { [weak self] in

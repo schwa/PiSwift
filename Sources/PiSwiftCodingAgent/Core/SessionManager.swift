@@ -528,24 +528,80 @@ public func findMostRecentSession(_ dir: String) -> String? {
     return newest?.path
 }
 
-public final class SessionManager: @unchecked Sendable {
-    private var cwd: String
-    private var sessionDir: String
-    private var sessionFile: String?
-    private var persist: Bool
-    private var header: SessionHeader?
-    private var entries: [SessionEntry] = []
-    private var byId: [String: SessionEntry] = [:]
-    private var labelsById: [String: String] = [:]
-    private var leafId: String?
-    private var sessionId: String
+public final class SessionManager: Sendable {
+    private struct State: Sendable {
+        var cwd: String
+        var sessionDir: String
+        var sessionFile: String?
+        var header: SessionHeader?
+        var entries: [SessionEntry]
+        var byId: [String: SessionEntry]
+        var labelsById: [String: String]
+        var leafId: String?
+        var sessionId: String
+    }
+
+    private let state: LockedState<State>
+    private let persist: Bool
+
+    private var cwd: String {
+        get { state.withLock { $0.cwd } }
+        set { state.withLock { $0.cwd = newValue } }
+    }
+
+    private var sessionDir: String {
+        get { state.withLock { $0.sessionDir } }
+        set { state.withLock { $0.sessionDir = newValue } }
+    }
+
+    private var sessionFile: String? {
+        get { state.withLock { $0.sessionFile } }
+        set { state.withLock { $0.sessionFile = newValue } }
+    }
+
+    private var header: SessionHeader? {
+        get { state.withLock { $0.header } }
+        set { state.withLock { $0.header = newValue } }
+    }
+
+    private var entries: [SessionEntry] {
+        get { state.withLock { $0.entries } }
+        set { state.withLock { $0.entries = newValue } }
+    }
+
+    private var byId: [String: SessionEntry] {
+        get { state.withLock { $0.byId } }
+        set { state.withLock { $0.byId = newValue } }
+    }
+
+    private var labelsById: [String: String] {
+        get { state.withLock { $0.labelsById } }
+        set { state.withLock { $0.labelsById = newValue } }
+    }
+
+    private var leafId: String? {
+        get { state.withLock { $0.leafId } }
+        set { state.withLock { $0.leafId = newValue } }
+    }
+
+    private var sessionId: String {
+        get { state.withLock { $0.sessionId } }
+        set { state.withLock { $0.sessionId = newValue } }
+    }
 
     private init(_ cwd: String, _ sessionDir: String, _ sessionFile: String?, _ persist: Bool) {
-        self.cwd = cwd
-        self.sessionDir = sessionDir
-        self.sessionFile = sessionFile
         self.persist = persist
-        self.sessionId = UUID().uuidString
+        self.state = LockedState(State(
+            cwd: cwd,
+            sessionDir: sessionDir,
+            sessionFile: sessionFile,
+            header: nil,
+            entries: [],
+            byId: [:],
+            labelsById: [:],
+            leafId: nil,
+            sessionId: UUID().uuidString
+        ))
         if let sessionFile {
             loadFromFile(sessionFile)
         }

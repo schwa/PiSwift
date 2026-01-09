@@ -1,4 +1,5 @@
 import Foundation
+import PiSwiftAI
 import PiSwiftCodingAgent
 
 struct RpcTestError: Error, CustomStringConvertible {
@@ -6,12 +7,12 @@ struct RpcTestError: Error, CustomStringConvertible {
     var description: String { message }
 }
 
-struct SendableJSON: @unchecked Sendable {
-    let value: [String: Any]
+struct SendableJSON: Sendable {
+    let value: [String: AnyCodable]
 }
 
-struct SendableJSONArray: @unchecked Sendable {
-    let value: [[String: Any]]
+struct SendableJSONArray: Sendable {
+    let value: [[String: AnyCodable]]
 }
 
 actor RpcTestClient {
@@ -140,7 +141,7 @@ actor RpcTestClient {
         guard let data = try responseData(response) as? [String: Any] else {
             throw RpcTestError(message: "Invalid get_state response")
         }
-        return SendableJSON(value: data)
+        return SendableJSON(value: data.mapValues { AnyCodable($0) })
     }
 
     func compact() async throws -> SendableJSON {
@@ -148,7 +149,7 @@ actor RpcTestClient {
         guard let data = try responseData(response) as? [String: Any] else {
             throw RpcTestError(message: "Invalid compact response")
         }
-        return SendableJSON(value: data)
+        return SendableJSON(value: data.mapValues { AnyCodable($0) })
     }
 
     func bash(_ command: String) async throws -> SendableJSON {
@@ -156,7 +157,7 @@ actor RpcTestClient {
         guard let data = try responseData(response) as? [String: Any] else {
             throw RpcTestError(message: "Invalid bash response")
         }
-        return SendableJSON(value: data)
+        return SendableJSON(value: data.mapValues { AnyCodable($0) })
     }
 
     func getAvailableModels() async throws -> SendableJSONArray {
@@ -165,7 +166,7 @@ actor RpcTestClient {
               let models = data["models"] as? [[String: Any]] else {
             throw RpcTestError(message: "Invalid get_available_models response")
         }
-        return SendableJSONArray(value: models)
+        return SendableJSONArray(value: models.map { $0.mapValues { AnyCodable($0) } })
     }
 
     func getSessionStats() async throws -> SendableJSON {
@@ -173,7 +174,7 @@ actor RpcTestClient {
         guard let data = try responseData(response) as? [String: Any] else {
             throw RpcTestError(message: "Invalid get_session_stats response")
         }
-        return SendableJSON(value: data)
+        return SendableJSON(value: data.mapValues { AnyCodable($0) })
     }
 
     func newSession() async throws -> Bool {
@@ -223,7 +224,7 @@ actor RpcTestClient {
                 if (event["type"] as? String) == "agent_end" {
                     self.listeners.removeValue(forKey: token)
                     if let waiter = self.eventWaiters.removeValue(forKey: token) {
-                        waiter.resume(returning: SendableJSONArray(value: events))
+                        waiter.resume(returning: SendableJSONArray(value: events.map { $0.mapValues { AnyCodable($0) } }))
                     }
                 }
             }

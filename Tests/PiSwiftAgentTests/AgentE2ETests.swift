@@ -186,17 +186,18 @@ private func stateUpdates(model: Model) async throws {
         tools: []
     )))
 
-    var events: [AgentEvent] = []
+    let events = LockedState<[AgentEvent]>([])
     _ = agent.subscribe { event in
-        events.append(event)
+        events.withLock { $0.append(event) }
     }
 
     try await agent.prompt("Count from 1 to 5.")
 
-    #expect(events.contains { if case .agentStart = $0 { return true } else { return false } })
-    #expect(events.contains { if case .agentEnd = $0 { return true } else { return false } })
-    #expect(events.contains { if case .messageStart = $0 { return true } else { return false } })
-    #expect(events.contains { if case .messageEnd = $0 { return true } else { return false } })
+    let eventsSnapshot = events.withLock { $0 }
+    #expect(eventsSnapshot.contains { if case .agentStart = $0 { return true } else { return false } })
+    #expect(eventsSnapshot.contains { if case .agentEnd = $0 { return true } else { return false } })
+    #expect(eventsSnapshot.contains { if case .messageStart = $0 { return true } else { return false } })
+    #expect(eventsSnapshot.contains { if case .messageEnd = $0 { return true } else { return false } })
 
     #expect(!agent.state.isStreaming)
     #expect(agent.state.messages.count == 2)

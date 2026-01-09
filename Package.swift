@@ -3,9 +3,13 @@
 
 import PackageDescription
 
+let strictConcurrencySettings: [SwiftSetting] = [
+    .unsafeFlags(["-strict-concurrency=complete"]),
+]
+
 let package = Package(
     name: "PiSwift",
-    platforms: [.macOS(.v14), .iOS(.v18)],
+    platforms: [.macOS(.v15), .iOS(.v18)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
@@ -51,18 +55,21 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "PiSwift"
+            name: "PiSwift",
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "PiSwiftAI",
             dependencies: [
                 .product(name: "OpenAI", package: "OpenAI"),
                 .product(name: "SwiftAnthropic", package: "SwiftAnthropic"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "PiSwiftAgent",
-            dependencies: ["PiSwiftAI"]
+            dependencies: ["PiSwiftAI"],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "PiSwiftCodingAgent",
@@ -72,7 +79,8 @@ let package = Package(
             ],
             resources: [
                 .process("Resources")
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
             name: "PiSwiftCodingAgentTui",
@@ -82,17 +90,20 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftSyntaxHighlight",
                 .product(name: "MiniTui", package: "MiniTui"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .target(
-            name: "PiSwiftSyntaxHighlight"
+            name: "PiSwiftSyntaxHighlight",
+            swiftSettings: strictConcurrencySettings
         ),
         .executableTarget(
             name: "PiSwiftAICLI",
             dependencies: [
                 "PiSwiftAI",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .executableTarget(
             name: "PiSwiftCodingAgentCLI",
@@ -100,15 +111,18 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftCodingAgentTui",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftAITests",
-            dependencies: ["PiSwiftAI"]
+            dependencies: ["PiSwiftAI"],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftAgentTests",
-            dependencies: ["PiSwiftAgent"]
+            dependencies: ["PiSwiftAgent"],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftCodingAgentTests",
@@ -119,7 +133,8 @@ let package = Package(
             ],
             resources: [
                 .copy("fixtures")
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftCodingAgentCLITests",
@@ -129,7 +144,8 @@ let package = Package(
             ],
             resources: [
                 .copy("fixtures")
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftCodingAgentTuiTests",
@@ -137,11 +153,14 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftCodingAgentTui",
                 .product(name: "MiniTui", package: "MiniTui"),
-            ]
+            ],
+            swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "PiSwiftTests",
-            dependencies: ["PiSwift"]
+            dependencies: ["PiSwift"],
+            swiftSettings: strictConcurrencySettings
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

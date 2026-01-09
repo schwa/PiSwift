@@ -15,12 +15,12 @@ public struct HookDefinition: Sendable {
 }
 
 
-public enum SystemPromptInput: @unchecked Sendable {
+public enum SystemPromptInput: Sendable {
     case text(String)
     case builder(@Sendable (String) -> String)
 }
 
-public struct CreateAgentSessionOptions: @unchecked Sendable {
+public struct CreateAgentSessionOptions: Sendable {
     public var cwd: String?
     public var agentDir: String?
     public var authStorage: AuthStorage?
@@ -154,47 +154,6 @@ public struct SettingsSnapshot: Sendable {
 private func writeStderr(_ message: String) {
     if let data = message.data(using: .utf8) {
         FileHandle.standardError.write(data)
-    }
-}
-
-private final class CustomToolContextProvider: @unchecked Sendable {
-    weak var agent: Agent?
-    weak var session: AgentSession?
-    private let sessionManager: SessionManager
-    private let modelRegistry: ModelRegistry
-    private let eventBus: EventBus
-    private var sendMessageHandler: HookSendMessageHandler = { _, _ in }
-
-    init(sessionManager: SessionManager, modelRegistry: ModelRegistry, eventBus: EventBus) {
-        self.sessionManager = sessionManager
-        self.modelRegistry = modelRegistry
-        self.eventBus = eventBus
-    }
-
-    func buildContext() -> CustomToolContext {
-        CustomToolContext(
-            sessionManager: sessionManager,
-            modelRegistry: modelRegistry,
-            model: agent?.state.model,
-            isIdle: { [weak self] in
-                !(self?.session?.isStreaming ?? true)
-            },
-            hasPendingMessages: { [weak self] in
-                (self?.session?.pendingMessageCount ?? 0) > 0
-            },
-            abort: { [weak self] in
-                Task { await self?.session?.abort() }
-            },
-            events: eventBus,
-            sendMessage: { [weak self] message, options in
-                guard let self else { return }
-                self.sendMessageHandler(message, options)
-            }
-        )
-    }
-
-    func setSendMessageHandler(_ handler: @escaping HookSendMessageHandler) {
-        sendMessageHandler = handler
     }
 }
 
@@ -462,10 +421,27 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     }
 
-    let contextProvider = CustomToolContextProvider(sessionManager: sessionManager, modelRegistry: modelRegistry, eventBus: eventBus)
-    let wrappedCustomTools = wrapCustomTools(customToolsResult.tools) {
-        contextProvider.buildContext()
+    let agentBox = LockedState<Agent?>(nil)
+    let sessionBox = LockedState<AgentSession?>(nil)
+    let sendMessageHandlerBox = LockedState<HookSendMessageHandler>({ _, _ in })
+    let getCustomToolContext: @Sendable () -> CustomToolContext = { [sessionManager, modelRegistry, eventBus] in
+        let agent = agentBox.withLock { $0 }
+        let session = sessionBox.withLock { $0 }
+        let sendMessageHandler = sendMessageHandlerBox.withLock { $0 }
+        return CustomToolContext(
+            sessionManager: sessionManager,
+            modelRegistry: modelRegistry,
+            model: agent?.state.model,
+            isIdle: { !(session?.isStreaming ?? true) },
+            hasPendingMessages: { (session?.pendingMessageCount ?? 0) > 0 },
+            abort: { Task { await session?.abort() } },
+            events: eventBus,
+            sendMessage: { message, options in
+                sendMessageHandler(message, options)
+            }
+        )
     }
+    let wrappedCustomTools = wrapCustomTools(customToolsResult.tools, getCustomToolContext)
     let allBuiltInToolsMap = createAllTools(cwd: cwd, options: toolsOptions)
     var toolRegistry: [String: AgentTool] = [:]
     for (name, tool) in allBuiltInToolsMap {
@@ -518,6 +494,15 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let slashCommands = options.slashCommands ?? discoverSlashCommands(cwd: cwd, agentDir: agentDir)
     time("discoverSlashCommands")
 
+    let transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
+    if let hookRunnerSnapshot = hookRunner {
+        transformContext = { messages, signal in
+            await hookRunnerSnapshot.emitContext(messages, signal: signal)
+        }
+    } else {
+        transformContext = nil
+    }
+
     let createdAgent = Agent(AgentOptions(
         initialState: AgentState(
             systemPrompt: systemPrompt,
@@ -528,9 +513,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         convertToLlm: { messages in
             convertToLlm(messages)
         },
-        transformContext: hookRunner == nil ? nil : { messages, signal in
-            await hookRunner?.emitContext(messages, signal: signal) ?? messages
-        },
+        transformContext: transformContext,
         steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
         followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
         getApiKey: { provider in
@@ -538,7 +521,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     ))
     time("createAgent")
-    contextProvider.agent = createdAgent
+    agentBox.withLock { $0 = createdAgent }
 
     if hasExistingSession {
         createdAgent.replaceMessages(existingSession.messages)
@@ -562,7 +545,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         rebuildSystemPrompt: rebuildSystemPrompt
     ))
     time("createAgentSession")
-    contextProvider.session = createdSession
+    sessionBox.withLock { $0 = createdSession }
     let sendMessageHandler: HookSendMessageHandler = { [weak createdSession] message, options in
         guard let session = createdSession else { return }
         Task {
@@ -570,7 +553,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     }
     customToolsResult.setSendMessageHandler(sendMessageHandler)
-    contextProvider.setSendMessageHandler(sendMessageHandler)
+    sendMessageHandlerBox.withLock { $0 = sendMessageHandler }
 
     return CreateAgentSessionResult(session: createdSession, customToolsResult: customToolsResult, modelFallbackMessage: modelFallbackMessage)
 }

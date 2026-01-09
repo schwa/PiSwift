@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import PiSwiftAI
 import PiSwiftCodingAgent
 
 private func makeTempDir() throws -> String {
@@ -93,6 +94,10 @@ private func assistantText(from events: [[String: Any]]) -> String? {
     return nil
 }
 
+private func value<T>(_ dict: [String: AnyCodable], _ key: String, as type: T.Type = T.self) -> T? {
+    dict[key]?.value as? T
+}
+
 @Test func rpcGetState() async throws {
     guard API_KEY != nil else { return }
 
@@ -101,12 +106,12 @@ private func assistantText(from events: [[String: Any]]) -> String? {
 
     try await withRpcClient(sessionDir: sessionDir) { client in
         let state = try await client.getState().value
-        let model = state["model"] as? [String: Any]
+        let model = value(state, "model", as: [String: Any].self)
         #expect(model != nil)
         #expect(model?["provider"] as? String == "anthropic")
         #expect(model?["id"] as? String == "claude-sonnet-4-5")
-        #expect(state["isStreaming"] as? Bool == false)
-        #expect(state["messageCount"] as? Int == 0)
+        #expect(value(state, "isStreaming", as: Bool.self) == false)
+        #expect(value(state, "messageCount", as: Int.self) == 0)
     }
 }
 
@@ -118,7 +123,7 @@ private func assistantText(from events: [[String: Any]]) -> String? {
 
     try await withRpcClient(sessionDir: sessionDir) { client in
         let events = try await client.promptAndWait("Reply with just the word 'hello'").value
-        let messageEnds = events.filter { ($0["type"] as? String) == "message_end" }
+        let messageEnds = events.filter { value($0, "type", as: String.self) == "message_end" }
         #expect(messageEnds.count >= 2)
 
         await waitForWrites()
@@ -142,8 +147,8 @@ private func assistantText(from events: [[String: Any]]) -> String? {
     try await withRpcClient(sessionDir: sessionDir) { client in
         _ = try await client.promptAndWait("Say hello")
         let result = try await client.compact().value
-        #expect((result["summary"] as? String)?.isEmpty == false)
-        #expect((result["tokensBefore"] as? Int ?? 0) > 0)
+        #expect(value(result, "summary", as: String.self)?.isEmpty == false)
+        #expect((value(result, "tokensBefore", as: Int.self) ?? 0) > 0)
 
         await waitForWrites()
         let entries = try loadSessionEntries(sessionDir: sessionDir)
@@ -161,9 +166,9 @@ private func assistantText(from events: [[String: Any]]) -> String? {
 
     try await withRpcClient(sessionDir: sessionDir) { client in
         let result = try await client.bash("echo hello").value
-        #expect((result["output"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
-        #expect(result["exitCode"] as? Int == 0)
-        #expect(result["cancelled"] as? Bool == false)
+        #expect(value(result, "output", as: String.self)?.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+        #expect(value(result, "exitCode", as: Int.self) == 0)
+        #expect(value(result, "cancelled", as: Bool.self) == false)
     }
 }
 
@@ -217,7 +222,7 @@ private func assistantText(from events: [[String: Any]]) -> String? {
     try await withRpcClient(sessionDir: sessionDir) { client in
         try await client.setThinkingLevel("high")
         let state = try await client.getState().value
-        #expect(state["thinkingLevel"] as? String == "high")
+        #expect(value(state, "thinkingLevel", as: String.self) == "high")
     }
 }
 
@@ -229,14 +234,14 @@ private func assistantText(from events: [[String: Any]]) -> String? {
 
     try await withRpcClient(sessionDir: sessionDir) { client in
         let initialState = try await client.getState().value
-        let initialLevel = initialState["thinkingLevel"] as? String
+        let initialLevel = value(initialState, "thinkingLevel", as: String.self)
 
         let result = try await client.cycleThinkingLevel()
         #expect(result != nil)
         #expect(result != initialLevel)
 
         let newState = try await client.getState().value
-        #expect(newState["thinkingLevel"] as? String == result)
+        #expect(value(newState, "thinkingLevel", as: String.self) == result)
     }
 }
 
@@ -250,10 +255,11 @@ private func assistantText(from events: [[String: Any]]) -> String? {
         let models = try await client.getAvailableModels().value
         #expect(models.count > 0)
         for model in models {
-            #expect(model["provider"] is String)
-            #expect(model["id"] is String)
-            #expect((model["contextWindow"] as? Int ?? 0) > 0)
-            #expect(model["reasoning"] is Bool)
+            let modelValues = model.mapValues { $0.value }
+            #expect(modelValues["provider"] is String)
+            #expect(modelValues["id"] is String)
+            #expect((modelValues["contextWindow"] as? Int ?? 0) > 0)
+            #expect(modelValues["reasoning"] is Bool)
         }
     }
 }
@@ -267,10 +273,10 @@ private func assistantText(from events: [[String: Any]]) -> String? {
     try await withRpcClient(sessionDir: sessionDir) { client in
         _ = try await client.promptAndWait("Hello")
         let stats = try await client.getSessionStats().value
-        #expect(stats["sessionFile"] is String)
-        #expect(stats["sessionId"] is String)
-        #expect((stats["userMessages"] as? Int ?? 0) >= 1)
-        #expect((stats["assistantMessages"] as? Int ?? 0) >= 1)
+        #expect(value(stats, "sessionFile", as: String.self) != nil)
+        #expect(value(stats, "sessionId", as: String.self) != nil)
+        #expect((value(stats, "userMessages", as: Int.self) ?? 0) >= 1)
+        #expect((value(stats, "assistantMessages", as: Int.self) ?? 0) >= 1)
     }
 }
 
@@ -283,11 +289,11 @@ private func assistantText(from events: [[String: Any]]) -> String? {
     try await withRpcClient(sessionDir: sessionDir) { client in
         _ = try await client.promptAndWait("Hello")
         let state = try await client.getState().value
-        #expect((state["messageCount"] as? Int ?? 0) > 0)
+        #expect((value(state, "messageCount", as: Int.self) ?? 0) > 0)
 
         _ = try await client.newSession()
         let newState = try await client.getState().value
-        #expect(newState["messageCount"] as? Int == 0)
+        #expect(value(newState, "messageCount", as: Int.self) == 0)
     }
 }
 

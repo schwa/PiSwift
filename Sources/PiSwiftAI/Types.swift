@@ -492,22 +492,16 @@ public struct AnthropicOptions: Sendable {
     }
 }
 
-public final class CancellationToken: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
+public final class CancellationToken: Sendable {
+    private let state = LockedState(false)
 
     public init() {}
 
     public func cancel() {
-        lock.lock()
-        cancelled = true
-        lock.unlock()
+        state.withLock { $0 = true }
     }
 
     public var isCancelled: Bool {
-        lock.lock()
-        let value = cancelled
-        lock.unlock()
-        return value
+        state.withLock { $0 }
     }
 }

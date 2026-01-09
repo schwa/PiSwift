@@ -2128,7 +2128,7 @@ public final class InteractiveMode {
 
         let dialog = LoginDialogComponent(tui: tui, providerId: provider.rawValue) { _, _ in }
         let savedText = editor.getText()
-        final class ManualInputState: @unchecked Sendable {
+        final class ManualInputState {
             var task: Task<String, Error>?
         }
         let manualInputState = ManualInputState()
@@ -2148,7 +2148,7 @@ public final class InteractiveMode {
 
         let needsManualInput = provider == .openAICodex || provider == .googleGeminiCli || provider == .googleAntigravity
 
-        let manualInputProvider: (@Sendable () async throws -> String?)?
+        let manualInputProvider: (@MainActor @Sendable () async throws -> String?)?
         if needsManualInput {
             manualInputProvider = { () async throws -> String? in
                 if let task = manualInputState.task {

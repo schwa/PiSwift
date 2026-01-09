@@ -1,14 +1,14 @@
 import Foundation
+import PiSwiftAI
 
-private final class CustomToolPluginStore: @unchecked Sendable {
+private final class CustomToolPluginStore: Sendable {
     static let shared = CustomToolPluginStore()
-    private let lock = NSLock()
-    private var plugins: [AnyObject] = []
+    private let state = LockedState<[any CustomToolPlugin]>([])
 
-    func add(_ plugin: AnyObject) {
-        lock.lock()
-        plugins.append(plugin)
-        lock.unlock()
+    func add(_ plugin: any CustomToolPlugin) {
+        state.withLock { plugins in
+            plugins.append(plugin)
+        }
     }
 }
 

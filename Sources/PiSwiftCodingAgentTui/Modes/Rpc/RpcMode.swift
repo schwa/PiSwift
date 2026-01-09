@@ -3,35 +3,34 @@ import PiSwiftAI
 import PiSwiftAgent
 import PiSwiftCodingAgent
 
-private final class PendingHookRequests: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handlers: [String: ([String: Any]) -> Void] = [:]
+private final class PendingHookRequests: Sendable {
+    private let state = LockedState<[String: @Sendable ([String: AnyCodable]) -> Void]>([:])
 
-    func register(_ id: String, handler: @escaping ([String: Any]) -> Void) {
-        lock.lock()
-        handlers[id] = handler
-        lock.unlock()
+    func register(_ id: String, handler: @escaping @Sendable ([String: AnyCodable]) -> Void) {
+        state.withLock { handlers in
+            handlers[id] = handler
+        }
     }
 
-    func resolve(_ id: String, response: [String: Any]) {
-        lock.lock()
-        let handler = handlers.removeValue(forKey: id)
-        lock.unlock()
+    func resolve(_ id: String, response: [String: AnyCodable]) {
+        let handler = state.withLock { handlers in
+            handlers.removeValue(forKey: id)
+        }
         handler?(response)
     }
 }
 
-private final class RpcOutput: @unchecked Sendable {
-    private let lock = NSLock()
+private final class RpcOutput: Sendable {
+    private let state = LockedState<Void>(())
 
     func send(_ object: [String: Any]) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
-              let json = String(data: data, encoding: .utf8) else {
-            return
+        state.withLock { _ in
+            guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+                  let json = String(data: data, encoding: .utf8) else {
+                return
+            }
+            print(json)
         }
-        print(json)
     }
 }
 
@@ -49,9 +48,9 @@ private final class RpcHookUIContext: HookUIContext {
         let id = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pending.register(id) { response in
-                if response["cancelled"] as? Bool == true {
+                if response["cancelled"]?.value as? Bool == true {
                     continuation.resume(returning: nil)
-                } else if let value = response["value"] as? String {
+                } else if let value = response["value"]?.value as? String {
                     continuation.resume(returning: value)
                 } else {
                     continuation.resume(returning: nil)
@@ -71,9 +70,9 @@ private final class RpcHookUIContext: HookUIContext {
         let id = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pending.register(id) { response in
-                if response["cancelled"] as? Bool == true {
+                if response["cancelled"]?.value as? Bool == true {
                     continuation.resume(returning: false)
-                } else if let confirmed = response["confirmed"] as? Bool {
+                } else if let confirmed = response["confirmed"]?.value as? Bool {
                     continuation.resume(returning: confirmed)
                 } else {
                     continuation.resume(returning: false)
@@ -93,9 +92,9 @@ private final class RpcHookUIContext: HookUIContext {
         let id = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pending.register(id) { response in
-                if response["cancelled"] as? Bool == true {
+                if response["cancelled"]?.value as? Bool == true {
                     continuation.resume(returning: nil)
-                } else if let value = response["value"] as? String {
+                } else if let value = response["value"]?.value as? String {
                     continuation.resume(returning: value)
                 } else {
                     continuation.resume(returning: nil)
@@ -187,9 +186,9 @@ private final class RpcHookUIContext: HookUIContext {
         let id = UUID().uuidString
         return await withCheckedContinuation { continuation in
             pending.register(id) { response in
-                if response["cancelled"] as? Bool == true {
+                if response["cancelled"]?.value as? Bool == true {
                     continuation.resume(returning: nil)
-                } else if let value = response["value"] as? String {
+                } else if let value = response["value"]?.value as? String {
                     continuation.resume(returning: value)
                 } else {
                     continuation.resume(returning: nil)
@@ -293,7 +292,7 @@ public func runRpcMode(_ session: AgentSession) async {
 
         if let type = dict["type"] as? String, type == "hook_ui_response" {
             if let id = dict["id"] as? String {
-                pendingHookRequests.resolve(id, response: dict)
+                pendingHookRequests.resolve(id, response: mapToAnyCodable(dict))
             }
             continue
         }
@@ -523,6 +522,10 @@ private func decodeImages(_ value: Any?) -> [ImageContent]? {
         return ImageContent(data: data, mimeType: mimeType)
     }
     return images.isEmpty ? nil : images
+}
+
+private func mapToAnyCodable(_ dict: [String: Any]) -> [String: AnyCodable] {
+    dict.mapValues { AnyCodable($0) }
 }
 
 private func modelToDict(_ model: Model) -> [String: Any] {
