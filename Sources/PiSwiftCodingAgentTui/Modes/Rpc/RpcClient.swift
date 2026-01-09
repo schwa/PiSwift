@@ -1,6 +1,7 @@
 import Foundation
 import PiSwiftAI
 import PiSwiftAgent
+import PiSwiftCodingAgent
 
 public struct RpcClientOptions: Sendable {
     public var cliPath: String?

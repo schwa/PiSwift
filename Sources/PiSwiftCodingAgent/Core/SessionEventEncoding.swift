@@ -2,7 +2,7 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
-func encodeSessionEvent(_ event: AgentSessionEvent) -> [String: Any] {
+public func encodeSessionEvent(_ event: AgentSessionEvent) -> [String: Any] {
     switch event {
     case .agent(let agentEvent):
         return encodeAgentEvent(agentEvent)

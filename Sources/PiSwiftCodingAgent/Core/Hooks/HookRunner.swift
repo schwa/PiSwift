@@ -1,6 +1,5 @@
 import Foundation
 import Darwin
-import MiniTui
 import PiSwiftAI
 import PiSwiftAgent
 

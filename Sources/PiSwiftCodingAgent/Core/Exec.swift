@@ -27,6 +27,7 @@ public struct ExecResult: Sendable {
     }
 }
 
+#if !canImport(UIKit)
 public func execCommand(_ command: String, _ args: [String], _ cwd: String, _ options: ExecOptions? = nil) async -> ExecResult {
     let process = Process()
 
@@ -161,3 +162,4 @@ private final class OutputBuffer: @unchecked Sendable {
         return copy
     }
 }
+#endif

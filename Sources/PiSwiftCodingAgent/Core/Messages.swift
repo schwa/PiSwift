@@ -300,7 +300,7 @@ func contentBlockToDict(_ block: ContentBlock) -> [String: Any] {
     }
 }
 
-func contentBlockFromDict(_ dict: [String: Any]) -> ContentBlock? {
+public func contentBlockFromDict(_ dict: [String: Any]) -> ContentBlock? {
     guard let type = dict["type"] as? String else { return nil }
     switch type {
     case "text":

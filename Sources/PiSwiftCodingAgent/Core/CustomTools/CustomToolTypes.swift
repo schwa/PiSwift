@@ -1,5 +1,4 @@
 import Foundation
-import MiniTui
 import PiSwiftAI
 import PiSwiftAgent
 
@@ -75,8 +74,8 @@ public typealias CustomToolExecute = @Sendable (
 ) async throws -> CustomToolResult
 
 public typealias CustomToolSessionHandler = @Sendable (_ event: CustomToolSessionEvent, _ context: CustomToolContext) async throws -> Void
-public typealias CustomToolRenderCall = @Sendable (_ args: [String: AnyCodable], _ theme: Theme) throws -> Component?
-public typealias CustomToolRenderResult = @Sendable (_ result: CustomToolResult, _ options: RenderResultOptions, _ theme: Theme) throws -> Component?
+public typealias CustomToolRenderCall = @Sendable (_ args: [String: AnyCodable], _ theme: Theme) throws -> HookComponent?
+public typealias CustomToolRenderResult = @Sendable (_ result: CustomToolResult, _ options: RenderResultOptions, _ theme: Theme) throws -> HookComponent?
 
 public struct CustomTool: @unchecked Sendable {
     public var name: String
@@ -245,8 +244,15 @@ public final class CustomToolAPI: @unchecked Sendable {
         handler(message, options)
     }
 
+#if canImport(UIKit)
+    public func exec(_ command: String, _ args: [String], _ options: ExecOptions? = nil) async -> ExecResult {
+        let execCwd = options?.cwd ?? cwd
+        return ExecResult(stdout: "Execution is not supported on iOS", stderr: "", code: -1, killed: true)
+    }
+#else
     public func exec(_ command: String, _ args: [String], _ options: ExecOptions? = nil) async -> ExecResult {
         let execCwd = options?.cwd ?? cwd
         return await execCommand(command, args, execCwd, options)
     }
+#endif
 }

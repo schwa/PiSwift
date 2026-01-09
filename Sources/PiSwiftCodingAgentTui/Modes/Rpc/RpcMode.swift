@@ -1,6 +1,7 @@
 import Foundation
 import PiSwiftAI
 import PiSwiftAgent
+import PiSwiftCodingAgent
 
 private final class PendingHookRequests: @unchecked Sendable {
     private let lock = NSLock()

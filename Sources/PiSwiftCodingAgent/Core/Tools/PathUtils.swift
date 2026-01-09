@@ -27,10 +27,10 @@ private func fileExists(_ path: String) -> Bool {
 public func expandPath(_ filePath: String) -> String {
     let normalized = normalizeUnicodeSpaces(filePath)
     if normalized == "~" {
-        return FileManager.default.homeDirectoryForCurrentUser.path
+        return getHomeDir()
     }
     if normalized.hasPrefix("~/") {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = getHomeDir()
         return home + String(normalized.dropFirst())
     }
     return normalized

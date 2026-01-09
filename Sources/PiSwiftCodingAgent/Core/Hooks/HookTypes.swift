@@ -1,7 +1,12 @@
 import Foundation
-import MiniTui
 import PiSwiftAI
 import PiSwiftAgent
+
+/// UI host passed into hook renderers for optional UI integrations.
+public protocol HookUIHost: AnyObject {}
+
+/// UI component returned by hook renderers (UI-specific implementations can supply their own types).
+public typealias HookComponent = Any
 
 public enum HookNotificationType: String, Sendable {
     case info
@@ -71,7 +76,7 @@ public struct HookFlagOptions: Sendable {
     }
 }
 
-public typealias HookWidgetFactory = @Sendable (_ tui: TUI, _ theme: Theme) -> Component
+public typealias HookWidgetFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
 
 public enum HookWidgetContent: @unchecked Sendable {
     case lines([String])
@@ -86,7 +91,7 @@ public struct HookMessageRenderOptions: Sendable {
     }
 }
 
-public typealias HookMessageRenderer = @Sendable (HookMessage, HookMessageRenderOptions, Theme) -> Component?
+public typealias HookMessageRenderer = @Sendable (HookMessage, HookMessageRenderOptions, Theme) -> HookComponent?
 
 public enum HookDeliverAs: String, Sendable {
     case steer
@@ -172,7 +177,7 @@ public struct RegisteredCommand: Sendable {
     }
 }
 
-public protocol HookDisposableComponent: Component {
+public protocol HookDisposableComponent {
     func dispose()
 }
 
@@ -185,7 +190,7 @@ public struct HookCustomResult: @unchecked Sendable {
 }
 
 public typealias HookCustomClose = @MainActor @Sendable (Any?) -> Void
-public typealias HookCustomFactory = @Sendable (_ tui: TUI, _ theme: Theme, _ done: @escaping HookCustomClose) async -> Component
+public typealias HookCustomFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme, _ done: @escaping HookCustomClose) async -> HookComponent
 
 @MainActor
 public protocol HookUIContext: Sendable {
@@ -840,8 +845,10 @@ public final class HookAPI: @unchecked Sendable {
         commands[name] = RegisteredCommand(name: name, description: description, handler: handler)
     }
 
+#if !canImport(UIKit)
     public func exec(_ command: String, _ args: [String], _ options: ExecOptions? = nil) async -> ExecResult {
         let cwd = options?.cwd ?? execCwd ?? FileManager.default.currentDirectoryPath
         return await execCommand(command, args, cwd, options)
     }
+#endif
 }

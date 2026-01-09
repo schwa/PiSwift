@@ -1,6 +1,7 @@
 import MiniTui
 import Testing
 import PiSwiftCodingAgent
+import PiSwiftCodingAgentTui
 
 @MainActor
 private final class FakeUI: RenderRequesting {

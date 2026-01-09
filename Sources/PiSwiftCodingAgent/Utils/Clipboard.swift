@@ -3,6 +3,10 @@ import Foundation
 import AppKit
 #endif
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 public enum ClipboardError: Error, CustomStringConvertible {
     case missingTool(String)
     case copyFailed(String)
@@ -18,9 +22,11 @@ public enum ClipboardError: Error, CustomStringConvertible {
 }
 
 public func copyToClipboard(_ text: String) throws {
-    #if os(Windows)
+#if canImport(UIKit)
+    UIPasteboard.general.string = text
+#elseif os(Windows)
     try runClipboardCommand(command: "clip", args: [], input: text)
-    #elseif os(Linux)
+#elseif os(Linux)
     do {
         try runClipboardCommand(command: "xclip", args: ["-selection", "clipboard"], input: text)
     } catch {
@@ -30,14 +36,20 @@ public func copyToClipboard(_ text: String) throws {
             throw ClipboardError.missingTool("Failed to copy to clipboard. Install xclip or xsel.")
         }
     }
-    #else
-    try runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
-    #endif
+#elseif os(macOS)
+    if NSApp != nil || NSClassFromString("NSApplication") != nil {
+        NSPasteboard.general.setString(text, forType: .string)
+    } else {
+        try runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
+    }
+#endif
 }
 
 public func clipboardHasImage() -> Bool {
 #if canImport(AppKit)
     return NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil)
+#elseif canImport(UIKit)
+    UIPasteboard.general.hasImages
 #else
     return false
 #endif
@@ -53,11 +65,14 @@ public func getClipboardImagePngData() -> Data? {
         return nil
     }
     return rep.representation(using: .png, properties: [:])
+#elseif canImport(UIKit)
+    return UIPasteboard.general.image?.pngData()
 #else
     return nil
 #endif
 }
 
+#if !canImport(UIKit)
 private func runClipboardCommand(command: String, args: [String], input: String) throws {
     let process = Process()
     if command.contains("/") {
@@ -87,3 +102,4 @@ private func runClipboardCommand(command: String, args: [String], input: String)
         throw ClipboardError.copyFailed("Clipboard command failed: \(command)")
     }
 }
+#endif

@@ -4,6 +4,7 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 import PiSwiftCodingAgent
+import PiSwiftCodingAgentTui
 
 @main
 struct PiCodingAgentCLI: AsyncParsableCommand {

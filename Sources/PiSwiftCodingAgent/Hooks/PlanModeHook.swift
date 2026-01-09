@@ -1,5 +1,4 @@
 import Foundation
-import MiniTui
 import PiSwiftAgent
 
 private let planModeTools = ["read", "bash", "grep", "find", "ls"]

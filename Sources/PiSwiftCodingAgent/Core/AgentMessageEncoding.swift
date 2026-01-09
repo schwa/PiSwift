@@ -2,7 +2,7 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
-func encodeAgentMessageDict(_ message: AgentMessage) -> [String: Any] {
+public func encodeAgentMessageDict(_ message: AgentMessage) -> [String: Any] {
     switch message {
     case .user(let user):
         var dict: [String: Any] = [

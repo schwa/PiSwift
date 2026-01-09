@@ -29,6 +29,12 @@ public struct BashResult: Sendable {
     }
 }
 
+
+#if canImport(UIKit)
+public func executeBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {
+    return BashResult(output: "Not available on iOS", exitCode: 1, cancelled: false, truncated: false)
+}
+#else
 public func executeBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {
     let process = Process()
     let shellConfig = try getShellConfig()
@@ -171,3 +177,4 @@ private final class OutputBuffer: @unchecked Sendable {
         return copy
     }
 }
+#endif

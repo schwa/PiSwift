@@ -41,8 +41,30 @@ public func getAgentDir() -> String {
     if let override = ProcessInfo.processInfo.environment[ENV_AGENT_DIR], !override.isEmpty {
         return override
     }
+
+#if os(macOS)
     let home = FileManager.default.homeDirectoryForCurrentUser
     return home.appendingPathComponent(CONFIG_DIR_NAME).appendingPathComponent("agent").path
+#else
+    // App data (best general-purpose location)
+    guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        return "/tmp"
+    }
+    return appSupport.appendingPathComponent("agent").path()
+#endif
+}
+
+public func getHomeDir() -> String {
+#if os(macOS)
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    return home.path
+#else
+    // App data (best general-purpose location)
+    guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        return "/tmp"
+    }
+    return appSupport.path()
+#endif
 }
 
 public func getCustomThemesDir() -> String {

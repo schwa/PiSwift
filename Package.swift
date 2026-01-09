@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "PiSwift",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14), .iOS(.v18)],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
@@ -23,6 +23,10 @@ let package = Package(
         .library(
             name: "PiSwiftCodingAgent",
             targets: ["PiSwiftCodingAgent"]
+        ),
+        .library(
+            name: "PiSwiftCodingAgentTui",
+            targets: ["PiSwiftCodingAgentTui"]
         ),
         .library(
             name: "PiSwiftSyntaxHighlight",
@@ -65,11 +69,19 @@ let package = Package(
             dependencies: [
                 "PiSwiftAI",
                 "PiSwiftAgent",
-                "PiSwiftSyntaxHighlight",
-                .product(name: "MiniTui", package: "MiniTui"),
             ],
             resources: [
                 .process("Resources")
+            ]
+        ),
+        .target(
+            name: "PiSwiftCodingAgentTui",
+            dependencies: [
+                "PiSwiftAI",
+                "PiSwiftAgent",
+                "PiSwiftCodingAgent",
+                "PiSwiftSyntaxHighlight",
+                .product(name: "MiniTui", package: "MiniTui"),
             ]
         ),
         .target(
@@ -86,6 +98,7 @@ let package = Package(
             name: "PiSwiftCodingAgentCLI",
             dependencies: [
                 "PiSwiftCodingAgent",
+                "PiSwiftCodingAgentTui",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -101,11 +114,29 @@ let package = Package(
             name: "PiSwiftCodingAgentTests",
             dependencies: [
                 "PiSwiftCodingAgent",
-                "PiSwiftCodingAgentCLI",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                "PiSwiftAI",
+                "PiSwiftAgent",
             ],
             resources: [
                 .copy("fixtures")
+            ]
+        ),
+        .testTarget(
+            name: "PiSwiftCodingAgentCLITests",
+            dependencies: [
+                "PiSwiftCodingAgent",
+                "PiSwiftCodingAgentCLI",
+            ],
+            resources: [
+                .copy("fixtures")
+            ]
+        ),
+        .testTarget(
+            name: "PiSwiftCodingAgentTuiTests",
+            dependencies: [
+                "PiSwiftCodingAgent",
+                "PiSwiftCodingAgentTui",
+                .product(name: "MiniTui", package: "MiniTui"),
             ]
         ),
         .testTarget(

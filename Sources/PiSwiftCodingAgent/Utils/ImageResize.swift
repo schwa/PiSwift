@@ -1,5 +1,4 @@
 import Foundation
-import MiniTui
 import PiSwiftAI
 
 public struct ImageResizeOptions: Sendable {
@@ -51,6 +50,11 @@ public struct ResizedImage: Sendable {
 
 private let defaultQualitySteps: [Int] = [85, 70, 55, 40]
 private let defaultScaleSteps: [Double] = [1.0, 0.75, 0.5, 0.35, 0.25]
+
+private struct ImageDimensions: Sendable {
+    let widthPx: Int
+    let heightPx: Int
+}
 
 public func formatDimensionNote(_ result: ResizedImage) -> String? {
     guard result.wasResized, result.width > 0, result.originalWidth > 0 else { return nil }
@@ -126,6 +130,107 @@ public func convertToPng(_ base64Data: String, _ mimeType: String) -> ImageConte
     }
     #endif
     return nil
+}
+
+private func getPngDimensions(_ base64Data: String) -> ImageDimensions? {
+    guard let data = Data(base64Encoded: base64Data), data.count >= 24 else {
+        return nil
+    }
+    if data.prefix(8) != Data([137, 80, 78, 71, 13, 10, 26, 10]) {
+        return nil
+    }
+    let width = data.readUInt32BE(at: 16)
+    let height = data.readUInt32BE(at: 20)
+    return ImageDimensions(widthPx: Int(width), heightPx: Int(height))
+}
+
+private func getGifDimensions(_ base64Data: String) -> ImageDimensions? {
+    guard let data = Data(base64Encoded: base64Data), data.count >= 10 else {
+        return nil
+    }
+    let header = String(decoding: data.prefix(6), as: UTF8.self)
+    if header != "GIF87a" && header != "GIF89a" {
+        return nil
+    }
+    let width = data.readUInt16LE(at: 6)
+    let height = data.readUInt16LE(at: 8)
+    return ImageDimensions(widthPx: Int(width), heightPx: Int(height))
+}
+
+private func getJpegDimensions(_ base64Data: String) -> ImageDimensions? {
+    guard let data = Data(base64Encoded: base64Data), data.count >= 4 else {
+        return nil
+    }
+    if data[0] != 0xFF || data[1] != 0xD8 {
+        return nil
+    }
+    var offset = 2
+    while offset + 9 < data.count {
+        if data[offset] != 0xFF {
+            offset += 1
+            continue
+        }
+        let marker = data[offset + 1]
+        if marker == 0xC0 || marker == 0xC2 {
+            let height = data.readUInt16BE(at: offset + 5)
+            let width = data.readUInt16BE(at: offset + 7)
+            return ImageDimensions(widthPx: Int(width), heightPx: Int(height))
+        } else if marker == 0xDA {
+            break
+        } else {
+            let segmentLength = data.readUInt16BE(at: offset + 2)
+            if segmentLength < 2 {
+                break
+            }
+            offset += Int(segmentLength) + 2
+        }
+    }
+    return nil
+}
+
+private func getWebpDimensions(_ base64Data: String) -> ImageDimensions? {
+    guard let data = Data(base64Encoded: base64Data), data.count >= 30 else {
+        return nil
+    }
+    let riff = String(decoding: data.prefix(4), as: UTF8.self)
+    let webp = String(decoding: data.subdata(in: 8..<12), as: UTF8.self)
+    if riff != "RIFF" || webp != "WEBP" {
+        return nil
+    }
+    let chunk = String(decoding: data.subdata(in: 12..<16), as: UTF8.self)
+    if chunk == "VP8 " {
+        guard data.count >= 30 else { return nil }
+        let width = data.readUInt16LE(at: 26) & 0x3FFF
+        let height = data.readUInt16LE(at: 28) & 0x3FFF
+        return ImageDimensions(widthPx: Int(width), heightPx: Int(height))
+    } else if chunk == "VP8L" {
+        guard data.count >= 25 else { return nil }
+        let bits = data.readUInt32LE(at: 21)
+        let width = Int(bits & 0x3FFF) + 1
+        let height = Int((bits >> 14) & 0x3FFF) + 1
+        return ImageDimensions(widthPx: width, heightPx: height)
+    } else if chunk == "VP8X" {
+        guard data.count >= 30 else { return nil }
+        let width = Int(data[24] | (data[25] << 8) | (data[26] << 16)) + 1
+        let height = Int(data[27] | (data[28] << 8) | (data[29] << 16)) + 1
+        return ImageDimensions(widthPx: width, heightPx: height)
+    }
+    return nil
+}
+
+private func getImageDimensions(_ base64Data: String, mimeType: String) -> ImageDimensions? {
+    switch mimeType {
+    case "image/png":
+        return getPngDimensions(base64Data)
+    case "image/jpeg":
+        return getJpegDimensions(base64Data)
+    case "image/gif":
+        return getGifDimensions(base64Data)
+    case "image/webp":
+        return getWebpDimensions(base64Data)
+    default:
+        return nil
+    }
 }
 
 #if canImport(AppKit)
@@ -357,3 +462,33 @@ private func convertImageToPng(_ rawData: Data) -> Data? {
     return rep.representation(using: .png, properties: [:])
 }
 #endif
+
+private extension Data {
+    func readUInt16BE(at offset: Int) -> UInt16 {
+        let high = UInt16(self[offset]) << 8
+        let low = UInt16(self[offset + 1])
+        return high | low
+    }
+
+    func readUInt16LE(at offset: Int) -> UInt16 {
+        let low = UInt16(self[offset])
+        let high = UInt16(self[offset + 1]) << 8
+        return high | low
+    }
+
+    func readUInt32BE(at offset: Int) -> UInt32 {
+        let b0 = UInt32(self[offset]) << 24
+        let b1 = UInt32(self[offset + 1]) << 16
+        let b2 = UInt32(self[offset + 2]) << 8
+        let b3 = UInt32(self[offset + 3])
+        return b0 | b1 | b2 | b3
+    }
+
+    func readUInt32LE(at offset: Int) -> UInt32 {
+        let b0 = UInt32(self[offset])
+        let b1 = UInt32(self[offset + 1]) << 8
+        let b2 = UInt32(self[offset + 2]) << 16
+        let b3 = UInt32(self[offset + 3]) << 24
+        return b0 | b1 | b2 | b3
+    }
+}

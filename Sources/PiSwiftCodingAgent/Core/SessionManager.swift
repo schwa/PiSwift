@@ -24,6 +24,10 @@ public struct SessionHeader: Sendable {
 
 public struct NewSessionOptions: Sendable {
     public var parentSession: String?
+
+    public init(parentSession: String? = nil) {
+        self.parentSession = parentSession
+    }
 }
 
 public protocol SessionEntryBase: Sendable {

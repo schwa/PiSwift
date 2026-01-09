@@ -1,5 +1,6 @@
 import Foundation
 
+#if os(macOS)
 public func ensureTool(_ name: String) async -> String? {
     if let path = which(name) {
         return path
@@ -29,3 +30,8 @@ private func which(_ name: String) -> String? {
     let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     return output?.isEmpty == false ? output : nil
 }
+#else
+public func ensureTool(_ name: String) async -> String? {
+    return nil
+}
+#endif
