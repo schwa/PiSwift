@@ -38,18 +38,6 @@ internal let ModelsData: [String: [String: Model]] = [
             contextWindow: 400000,
             maxTokens: 128000
         ),
-        "gpt-5.1-codex-max": Model(
-            id: "gpt-5.1-codex-max",
-            name: "GPT-5.1 Codex Max",
-            api: .openAIResponses,
-            provider: "openai",
-            baseUrl: "https://api.openai.com/v1",
-            reasoning: true,
-            input: [.text, .image],
-            cost: ModelCost(input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0),
-            contextWindow: 400000,
-            maxTokens: 128000
-        ),
         "gpt-5.2": Model(
             id: "gpt-5.2",
             name: "GPT-5.2",
@@ -60,6 +48,68 @@ internal let ModelsData: [String: [String: Model]] = [
             input: [.text, .image],
             cost: ModelCost(input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0),
             contextWindow: 400000,
+            maxTokens: 128000
+        ),
+    ],
+    "openai-codex": [
+        "gpt-5.1": Model(
+            id: "gpt-5.1",
+            name: "GPT-5.1",
+            api: .openAIResponses,
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0),
+            contextWindow: 272000,
+            maxTokens: 128000
+        ),
+        "gpt-5.1-codex-max": Model(
+            id: "gpt-5.1-codex-max",
+            name: "GPT-5.1 Codex Max",
+            api: .openAIResponses,
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0),
+            contextWindow: 272000,
+            maxTokens: 128000
+        ),
+        "gpt-5.1-codex-mini": Model(
+            id: "gpt-5.1-codex-mini",
+            name: "GPT-5.1 Codex Mini",
+            api: .openAIResponses,
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0),
+            contextWindow: 272000,
+            maxTokens: 128000
+        ),
+        "gpt-5.2": Model(
+            id: "gpt-5.2",
+            name: "GPT-5.2",
+            api: .openAIResponses,
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0),
+            contextWindow: 272000,
+            maxTokens: 128000
+        ),
+        "gpt-5.2-codex": Model(
+            id: "gpt-5.2-codex",
+            name: "GPT-5.2 Codex",
+            api: .openAIResponses,
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: [.text, .image],
+            cost: ModelCost(input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0),
+            contextWindow: 272000,
             maxTokens: 128000
         ),
     ],

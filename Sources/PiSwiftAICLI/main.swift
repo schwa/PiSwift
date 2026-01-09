@@ -12,7 +12,7 @@ struct PiAICLI: AsyncParsableCommand {
     )
 
     struct CommonOptions: ParsableArguments {
-        @Option(help: "Provider id (openai or anthropic)")
+        @Option(help: "Provider id (openai, openai-codex, or anthropic)")
         var provider: String = "openai"
 
         @Option(help: "Model id")

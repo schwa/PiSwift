@@ -128,7 +128,9 @@ public final class AuthStorage: Sendable {
 
     public func hasAuth(_ provider: String) -> Bool {
         let snapshot = state.withLock { state in
-            (runtime: state.runtimeOverrides[provider], credential: state.data[provider], fallback: state.fallbackResolver)
+            let runtime = state.runtimeOverrides[provider]
+            let credential = state.data[provider]
+            return (runtime: runtime, credential: credential, fallback: state.fallbackResolver)
         }
         if snapshot.runtime != nil {
             return true
@@ -168,7 +170,9 @@ public final class AuthStorage: Sendable {
 
     public func getApiKey(_ provider: String) async -> String? {
         let snapshot = state.withLock { state in
-            (runtime: state.runtimeOverrides[provider], credential: state.data[provider], fallback: state.fallbackResolver)
+            let runtime = state.runtimeOverrides[provider]
+            let credential = state.data[provider]
+            return (runtime: runtime, credential: credential, fallback: state.fallbackResolver)
         }
 
         if let runtime = snapshot.runtime {
@@ -179,10 +183,11 @@ public final class AuthStorage: Sendable {
             case .apiKey(let apiKey):
                 return apiKey.key
             case .oauth(let oauth):
+                let oauthProviderId = OAuthProvider(rawValue: provider)
                 let now = Date().timeIntervalSince1970 * 1000
                 let needsRefresh = oauth.expires == nil || now >= (oauth.expires ?? 0)
                 if needsRefresh,
-                   let providerId = OAuthProvider(rawValue: provider),
+                   let providerId = oauthProviderId,
                    oauth.refresh != nil {
                     do {
                         if let result = try await refreshOAuthTokenWithLock(providerId) {
@@ -194,7 +199,7 @@ public final class AuthStorage: Sendable {
                     }
                 }
 
-                if let providerId = OAuthProvider(rawValue: provider) {
+                if let providerId = oauthProviderId {
                     if let apiKey = try? oauthApiKey(provider: providerId, accessToken: oauth.access, projectId: oauth.projectId) {
                         return apiKey
                     }

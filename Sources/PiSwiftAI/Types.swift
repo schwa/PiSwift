@@ -8,6 +8,7 @@ public enum Api: String, Sendable {
 
 public enum KnownProvider: String, Sendable {
     case openai
+    case openaiCodex = "openai-codex"
     case anthropic
 }
 
@@ -429,6 +430,20 @@ public enum OpenAIReasoningSummary: String, Sendable {
     case concise
 }
 
+public enum OpenAICodexReasoningSummary: String, Sendable {
+    case auto
+    case concise
+    case detailed
+    case off
+    case on
+}
+
+public enum OpenAICodexTextVerbosity: String, Sendable {
+    case low
+    case medium
+    case high
+}
+
 public struct OpenAIResponsesOptions: Sendable {
     public var temperature: Double?
     public var maxTokens: Int?
@@ -451,6 +466,40 @@ public struct OpenAIResponsesOptions: Sendable {
         self.apiKey = apiKey
         self.reasoningEffort = reasoningEffort
         self.reasoningSummary = reasoningSummary
+    }
+}
+
+public struct OpenAICodexResponsesOptions: Sendable {
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var apiKey: String?
+    public var reasoningEffort: ThinkingLevel?
+    public var reasoningSummary: OpenAICodexReasoningSummary?
+    public var textVerbosity: OpenAICodexTextVerbosity?
+    public var include: [String]?
+    public var sessionId: String?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        apiKey: String? = nil,
+        reasoningEffort: ThinkingLevel? = nil,
+        reasoningSummary: OpenAICodexReasoningSummary? = nil,
+        textVerbosity: OpenAICodexTextVerbosity? = nil,
+        include: [String]? = nil,
+        sessionId: String? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.apiKey = apiKey
+        self.reasoningEffort = reasoningEffort
+        self.reasoningSummary = reasoningSummary
+        self.textVerbosity = textVerbosity
+        self.include = include
+        self.sessionId = sessionId
     }
 }
 

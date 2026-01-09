@@ -739,12 +739,17 @@ private actor OpenAICodexCallbackServer {
     private func sendResponse(_ connection: NWConnection, status: Int, body: String) {
         let bodyData = body.data(using: .utf8) ?? Data()
         let statusText = status == 200 ? "OK" : "Error"
-        let header = """
-        HTTP/1.1 \(status) \(statusText)\r
-        Content-Type: text/html; charset=utf-8\r
-        Content-Length: \(bodyData.count)\r
-        \r
-        """
+        let headerLines = [
+            "HTTP/1.1 \(status) \(statusText)",
+            "Content-Type: text/html; charset=utf-8",
+            "Content-Length: \(bodyData.count)",
+            "Connection: close",
+            "Cache-Control: no-store",
+            "Pragma: no-cache",
+            "",
+            ""
+        ]
+        let header = headerLines.joined(separator: "\r\n")
         let responseData = header.data(using: .utf8, allowLossyConversion: false) ?? Data()
         connection.send(content: responseData + bodyData, completion: .contentProcessed { _ in
             connection.cancel()

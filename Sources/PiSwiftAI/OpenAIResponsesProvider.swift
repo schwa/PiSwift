@@ -7,6 +7,18 @@ public func streamOpenAIResponses(
     context: Context,
     options: OpenAIResponsesOptions
 ) -> AssistantMessageEventStream {
+    if model.provider.lowercased() == "openai-codex" {
+        let codexOptions = OpenAICodexResponsesOptions(
+            temperature: options.temperature,
+            maxTokens: options.maxTokens,
+            signal: options.signal,
+            apiKey: options.apiKey,
+            reasoningEffort: options.reasoningEffort,
+            reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary)
+        )
+        return streamOpenAICodexResponses(model: model, context: context, options: codexOptions)
+    }
+
     let stream = AssistantMessageEventStream()
 
     Task {
@@ -282,6 +294,19 @@ private func mapResponsesReasoningEffort(_ effort: ThinkingLevel?) -> Components
 }
 
 private func mapReasoningSummary(_ summary: OpenAIReasoningSummary?) -> Components.Schemas.Reasoning.SummaryPayload? {
+    switch summary {
+    case .auto:
+        return .auto
+    case .concise:
+        return .concise
+    case .detailed:
+        return .detailed
+    case .none:
+        return nil
+    }
+}
+
+private func mapCodexReasoningSummary(_ summary: OpenAIReasoningSummary?) -> OpenAICodexReasoningSummary? {
     switch summary {
     case .auto:
         return .auto

@@ -64,6 +64,9 @@ let package = Package(
                 .product(name: "OpenAI", package: "OpenAI"),
                 .product(name: "SwiftAnthropic", package: "SwiftAnthropic"),
             ],
+            resources: [
+                .process("Resources")
+            ],
             swiftSettings: strictConcurrencySettings
         ),
         .target(
