@@ -366,6 +366,8 @@ public final class AuthStorage: Sendable {
             return "GEMINI_API_KEY"
         case "openrouter":
             return "OPENROUTER_API_KEY"
+        case "opencode":
+            return "OPENCODE_API_KEY"
         case "groq":
             return "GROQ_API_KEY"
         case "cerebras":

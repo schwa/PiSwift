@@ -10,6 +10,7 @@ public enum KnownProvider: String, Sendable {
     case openai
     case openaiCodex = "openai-codex"
     case anthropic
+    case opencode
 }
 
 public typealias Provider = String

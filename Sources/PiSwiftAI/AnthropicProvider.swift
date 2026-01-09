@@ -1,6 +1,33 @@
 import Foundation
 import SwiftAnthropic
 
+private let claudeCodeVersion = "2.1.2"
+
+private let claudeCodeToolNames: [String: String] = [
+    "read": "Read",
+    "write": "Write",
+    "edit": "Edit",
+    "bash": "Bash",
+    "grep": "Grep",
+    "find": "Glob",
+    "ls": "Glob",
+]
+
+private func toClaudeCodeName(_ name: String) -> String {
+    claudeCodeToolNames[name] ?? name
+}
+
+private func fromClaudeCodeName(_ name: String) -> String {
+    for (piName, claudeName) in claudeCodeToolNames where claudeName == name {
+        return piName
+    }
+    return name
+}
+
+private func isAnthropicOAuthToken(_ apiKey: String) -> Bool {
+    apiKey.contains("sk-ant-oat")
+}
+
 private func shouldLogAnthropicDebug() -> Bool {
     let env = ProcessInfo.processInfo.environment
     let flag = (env["PI_DEBUG_ANTHROPIC"] ?? env["PI_DEBUG_LIVE_TESTS"] ?? env["PI_DEBUG_API_KEYS"])?.lowercased()
@@ -53,6 +80,7 @@ public func streamAnthropic(
             if apiKey.isEmpty {
                 throw StreamError.missingApiKey(model.provider)
             }
+            let isOAuthToken = isAnthropicOAuthToken(apiKey)
 
             let betaHeaders = buildAnthropicBetaHeaders(apiKey: apiKey, interleavedThinking: options.interleavedThinking ?? true)
             if let betaHeaders {
@@ -60,15 +88,16 @@ public func streamAnthropic(
             } else {
                 logAnthropicDebug("anthropic betaHeaders=none")
             }
+            let httpClient = buildAnthropicHttpClient(isOAuthToken: isOAuthToken)
             let service = AnthropicServiceFactory.service(
                 apiKey: apiKey,
                 basePath: model.baseUrl,
                 betaHeaders: betaHeaders,
-                httpClient: nil,
+                httpClient: httpClient,
                 debugEnabled: false
             )
 
-            let parameters = buildAnthropicParameters(model: model, context: context, options: options)
+            let parameters = buildAnthropicParameters(model: model, context: context, options: options, isOAuthToken: isOAuthToken)
             debugService = service
             debugParameters = parameters
             let toolCount = context.tools?.count ?? 0
@@ -115,7 +144,8 @@ public func streamAnthropic(
                         indexMap[index] = output.content.count - 1
                         stream.push(.thinkingStart(contentIndex: output.content.count - 1, partial: output))
                     case "tool_use":
-                        let tool = ToolCall(id: block.id ?? "", name: block.name ?? "", arguments: [:])
+                        let toolName = isOAuthToken ? fromClaudeCodeName(block.name ?? "") : (block.name ?? "")
+                        let tool = ToolCall(id: block.id ?? "", name: toolName, arguments: [:])
                         output.content.append(.toolCall(tool))
                         indexMap[index] = output.content.count - 1
                         toolCallPartials[index] = ""
@@ -230,8 +260,8 @@ public func streamAnthropic(
     return stream
 }
 
-private func buildAnthropicParameters(model: Model, context: Context, options: AnthropicOptions) -> MessageParameter {
-    let messages = convertAnthropicMessages(model: model, messages: context.messages)
+private func buildAnthropicParameters(model: Model, context: Context, options: AnthropicOptions, isOAuthToken: Bool) -> MessageParameter {
+    let messages = convertAnthropicMessages(model: model, messages: context.messages, isOAuthToken: isOAuthToken)
     let maxTokens = options.maxTokens ?? max(model.maxTokens / 3, 1024)
 
     var system: MessageParameter.System? = nil
@@ -239,13 +269,13 @@ private func buildAnthropicParameters(model: Model, context: Context, options: A
         system = .text(sanitizeSurrogates(prompt))
     }
 
-    let tools = context.tools.map(convertAnthropicTools)
+    let tools = context.tools.map { convertAnthropicTools($0, isOAuthToken: isOAuthToken) }
 
     let thinking = (options.thinkingEnabled == true && model.reasoning)
         ? MessageParameter.Thinking(budgetTokens: options.thinkingBudgetTokens ?? 1024)
         : nil
 
-    let toolChoice = options.toolChoice.map(convertAnthropicToolChoice)
+    let toolChoice = options.toolChoice.map { convertAnthropicToolChoice($0, isOAuthToken: isOAuthToken) }
 
     let anthroModel = mapAnthropicModel(model.id)
 
@@ -290,13 +320,14 @@ private func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool
     if interleavedThinking {
         headers.append("interleaved-thinking-2025-05-14")
     }
-    if apiKey.contains("sk-ant-oat") {
+    if isAnthropicOAuthToken(apiKey) {
         headers.insert("oauth-2025-04-20", at: 0)
+        headers.insert("claude-code-20250219", at: 0)
     }
     return headers
 }
 
-private func convertAnthropicMessages(model: Model, messages: [Message]) -> [MessageParameter.Message] {
+private func convertAnthropicMessages(model: Model, messages: [Message], isOAuthToken: Bool) -> [MessageParameter.Message] {
     let transformed = transformMessages(messages, model: model)
     var params: [MessageParameter.Message] = []
 
@@ -310,7 +341,7 @@ private func convertAnthropicMessages(model: Model, messages: [Message]) -> [Mes
                 params.append(MessageParameter.Message(role: .user, content: content))
             }
         case .assistant(let assistant):
-            let contentObjects = convertAssistantContent(assistant)
+            let contentObjects = convertAssistantContent(assistant, isOAuthToken: isOAuthToken)
             if !contentObjects.isEmpty {
                 params.append(MessageParameter.Message(role: .assistant, content: .list(contentObjects)))
             }
@@ -386,7 +417,7 @@ private func convertUserContent(model: Model, content: UserContent) -> MessagePa
     }
 }
 
-private func convertAssistantContent(_ assistant: AssistantMessage) -> [MessageParameter.Message.Content.ContentObject] {
+private func convertAssistantContent(_ assistant: AssistantMessage, isOAuthToken: Bool) -> [MessageParameter.Message.Content.ContentObject] {
     var objects: [MessageParameter.Message.Content.ContentObject] = []
     for block in assistant.content {
         switch block {
@@ -404,7 +435,8 @@ private func convertAssistantContent(_ assistant: AssistantMessage) -> [MessageP
             }
         case .toolCall(let toolCall):
             let toolInput = convertToolArguments(toolCall.arguments)
-            objects.append(.toolUse(sanitizeToolCallId(toolCall.id), toolCall.name, toolInput))
+            let toolName = isOAuthToken ? toClaudeCodeName(toolCall.name) : toolCall.name
+            objects.append(.toolUse(sanitizeToolCallId(toolCall.id), toolName, toolInput))
         default:
             continue
         }
@@ -426,10 +458,11 @@ private func convertToolResultContent(toolResult: ToolResultMessage) -> MessageP
     return toolResultObject
 }
 
-private func convertAnthropicTools(_ tools: [AITool]) -> [MessageParameter.Tool] {
+private func convertAnthropicTools(_ tools: [AITool], isOAuthToken: Bool) -> [MessageParameter.Tool] {
     tools.compactMap { tool in
         let schema = anthropicJSONSchema(from: tool.parameters)
-        return .function(name: tool.name, description: tool.description, inputSchema: schema)
+        let toolName = isOAuthToken ? toClaudeCodeName(tool.name) : tool.name
+        return .function(name: toolName, description: tool.description, inputSchema: schema)
     }
 }
 
@@ -442,7 +475,7 @@ private func anthropicJSONSchema(from parameters: [String: AnyCodable]) -> JSONS
     return try? JSONDecoder().decode(JSONSchema.self, from: data)
 }
 
-private func convertAnthropicToolChoice(_ choice: AnthropicToolChoice) -> MessageParameter.ToolChoice {
+private func convertAnthropicToolChoice(_ choice: AnthropicToolChoice, isOAuthToken: Bool) -> MessageParameter.ToolChoice {
     switch choice {
     case .auto:
         return .init(type: .auto)
@@ -451,7 +484,63 @@ private func convertAnthropicToolChoice(_ choice: AnthropicToolChoice) -> Messag
     case .none:
         return .init(type: .auto, disableParallelToolUse: true)
     case .tool(let name):
-        return .init(type: .tool, name: name)
+        let toolName = isOAuthToken ? toClaudeCodeName(name) : name
+        return .init(type: .tool, name: toolName)
+    }
+}
+
+private func buildAnthropicHttpClient(isOAuthToken: Bool) -> HTTPClient? {
+    guard isOAuthToken else { return nil }
+    let extraHeaders = [
+        "user-agent": "claude-cli/\(claudeCodeVersion) (external, cli)",
+        "x-app": "cli",
+    ]
+    return AnthropicHeaderInjectingHTTPClient(base: HTTPClientFactory.createDefault(), extraHeaders: extraHeaders)
+}
+
+private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
+    let base: HTTPClient
+    let extraHeaders: [String: String]
+
+    func data(for request: HTTPRequest) async throws -> (Data, HTTPResponse) {
+        let updated = injectingHeaders(request)
+        return try await base.data(for: updated)
+    }
+
+    func bytes(for request: HTTPRequest) async throws -> (HTTPByteStream, HTTPResponse) {
+        let updated = injectingHeaders(request)
+        return try await base.bytes(for: updated)
+    }
+
+    private func injectingHeaders(_ request: HTTPRequest) -> HTTPRequest {
+        guard !extraHeaders.isEmpty else { return request }
+        // SwiftAnthropic doesn't expose HTTPRequest properties publicly; mirror to add headers when possible.
+        let mirror = Mirror(reflecting: request)
+        var url: URL?
+        var method: HTTPMethod?
+        var headers: [String: String]?
+        var body: Data?
+
+        for child in mirror.children {
+            switch child.label {
+            case "url":
+                url = child.value as? URL
+            case "method":
+                method = child.value as? HTTPMethod
+            case "headers":
+                headers = child.value as? [String: String]
+            case "body":
+                body = child.value as? Data
+            default:
+                continue
+            }
+        }
+
+        guard let url, let method, var headers else { return request }
+        for (key, value) in extraHeaders where headers[key] == nil {
+            headers[key] = value
+        }
+        return HTTPRequest(url: url, method: method, headers: headers, body: body)
     }
 }
 

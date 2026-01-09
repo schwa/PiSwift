@@ -3,6 +3,8 @@ import PiSwiftAI
 import PiSwiftAgent
 import PiSwiftCodingAgent
 
+typealias AgentThinkingLevel = PiSwiftAgent.ThinkingLevel
+
 private let RUN_ANTHROPIC_TESTS: Bool = {
     let env = ProcessInfo.processInfo.environment
     let flag = (env["PI_RUN_ANTHROPIC_TESTS"] ?? env["PI_RUN_LIVE_TESTS"])?.lowercased()
@@ -14,6 +16,25 @@ let API_KEY: String? = {
     let env = ProcessInfo.processInfo.environment
     return env["ANTHROPIC_OAUTH_TOKEN"] ?? env["ANTHROPIC_API_KEY"]
 }()
+
+let PI_AGENT_DIR = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".pi")
+    .appendingPathComponent("agent")
+    .path
+
+private let AUTH_PATH = URL(fileURLWithPath: PI_AGENT_DIR).appendingPathComponent("auth.json").path
+
+func getRealAuthStorage() -> AuthStorage {
+    AuthStorage(AUTH_PATH)
+}
+
+func hasAuthForProvider(_ provider: String) -> Bool {
+    getRealAuthStorage().has(provider)
+}
+
+func resolveApiKey(_ provider: String) async -> String? {
+    await getRealAuthStorage().getApiKey(provider)
+}
 
 func userMsg(_ text: String, timestamp: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) -> AgentMessage {
     .user(UserMessage(content: .text(text), timestamp: timestamp))
@@ -37,6 +58,9 @@ struct TestSessionOptions {
     var inMemory: Bool = false
     var systemPrompt: String?
     var settingsOverrides: Settings?
+    var model: Model?
+    var thinkingLevel: AgentThinkingLevel?
+    var apiKey: String?
 }
 
 struct TestSessionContext {
@@ -52,13 +76,19 @@ func createTestSession(options: TestSessionOptions = TestSessionOptions()) -> Te
         .path
     try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
 
-    let model = getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let apiKey = options.apiKey ?? API_KEY
+    let model = options.model ?? getModel(provider: .anthropic, modelId: "claude-sonnet-4-5")
+    let thinkingLevel: AgentThinkingLevel = options.thinkingLevel ?? .off
     let agent = Agent(AgentOptions(
-        initialState: AgentState(systemPrompt: options.systemPrompt ?? "You are a helpful assistant.", model: model),
+        initialState: AgentState(
+            systemPrompt: options.systemPrompt ?? "You are a helpful assistant.",
+            model: model,
+            thinkingLevel: thinkingLevel
+        ),
         convertToLlm: { messages in
             convertToLlm(messages)
         },
-        getApiKey: { _ in API_KEY }
+        getApiKey: { _ in apiKey }
     ))
 
     let sessionManager = options.inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir, tempDir)
@@ -69,8 +99,8 @@ func createTestSession(options: TestSessionOptions = TestSessionOptions()) -> Te
     let authStorage = AuthStorage(URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path)
     let modelRegistry = ModelRegistry(authStorage, tempDir)
 
-    if let apiKey = API_KEY {
-        authStorage.setRuntimeApiKey("anthropic", apiKey)
+    if let apiKey {
+        authStorage.setRuntimeApiKey(model.provider, apiKey)
     }
 
     let session = AgentSession(config: AgentSessionConfig(

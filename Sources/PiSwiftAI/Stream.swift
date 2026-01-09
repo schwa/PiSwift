@@ -50,6 +50,12 @@ public func getEnvApiKey(provider: String) -> String? {
         return apiKey
     }
 
+    if provider == "opencode" {
+        let apiKey = env["OPENCODE_API_KEY"]
+        logApiKeyDebug("provider=opencode env apiKey=\(apiKeyInfo(apiKey))")
+        return apiKey
+    }
+
     return nil
 }
 
@@ -138,17 +144,23 @@ private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, ap
         .low: 2048,
         .medium: 8192,
         .high: 16384,
-        .xhigh: 16384,
     ]
 
-    let effort = options?.reasoning ?? .medium
+    let minOutputTokens = 1024
+    let effort = clampThinkingLevel(options?.reasoning) ?? .medium
+    var thinkingBudget = budgets[effort] ?? 1024
+    let cappedMaxTokens = min(maxTokens + thinkingBudget, model.maxTokens)
+    if cappedMaxTokens <= thinkingBudget {
+        thinkingBudget = max(0, cappedMaxTokens - minOutputTokens)
+    }
+
     return AnthropicOptions(
         temperature: options?.temperature,
-        maxTokens: maxTokens,
+        maxTokens: cappedMaxTokens,
         signal: options?.signal,
         apiKey: apiKey,
         thinkingEnabled: true,
-        thinkingBudgetTokens: budgets[effort] ?? 1024
+        thinkingBudgetTokens: thinkingBudget
     )
 }
 

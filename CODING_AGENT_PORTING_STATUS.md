@@ -57,3 +57,4 @@ This document tracks parity between the JS module in `pi-mono/packages/coding-ag
 - [x] Keybinding & slash command parity (`/quit` + `/exit`, configurable keybindings, robust shortcut matching, `$ARGUMENTS` for slash commands).
 - [x] Image handling parity (auto-resize toggle, read tool resize + dimension note, consistent placeholders, clipboard paste).
 - [ ] OAuth parity for `pi-mono/packages/ai` (see "Partial / stubs"): remaining GitHub Copilot + Google flows.
+- [ ] Gemini provider parity (Google Generative AI + Vertex support, including tests where applicable).
