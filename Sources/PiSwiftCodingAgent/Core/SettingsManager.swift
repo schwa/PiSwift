@@ -24,6 +24,28 @@ public struct RetrySettings: Sendable {
 }
 
 public struct SkillsSettings: Sendable {
+    public init(
+        enabled: Bool? = nil,
+        enableCodexUser: Bool? = nil,
+        enableClaudeUser: Bool? = nil,
+        enableClaudeProject: Bool? = nil,
+        enablePiUser: Bool? = nil,
+        enablePiProject: Bool? = nil,
+        customDirectories: [String]? = nil,
+        ignoredSkills: [String]? = nil,
+        includeSkills: [String]? = nil
+    ) {
+        self.enabled = enabled
+        self.enableCodexUser = enableCodexUser
+        self.enableClaudeUser = enableClaudeUser
+        self.enableClaudeProject = enableClaudeProject
+        self.enablePiUser = enablePiUser
+        self.enablePiProject = enablePiProject
+        self.customDirectories = customDirectories
+        self.ignoredSkills = ignoredSkills
+        self.includeSkills = includeSkills
+    }
+    
     public var enabled: Bool?
     public var enableCodexUser: Bool?
     public var enableClaudeUser: Bool?
