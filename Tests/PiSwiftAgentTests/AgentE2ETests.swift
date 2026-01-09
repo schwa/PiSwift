@@ -3,6 +3,17 @@ import Testing
 import PiSwiftAI
 import PiSwiftAgent
 
+enum AgentE2ETestError: LocalizedError, Sendable {
+    case invalidExpression
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidExpression:
+            return "Invalid expression"
+        }
+    }
+}
+
 private let RUN_ANTHROPIC_TESTS: Bool = {
     let env = ProcessInfo.processInfo.environment
     let flag = (env["PI_RUN_ANTHROPIC_TESTS"] ?? env["PI_RUN_LIVE_TESTS"])?.lowercased()
@@ -257,5 +268,5 @@ private func evaluateExpression(_ expression: String) throws -> Double {
     if let number = expr.expressionValue(with: nil, context: nil) as? NSNumber {
         return number.doubleValue
     }
-    throw NSError(domain: "AgentE2E", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid expression"])
+    throw AgentE2ETestError.invalidExpression
 }

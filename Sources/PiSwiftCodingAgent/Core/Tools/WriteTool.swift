@@ -2,6 +2,20 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum WriteToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingPath
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingPath:
+            return "Missing path"
+        }
+    }
+}
+
 public func createWriteTool(cwd: String) -> AgentTool {
     AgentTool(
         label: "write",
@@ -16,10 +30,10 @@ public func createWriteTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "WriteTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw WriteToolError.operationAborted
         }
         guard let path = params["path"]?.value as? String else {
-            throw NSError(domain: "WriteTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing path"])
+            throw WriteToolError.missingPath
         }
         let content = params["content"]?.value as? String ?? ""
 

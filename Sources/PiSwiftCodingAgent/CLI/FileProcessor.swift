@@ -1,6 +1,17 @@
 import Foundation
 import PiSwiftAI
 
+public enum FileProcessorError: LocalizedError, Sendable {
+    case fileNotFound(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .fileNotFound(let path):
+            return "File not found: \(path)"
+        }
+    }
+}
+
 public struct FileProcessingResult: Sendable {
     public var textContent: String
     public var imageAttachments: [ImageContent]
@@ -29,7 +40,7 @@ public func processFileArguments(_ fileArgs: [String], options: ProcessFileOptio
         let absolutePath = URL(fileURLWithPath: resolvedPath).standardizedFileURL.path
 
         guard FileManager.default.fileExists(atPath: absolutePath) else {
-            throw NSError(domain: "FileProcessor", code: 1, userInfo: [NSLocalizedDescriptionKey: "File not found: \(absolutePath)"])
+            throw FileProcessorError.fileNotFound(absolutePath)
         }
 
         let attrs = try FileManager.default.attributesOfItem(atPath: absolutePath)

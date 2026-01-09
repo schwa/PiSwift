@@ -1,6 +1,17 @@
 import Foundation
 import PiSwiftAI
 
+public enum AgentToolError: LocalizedError, Sendable {
+    case toolNotFound(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .toolNotFound(let name):
+            return "Tool \(name) not found"
+        }
+    }
+}
+
 public func agentLoop(
     prompts: [AgentMessage],
     context: AgentContext,
@@ -357,7 +368,7 @@ private func executeToolCalls(
         var isError = false
 
         do {
-            guard let tool else { throw NSError(domain: "AgentTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tool \(toolCall.name) not found"]) }
+            guard let tool else { throw AgentToolError.toolNotFound(toolCall.name) }
             let validatedArgs = try validateToolArguments(tool: tool.aiTool, toolCall: toolCall)
             result = try await tool.execute(toolCall.id, validatedArgs, signal) { partialResult in
                 stream.push(.toolExecutionUpdate(

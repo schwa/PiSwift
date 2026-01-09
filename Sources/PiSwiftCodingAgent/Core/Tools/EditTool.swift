@@ -2,6 +2,35 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum EditToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingPath
+    case fileNotFound(path: String)
+    case exactTextNotFoundDetailed(path: String)
+    case textNotUnique(path: String, occurrences: Int)
+    case exactTextNotFound(path: String)
+    case noChanges(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingPath:
+            return "Missing path"
+        case let .fileNotFound(path):
+            return "File not found: \(path)"
+        case let .exactTextNotFoundDetailed(path):
+            return "Could not find the exact text in \(path). The old text must match exactly including all whitespace and newlines."
+        case let .textNotUnique(path, occurrences):
+            return "Found \(occurrences) occurrences of the text in \(path). The text must be unique. Please provide more context to make it unique."
+        case let .exactTextNotFound(path):
+            return "Could not find the exact text in \(path)."
+        case let .noChanges(path):
+            return "No changes made to \(path). The replacement produced identical content."
+        }
+    }
+}
+
 public struct EditToolDetails: Sendable {
     public var diff: String
     public var firstChangedLine: Int?
@@ -22,10 +51,10 @@ public func createEditTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "EditTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw EditToolError.operationAborted
         }
         guard let path = params["path"]?.value as? String else {
-            throw NSError(domain: "EditTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing path"])
+            throw EditToolError.missingPath
         }
         let oldText = params["oldText"]?.value as? String ?? ""
         let newText = params["newText"]?.value as? String ?? ""
@@ -33,7 +62,7 @@ public func createEditTool(cwd: String) -> AgentTool {
         let absolutePath = resolveToCwd(path, cwd: cwd)
         guard FileManager.default.isReadableFile(atPath: absolutePath),
               FileManager.default.isWritableFile(atPath: absolutePath) else {
-            throw NSError(domain: "EditTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "File not found: \(path)"])
+            throw EditToolError.fileNotFound(path: path)
         }
 
         let rawContent = try String(contentsOfFile: absolutePath, encoding: .utf8)
@@ -47,33 +76,21 @@ public func createEditTool(cwd: String) -> AgentTool {
         let normalizedNewText = normalizeToLF(newText)
 
         guard normalizedContent.contains(normalizedOldText) else {
-            throw NSError(
-                domain: "EditTool",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Could not find the exact text in \(path). The old text must match exactly including all whitespace and newlines."]
-            )
+            throw EditToolError.exactTextNotFoundDetailed(path: path)
         }
 
         let occurrences = normalizedContent.components(separatedBy: normalizedOldText).count - 1
         if occurrences > 1 {
-            throw NSError(
-                domain: "EditTool",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Found \(occurrences) occurrences of the text in \(path). The text must be unique. Please provide more context to make it unique."]
-            )
+            throw EditToolError.textNotUnique(path: path, occurrences: occurrences)
         }
 
         guard let range = normalizedContent.range(of: normalizedOldText) else {
-            throw NSError(domain: "EditTool", code: 6, userInfo: [NSLocalizedDescriptionKey: "Could not find the exact text in \(path)."])
+            throw EditToolError.exactTextNotFound(path: path)
         }
 
         let normalizedNewContent = normalizedContent.replacingCharacters(in: range, with: normalizedNewText)
         if normalizedContent == normalizedNewContent {
-            throw NSError(
-                domain: "EditTool",
-                code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "No changes made to \(path). The replacement produced identical content."]
-            )
+            throw EditToolError.noChanges(path: path)
         }
 
         let finalContent = bom + restoreLineEndings(normalizedNewContent, originalEnding)

@@ -3,6 +3,29 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum BashToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingCommand
+    case commandTimedOut(seconds: Int)
+    case commandAborted
+    case commandFailed(exitCode: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingCommand:
+            return "Missing command"
+        case let .commandTimedOut(seconds):
+            return "Command timed out after \(seconds) seconds"
+        case .commandAborted:
+            return "Command aborted"
+        case let .commandFailed(exitCode):
+            return "Command exited with code \(exitCode)"
+        }
+    }
+}
+
 public struct BashToolDetails: Sendable {
     public var truncation: TruncationResult?
     public var fullOutputPath: String?
@@ -22,10 +45,10 @@ public func createBashTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "BashTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw BashToolError.operationAborted
         }
         guard let command = params["command"]?.value as? String else {
-            throw NSError(domain: "BashTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing command"])
+            throw BashToolError.missingCommand
         }
         let timeoutValue = doubleValue(params["timeout"])
 
@@ -33,13 +56,13 @@ public func createBashTool(cwd: String) -> AgentTool {
 
         if result.cancelled {
             if let timeoutValue {
-                throw NSError(domain: "BashTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "Command timed out after \(Int(timeoutValue)) seconds"])
+                throw BashToolError.commandTimedOut(seconds: Int(timeoutValue))
             }
-            throw NSError(domain: "BashTool", code: 4, userInfo: [NSLocalizedDescriptionKey: "Command aborted"])
+            throw BashToolError.commandAborted
         }
 
         if let exitCode = result.exitCode, exitCode != 0 {
-            throw NSError(domain: "BashTool", code: 5, userInfo: [NSLocalizedDescriptionKey: "Command exited with code \(exitCode)"])
+            throw BashToolError.commandFailed(exitCode: exitCode)
         }
 
         return AgentToolResult(content: [.text(TextContent(text: result.output.isEmpty ? "(no output)" : result.output))])

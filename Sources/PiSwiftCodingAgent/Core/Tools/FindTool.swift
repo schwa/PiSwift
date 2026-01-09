@@ -2,6 +2,23 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum FindToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingPattern
+    case pathNotFound(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingPattern:
+            return "Missing pattern"
+        case let .pathNotFound(path):
+            return "Path not found: \(path)"
+        }
+    }
+}
+
 public struct FindToolDetails: Sendable {
     public var truncation: TruncationResult?
     public var resultLimitReached: Int?
@@ -22,10 +39,10 @@ public func createFindTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "FindTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw FindToolError.operationAborted
         }
         guard let pattern = params["pattern"]?.value as? String else {
-            throw NSError(domain: "FindTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing pattern"])
+            throw FindToolError.missingPattern
         }
         let searchDir = params["path"]?.value as? String ?? "."
         let limit = intValue(params["limit"]) ?? 1000
@@ -35,7 +52,7 @@ public func createFindTool(cwd: String) -> AgentTool {
         let basePath = baseURL.path
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: searchPath, isDirectory: &isDir), isDir.boolValue else {
-            throw NSError(domain: "FindTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "Path not found: \(searchPath)"])
+            throw FindToolError.pathNotFound(path: searchPath)
         }
 
         let ignorePatterns = loadGitignorePatterns(root: searchPath)
@@ -47,7 +64,7 @@ public func createFindTool(cwd: String) -> AgentTool {
         if let enumerator = FileManager.default.enumerator(at: baseURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants], errorHandler: nil) {
             while let item = enumerator.nextObject() {
                 if signal?.isCancelled == true {
-                    throw NSError(domain: "FindTool", code: 4, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+                    throw FindToolError.operationAborted
                 }
                 guard let url = item as? URL else { continue }
                 let resolvedURL = url.resolvingSymlinksInPath()

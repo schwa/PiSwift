@@ -2,6 +2,23 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum LsToolError: LocalizedError, Sendable {
+    case operationAborted
+    case pathNotFound(path: String)
+    case notDirectory(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case let .pathNotFound(path):
+            return "Path not found: \(path)"
+        case let .notDirectory(path):
+            return "Not a directory: \(path)"
+        }
+    }
+}
+
 public struct LsToolDetails: Sendable {
     public var truncation: TruncationResult?
     public var entryLimitReached: Int?
@@ -21,7 +38,7 @@ public func createLsTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "LsTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw LsToolError.operationAborted
         }
         let path = params["path"]?.value as? String ?? "."
         let limit = intValue(params["limit"]) ?? 500
@@ -29,10 +46,10 @@ public func createLsTool(cwd: String) -> AgentTool {
         let dirPath = resolveToCwd(path, cwd: cwd)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dirPath, isDirectory: &isDir) else {
-            throw NSError(domain: "LsTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Path not found: \(dirPath)"])
+            throw LsToolError.pathNotFound(path: dirPath)
         }
         guard isDir.boolValue else {
-            throw NSError(domain: "LsTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "Not a directory: \(dirPath)"])
+            throw LsToolError.notDirectory(path: dirPath)
         }
 
         let entries = try FileManager.default.contentsOfDirectory(atPath: dirPath)

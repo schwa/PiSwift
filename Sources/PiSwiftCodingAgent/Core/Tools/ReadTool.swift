@@ -2,6 +2,26 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum ReadToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingPath
+    case fileNotFound(path: String)
+    case offsetBeyondEnd(offset: Int, totalLines: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingPath:
+            return "Missing path"
+        case let .fileNotFound(path):
+            return "File not found: \(path)"
+        case let .offsetBeyondEnd(offset, totalLines):
+            return "Offset \(offset) is beyond end of file (\(totalLines) lines total)"
+        }
+    }
+}
+
 public struct ReadToolDetails: Sendable {
     public var truncation: TruncationResult?
 }
@@ -30,10 +50,10 @@ public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> Agen
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "ReadTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw ReadToolError.operationAborted
         }
         guard let path = params["path"]?.value as? String else {
-            throw NSError(domain: "ReadTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing path"])
+            throw ReadToolError.missingPath
         }
         let offset = intValue(params["offset"])
         let limit = intValue(params["limit"])
@@ -41,7 +61,7 @@ public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> Agen
         let absolutePath = resolveReadPath(path, cwd: cwd)
 
         if !FileManager.default.isReadableFile(atPath: absolutePath) {
-            throw NSError(domain: "ReadTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "File not found: \(path)"])
+            throw ReadToolError.fileNotFound(path: path)
         }
 
         if let mimeType = detectSupportedImageMimeType(fromFile: absolutePath) {
@@ -77,11 +97,7 @@ public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> Agen
         let startLineDisplay = startLine + 1
 
         if startLine >= totalLines {
-            throw NSError(
-                domain: "ReadTool",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Offset \(offset ?? 0) is beyond end of file (\(totalLines) lines total)"]
-            )
+            throw ReadToolError.offsetBeyondEnd(offset: offset ?? 0, totalLines: totalLines)
         }
 
         let selectedContent: String

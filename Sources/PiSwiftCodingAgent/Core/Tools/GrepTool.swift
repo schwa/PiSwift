@@ -2,6 +2,23 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum GrepToolError: LocalizedError, Sendable {
+    case operationAborted
+    case missingPattern
+    case pathNotFound(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .operationAborted:
+            return "Operation aborted"
+        case .missingPattern:
+            return "Missing pattern"
+        case let .pathNotFound(path):
+            return "Path not found: \(path)"
+        }
+    }
+}
+
 public struct GrepToolDetails: Sendable {
     public var truncation: TruncationResult?
     public var matchLimitReached: Int?
@@ -27,10 +44,10 @@ public func createGrepTool(cwd: String) -> AgentTool {
         ]
     ) { _, params, signal, _ in
         if signal?.isCancelled == true {
-            throw NSError(domain: "GrepTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+            throw GrepToolError.operationAborted
         }
         guard let pattern = params["pattern"]?.value as? String else {
-            throw NSError(domain: "GrepTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing pattern"])
+            throw GrepToolError.missingPattern
         }
         let searchDir = params["path"]?.value as? String ?? "."
         let glob = params["glob"]?.value as? String
@@ -43,7 +60,7 @@ public func createGrepTool(cwd: String) -> AgentTool {
         let resolvedSearchPath = URL(fileURLWithPath: searchPath).resolvingSymlinksInPath().path
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: searchPath, isDirectory: &isDir) else {
-            throw NSError(domain: "GrepTool", code: 3, userInfo: [NSLocalizedDescriptionKey: "Path not found: \(searchPath)"])
+            throw GrepToolError.pathNotFound(path: searchPath)
         }
 
         let files: [URL]
@@ -67,7 +84,7 @@ public func createGrepTool(cwd: String) -> AgentTool {
         for file in files {
             if matchCount >= limit { break }
             if signal?.isCancelled == true {
-                throw NSError(domain: "GrepTool", code: 4, userInfo: [NSLocalizedDescriptionKey: "Operation aborted"])
+                throw GrepToolError.operationAborted
             }
             let content = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
             let normalized = content.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")

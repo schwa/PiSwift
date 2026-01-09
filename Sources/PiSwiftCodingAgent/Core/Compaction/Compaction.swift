@@ -2,6 +2,17 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum CompactionError: LocalizedError, Sendable {
+    case summarizationFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .summarizationFailed(let message):
+            return "Summarization failed: \(message)"
+        }
+    }
+}
+
 public struct CompactionDetails: Sendable {
     public var readFiles: [String]
     public var modifiedFiles: [String]
@@ -442,7 +453,7 @@ private func generateSummary(
     )
 
     if response.stopReason == .error {
-        throw NSError(domain: "Compaction", code: 1, userInfo: [NSLocalizedDescriptionKey: "Summarization failed: \(response.errorMessage ?? "Unknown error")"])
+        throw CompactionError.summarizationFailed(response.errorMessage ?? "Unknown error")
     }
 
     let text = response.content.compactMap { block -> String? in
@@ -493,7 +504,7 @@ private func generateTurnPrefixSummary(
     )
 
     if response.stopReason == .error {
-        throw NSError(domain: "Compaction", code: 2, userInfo: [NSLocalizedDescriptionKey: "Summarization failed: \(response.errorMessage ?? "Unknown error")"])
+        throw CompactionError.summarizationFailed(response.errorMessage ?? "Unknown error")
     }
 
     return response.content.compactMap { block -> String? in

@@ -2,6 +2,17 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum HookRunnerError: LocalizedError, Sendable {
+    case toolExecutionBlocked(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .toolExecutionBlocked(let reason):
+            return reason
+        }
+    }
+}
+
 public func wrapToolWithHooks(_ tool: AgentTool, _ hookRunner: HookRunner) -> AgentTool {
     AgentTool(
         label: tool.label,
@@ -13,7 +24,7 @@ public func wrapToolWithHooks(_ tool: AgentTool, _ hookRunner: HookRunner) -> Ag
             let callEvent = ToolCallEvent(toolName: tool.name, toolCallId: toolCallId, input: params)
             if let callResult = await hookRunner.emitToolCall(callEvent), callResult.block {
                 let reason = callResult.reason ?? "Tool execution was blocked by a hook"
-                throw NSError(domain: "HookRunner", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+                throw HookRunnerError.toolExecutionBlocked(reason)
             }
         }
 

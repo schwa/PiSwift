@@ -160,6 +160,44 @@ public struct ModelCycleResult: Sendable {
     }
 }
 
+public enum AgentSessionError: LocalizedError, Sendable {
+    case alreadyProcessingQueue
+    case noModelSelected(authPath: String)
+    case missingApiKeyForProvider(provider: String, authPath: String)
+    case alreadyProcessingContinue
+    case missingApiKeyForModel(provider: String, modelId: String)
+    case invalidEntryIdForBranching
+    case missingApiKey(provider: String)
+    case nothingToCompact
+    case compactionCancelled
+
+    public var errorDescription: String? {
+        switch self {
+        case .alreadyProcessingQueue:
+            return "Agent is already processing. Use steer() or followUp() to queue messages during streaming."
+        case .noModelSelected(let authPath):
+            return "No model selected.\n\n" +
+                "Use /login, set an API key environment variable, or create \(authPath)\n\n" +
+                "Then use /model to select a model."
+        case .missingApiKeyForProvider(let provider, let authPath):
+            return "No API key found for \(provider).\n\n" +
+                "Use /login, set an API key environment variable, or create \(authPath)"
+        case .alreadyProcessingContinue:
+            return "Agent is already processing. Wait for completion before continuing."
+        case .missingApiKeyForModel(let provider, let modelId):
+            return "No API key for \(provider)/\(modelId)"
+        case .invalidEntryIdForBranching:
+            return "Invalid entry ID for branching"
+        case .missingApiKey(let provider):
+            return "No API key for \(provider)"
+        case .nothingToCompact:
+            return "Nothing to compact (session too small)"
+        case .compactionCancelled:
+            return "Compaction cancelled"
+        }
+    }
+}
+
 public final class AgentSession: Sendable {
     public let agent: Agent
     public let sessionManager: SessionManager
@@ -489,30 +527,18 @@ public final class AgentSession: Sendable {
 
     public func prompt(_ text: String, options: PromptOptions? = nil) async throws {
         if isStreaming {
-            throw NSError(domain: "AgentSession", code: 1, userInfo: [NSLocalizedDescriptionKey: "Agent is already processing. Use steer() or followUp() to queue messages during streaming."])
+            throw AgentSessionError.alreadyProcessingQueue
         }
 
         if agent.state.model.id.isEmpty {
-            throw NSError(
-                domain: "AgentSession",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "No model selected.\n\n" +
-                    "Use /login, set an API key environment variable, or create \(getAuthPath())\n\n" +
-                    "Then use /model to select a model."
-                ]
-            )
+            throw AgentSessionError.noModelSelected(authPath: getAuthPath())
         }
 
         let apiKey = await modelRegistry.getApiKey(agent.state.model.provider)
         if apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            throw NSError(
-                domain: "AgentSession",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "No API key found for \(agent.state.model.provider).\n\n" +
-                    "Use /login, set an API key environment variable, or create \(getAuthPath())"
-                ]
+            throw AgentSessionError.missingApiKeyForProvider(
+                provider: agent.state.model.provider,
+                authPath: getAuthPath()
             )
         }
 
@@ -558,7 +584,7 @@ public final class AgentSession: Sendable {
 
     public func `continue`() async throws {
         if isStreaming {
-            throw NSError(domain: "AgentSession", code: 3, userInfo: [NSLocalizedDescriptionKey: "Agent is already processing. Wait for completion before continuing."])
+            throw AgentSessionError.alreadyProcessingContinue
         }
         try await agent.continue()
     }
@@ -750,7 +776,7 @@ public final class AgentSession: Sendable {
 
     public func setModel(_ model: Model) async throws {
         guard await modelRegistry.getApiKey(model.provider) != nil else {
-            throw NSError(domain: "AgentSession", code: 10, userInfo: [NSLocalizedDescriptionKey: "No API key for \(model.provider)/\(model.id)"])
+            throw AgentSessionError.missingApiKeyForModel(provider: model.provider, modelId: model.id)
         }
         agent.setModel(model)
         sessionManager.appendModelChange(model.provider, model.id)
@@ -773,7 +799,7 @@ public final class AgentSession: Sendable {
         let nextIndex = direction == .forward ? (currentIndex + 1) % count : (currentIndex - 1 + count) % count
         let next = scopedModels[nextIndex]
         guard await modelRegistry.getApiKey(next.model.provider) != nil else {
-            throw NSError(domain: "AgentSession", code: 11, userInfo: [NSLocalizedDescriptionKey: "No API key for \(next.model.provider)/\(next.model.id)"])
+            throw AgentSessionError.missingApiKeyForModel(provider: next.model.provider, modelId: next.model.id)
         }
         agent.setModel(next.model)
         sessionManager.appendModelChange(next.model.provider, next.model.id)
@@ -791,7 +817,7 @@ public final class AgentSession: Sendable {
         let nextIndex = direction == .forward ? (currentIndex + 1) % count : (currentIndex - 1 + count) % count
         let next = models[nextIndex]
         guard await modelRegistry.getApiKey(next.provider) != nil else {
-            throw NSError(domain: "AgentSession", code: 12, userInfo: [NSLocalizedDescriptionKey: "No API key for \(next.provider)/\(next.id)"])
+            throw AgentSessionError.missingApiKeyForModel(provider: next.provider, modelId: next.id)
         }
         agent.setModel(next)
         sessionManager.appendModelChange(next.provider, next.id)
@@ -921,7 +947,7 @@ public final class AgentSession: Sendable {
     public func branch(_ entryId: String) async throws -> (selectedText: String, cancelled: Bool) {
         let selectedEntry = sessionManager.getEntry(entryId)
         guard case .message(let msg) = selectedEntry, case .user(let user) = msg.message else {
-            throw NSError(domain: "AgentSession", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid entry ID for branching"])
+            throw AgentSessionError.invalidEntryIdForBranching
         }
 
         let selectedText = extractUserContentText(user.content)
@@ -1092,13 +1118,13 @@ public final class AgentSession: Sendable {
         let model = agent.state.model
         let apiKey = await modelRegistry.getApiKey(model.provider)
         if apiKey == nil {
-            throw NSError(domain: "AgentSession", code: 5, userInfo: [NSLocalizedDescriptionKey: "No API key for \(model.provider)"])
+            throw AgentSessionError.missingApiKey(provider: model.provider)
         }
 
         let pathEntries = sessionManager.getBranch()
         let settings = settingsManager.getCompactionSettings()
         guard let preparation = prepareCompaction(pathEntries, settings) else {
-            throw NSError(domain: "AgentSession", code: 6, userInfo: [NSLocalizedDescriptionKey: "Nothing to compact (session too small)"])
+            throw AgentSessionError.nothingToCompact
         }
 
         var hookCompaction: CompactionResult?
@@ -1106,7 +1132,7 @@ public final class AgentSession: Sendable {
         if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_compact") {
             if let result = await hookRunner.emit(SessionBeforeCompactEvent(preparation: preparation, branchEntries: pathEntries, customInstructions: customInstructions, signal: compactionAbort)) as? SessionBeforeCompactResult {
                 if result.cancel {
-                    throw NSError(domain: "AgentSession", code: 7, userInfo: [NSLocalizedDescriptionKey: "Compaction cancelled"])
+                    throw AgentSessionError.compactionCancelled
                 }
                 if let compaction = result.compaction {
                     hookCompaction = compaction
@@ -1127,11 +1153,11 @@ public final class AgentSession: Sendable {
                 signal: compactionAbort
             )
         } else {
-            throw NSError(domain: "AgentSession", code: 8, userInfo: [NSLocalizedDescriptionKey: "No API key for \(model.provider)"])
+            throw AgentSessionError.missingApiKey(provider: model.provider)
         }
 
         if compactionAbort?.isCancelled == true {
-            throw NSError(domain: "AgentSession", code: 9, userInfo: [NSLocalizedDescriptionKey: "Compaction cancelled"])
+            throw AgentSessionError.compactionCancelled
         }
 
         _ = sessionManager.appendCompaction(

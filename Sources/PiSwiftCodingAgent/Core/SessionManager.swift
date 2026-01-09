@@ -2,6 +2,17 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+enum SessionManagerError: LocalizedError, Sendable {
+    case entryNotFound(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .entryNotFound(let id):
+            return "Entry \(id) not found"
+        }
+    }
+}
+
 public let CURRENT_SESSION_VERSION = 2
 
 public struct SessionHeader: Sendable {
@@ -895,7 +906,7 @@ public final class SessionManager: Sendable {
     @discardableResult
     public func appendLabelChange(_ targetId: String, _ label: String?) throws -> String {
         guard byId[targetId] != nil else {
-            throw NSError(domain: "SessionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Entry \(targetId) not found"])
+            throw SessionManagerError.entryNotFound(targetId)
         }
         let entry = LabelEntry(id: generateId(existing: Set(byId.keys)), parentId: leafId, timestamp: isoNow(), targetId: targetId, label: label)
         appendEntry(.label(entry))

@@ -2,6 +2,26 @@ import Foundation
 import PiSwiftAI
 import PiSwiftAgent
 
+public enum ExportHtmlError: LocalizedError, Sendable {
+    case inMemorySession
+    case nothingToExport
+    case fileNotFound(String)
+    case missingTemplate(String, String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .inMemorySession:
+            return "Cannot export in-memory session to HTML"
+        case .nothingToExport:
+            return "Nothing to export yet - start a conversation first"
+        case .fileNotFound(let path):
+            return "File not found: \(path)"
+        case .missingTemplate(let name, let ext):
+            return "Missing export template file: \(name).\(ext)"
+        }
+    }
+}
+
 public struct ExportOptions: Sendable {
     public var outputPath: String?
     public var themeName: String?
@@ -18,10 +38,10 @@ public func exportSessionToHtml(
     _ options: ExportOptions? = nil
 ) throws -> String {
     guard let sessionFile = sessionManager.getSessionFile() else {
-        throw NSError(domain: "ExportHtml", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot export in-memory session to HTML"])
+        throw ExportHtmlError.inMemorySession
     }
     guard FileManager.default.fileExists(atPath: sessionFile) else {
-        throw NSError(domain: "ExportHtml", code: 2, userInfo: [NSLocalizedDescriptionKey: "Nothing to export yet - start a conversation first"])
+        throw ExportHtmlError.nothingToExport
     }
 
     let opts = options ?? ExportOptions()
@@ -41,7 +61,7 @@ public func exportSessionToHtml(
 
 public func exportFromFile(_ inputPath: String, _ options: ExportOptions? = nil) throws -> String {
     guard FileManager.default.fileExists(atPath: inputPath) else {
-        throw NSError(domain: "ExportHtml", code: 3, userInfo: [NSLocalizedDescriptionKey: "File not found: \(inputPath)"])
+        throw ExportHtmlError.fileNotFound(inputPath)
     }
 
     let opts = options ?? ExportOptions()
@@ -226,7 +246,7 @@ private func loadTemplateFile(named name: String, ext: String, subdir: String) t
     let path = relative.isEmpty ? baseDir : (baseDir as NSString).appendingPathComponent(relative)
     let filePath = (path as NSString).appendingPathComponent("\(name).\(ext)")
     guard FileManager.default.fileExists(atPath: filePath) else {
-        throw NSError(domain: "ExportHtml", code: 4, userInfo: [NSLocalizedDescriptionKey: "Missing export template file: \(name).\(ext)"])
+        throw ExportHtmlError.missingTemplate(name, ext)
     }
     return try String(contentsOfFile: filePath, encoding: .utf8)
 }
