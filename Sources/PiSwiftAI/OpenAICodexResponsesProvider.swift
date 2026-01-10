@@ -44,6 +44,11 @@ public func streamOpenAICodexResponses(
                 "stream": true,
             ]
 
+            if let sessionId = options.sessionId, !sessionId.isEmpty {
+                body["prompt_cache_key"] = sessionId
+                body["prompt_cache_retention"] = "in-memory"
+            }
+
             if let maxTokens = options.maxTokens {
                 body["max_output_tokens"] = maxTokens
             }

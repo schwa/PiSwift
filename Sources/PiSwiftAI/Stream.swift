@@ -81,7 +81,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
-            apiKey: apiKey
+            apiKey: apiKey,
+            sessionId: options?.sessionId
         )
         return streamOpenAIResponses(model: model, context: context, options: providerOptions)
     case .anthropicMessages:
@@ -139,12 +140,13 @@ private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, ap
         )
     }
 
-    let budgets: [ThinkingLevel: Int] = [
+    let defaultBudgets: ThinkingBudgets = [
         .minimal: 1024,
         .low: 2048,
         .medium: 8192,
         .high: 16384,
     ]
+    let budgets = defaultBudgets.merging(options?.thinkingBudgets ?? [:]) { _, new in new }
 
     let minOutputTokens = 1024
     let effort = clampThinkingLevel(options?.reasoning) ?? .medium
@@ -192,7 +194,8 @@ private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOption
         maxTokens: maxTokens,
         signal: options?.signal,
         apiKey: apiKey,
-        reasoningEffort: reasoningEffort
+        reasoningEffort: reasoningEffort,
+        sessionId: options?.sessionId
     )
 }
 

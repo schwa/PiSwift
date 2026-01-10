@@ -323,6 +323,7 @@ public final class AgentSession: Sendable {
         self.settingsManager = config.settingsManager
         self.modelRegistry = config.modelRegistry
         self.eventBus = config.eventBus ?? createEventBus()
+        self.agent.sessionId = config.sessionManager.getSessionId()
         self.state = LockedState(State(
             hookRunner: config.hookRunner,
             customToolsInternal: config.customTools ?? [],
@@ -738,6 +739,7 @@ public final class AgentSession: Sendable {
         await abort()
         agent.reset()
         _ = sessionManager.newSession(options)
+        agent.sessionId = sessionManager.getSessionId()
         steeringMessages.removeAll()
         followUpMessages.removeAll()
         pendingNextTurnMessages.removeAll()
@@ -762,6 +764,7 @@ public final class AgentSession: Sendable {
         followUpMessages.removeAll()
         pendingNextTurnMessages.removeAll()
         sessionManager.setSessionFile(sessionPath)
+        agent.sessionId = sessionManager.getSessionId()
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionSwitchEvent(reason: .resume, previousSessionFile: previousSession))
         }
@@ -968,6 +971,7 @@ public final class AgentSession: Sendable {
         } else if let parentId = msg.parentId {
             _ = sessionManager.createBranchedSession(parentId)
         }
+        agent.sessionId = sessionManager.getSessionId()
 
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionBranchEvent(previousSessionFile: previousSession))

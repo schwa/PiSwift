@@ -264,6 +264,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             },
             steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
             followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
+            sessionId: sessionManager.getSessionId(),
+            thinkingBudgets: settingsManager.getThinkingBudgets(),
             getApiKey: { provider in
                 return await authStorage.getApiKey(provider)
             }

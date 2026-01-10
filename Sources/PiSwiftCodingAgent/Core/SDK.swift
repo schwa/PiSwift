@@ -113,6 +113,7 @@ public struct SettingsSnapshot: Sendable {
     public var skills: SkillsSettings
     public var terminal: TerminalSettings
     public var enabledModels: [String]?
+    public var thinkingBudgets: ThinkingBudgets?
 
     public init(
         defaultProvider: String?,
@@ -130,7 +131,8 @@ public struct SettingsSnapshot: Sendable {
         customTools: [String],
         skills: SkillsSettings,
         terminal: TerminalSettings,
-        enabledModels: [String]?
+        enabledModels: [String]?,
+        thinkingBudgets: ThinkingBudgets?
     ) {
         self.defaultProvider = defaultProvider
         self.defaultModel = defaultModel
@@ -148,6 +150,7 @@ public struct SettingsSnapshot: Sendable {
         self.skills = skills
         self.terminal = terminal
         self.enabledModels = enabledModels
+        self.thinkingBudgets = thinkingBudgets
     }
 }
 
@@ -250,7 +253,8 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
         customTools: manager.getCustomTools(),
         skills: manager.getSkillsSettings(),
         terminal: manager.getTerminalSettings(),
-        enabledModels: manager.getEnabledModels()
+        enabledModels: manager.getEnabledModels(),
+        thinkingBudgets: manager.getThinkingBudgets()
     )
 }
 
@@ -516,6 +520,8 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         transformContext: transformContext,
         steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
         followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
+        sessionId: sessionManager.getSessionId(),
+        thinkingBudgets: settingsManager.getThinkingBudgets(),
         getApiKey: { provider in
             await modelRegistry.getApiKey(provider)
         }

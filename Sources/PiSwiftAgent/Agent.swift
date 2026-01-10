@@ -12,6 +12,8 @@ public struct AgentOptions: Sendable {
     public var steeringMode: AgentSteeringMode?
     public var followUpMode: AgentFollowUpMode?
     public var streamFn: StreamFn?
+    public var sessionId: String?
+    public var thinkingBudgets: ThinkingBudgets?
     public var getApiKey: (@Sendable (String) async -> String?)?
 
     public init(
@@ -21,6 +23,8 @@ public struct AgentOptions: Sendable {
         steeringMode: AgentSteeringMode? = nil,
         followUpMode: AgentFollowUpMode? = nil,
         streamFn: StreamFn? = nil,
+        sessionId: String? = nil,
+        thinkingBudgets: ThinkingBudgets? = nil,
         getApiKey: (@Sendable (String) async -> String?)? = nil
     ) {
         self.initialState = initialState
@@ -29,6 +33,8 @@ public struct AgentOptions: Sendable {
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
         self.streamFn = streamFn
+        self.sessionId = sessionId
+        self.thinkingBudgets = thinkingBudgets
         self.getApiKey = getApiKey
     }
 }
@@ -45,6 +51,8 @@ public final class Agent: Sendable {
         var steeringMode: AgentSteeringMode
         var followUpMode: AgentFollowUpMode
         var streamFn: StreamFn
+        var sessionId: String?
+        var thinkingBudgets: ThinkingBudgets?
         var getApiKey: (@Sendable (String) async -> String?)?
         var runningTask: Task<Void, Never>?
     }
@@ -101,6 +109,16 @@ public final class Agent: Sendable {
         set { stateBox.withLock { $0.streamFn = newValue } }
     }
 
+    public var sessionId: String? {
+        get { stateBox.withLock { $0.sessionId } }
+        set { stateBox.withLock { $0.sessionId = newValue } }
+    }
+
+    public var thinkingBudgets: ThinkingBudgets? {
+        get { stateBox.withLock { $0.thinkingBudgets } }
+        set { stateBox.withLock { $0.thinkingBudgets = newValue } }
+    }
+
     public var getApiKey: (@Sendable (String) async -> String?)? {
         get { stateBox.withLock { $0.getApiKey } }
         set { stateBox.withLock { $0.getApiKey = newValue } }
@@ -130,6 +148,8 @@ public final class Agent: Sendable {
             steeringMode: options.steeringMode ?? .oneAtATime,
             followUpMode: options.followUpMode ?? .oneAtATime,
             streamFn: stream,
+            sessionId: options.sessionId,
+            thinkingBudgets: options.thinkingBudgets,
             getApiKey: options.getApiKey,
             runningTask: nil
         ))
@@ -294,6 +314,8 @@ public final class Agent: Sendable {
         let config = AgentLoopConfig(
             model: model,
             reasoning: reasoning,
+            sessionId: sessionId,
+            thinkingBudgets: thinkingBudgets,
             convertToLlm: convertToLlm,
             transformContext: transformContext,
             getApiKey: getApiKey,

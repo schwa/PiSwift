@@ -65,6 +65,20 @@ public struct ImageSettings: Sendable {
     public var autoResize: Bool?
 }
 
+public struct ThinkingBudgetsSettings: Sendable {
+    public var minimal: Int?
+    public var low: Int?
+    public var medium: Int?
+    public var high: Int?
+
+    public init(minimal: Int? = nil, low: Int? = nil, medium: Int? = nil, high: Int? = nil) {
+        self.minimal = minimal
+        self.low = low
+        self.medium = medium
+        self.high = high
+    }
+}
+
 public struct Settings: Sendable {
     public var lastChangelogVersion: String?
     public var defaultProvider: String?
@@ -85,6 +99,7 @@ public struct Settings: Sendable {
     public var terminal: TerminalSettings?
     public var images: ImageSettings?
     public var enabledModels: [String]?
+    public var thinkingBudgets: ThinkingBudgetsSettings?
 
     public init() {}
 }
@@ -341,6 +356,16 @@ public final class SettingsManager: Sendable {
         save()
     }
 
+    public func getThinkingBudgets() -> ThinkingBudgets? {
+        guard let budgets = settings.thinkingBudgets else { return nil }
+        var result: ThinkingBudgets = [:]
+        if let minimal = budgets.minimal { result[.minimal] = minimal }
+        if let low = budgets.low { result[.low] = low }
+        if let medium = budgets.medium { result[.medium] = medium }
+        if let high = budgets.high { result[.high] = high }
+        return result.isEmpty ? nil : result
+    }
+
     private static func loadFromFile(_ path: String) -> Settings {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -419,6 +444,15 @@ public final class SettingsManager: Sendable {
             settings.images = ImageSettings(autoResize: images["autoResize"] as? Bool)
         }
 
+        if let budgets = json["thinkingBudgets"] as? [String: Any] {
+            settings.thinkingBudgets = ThinkingBudgetsSettings(
+                minimal: budgets["minimal"] as? Int,
+                low: budgets["low"] as? Int,
+                medium: budgets["medium"] as? Int,
+                high: budgets["high"] as? Int
+            )
+        }
+
         return settings
     }
 
@@ -481,6 +515,15 @@ public final class SettingsManager: Sendable {
             json["images"] = ["autoResize": images.autoResize as Any]
         }
 
+        if let budgets = globalSettings.thinkingBudgets {
+            json["thinkingBudgets"] = [
+                "minimal": budgets.minimal as Any,
+                "low": budgets.low as Any,
+                "medium": budgets.medium as Any,
+                "high": budgets.high as Any,
+            ]
+        }
+
         let dir = URL(fileURLWithPath: settingsPath).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -512,6 +555,7 @@ public final class SettingsManager: Sendable {
         if override.terminal != nil { result.terminal = override.terminal }
         if override.images != nil { result.images = override.images }
         if override.enabledModels != nil { result.enabledModels = override.enabledModels }
+        if override.thinkingBudgets != nil { result.thinkingBudgets = override.thinkingBudgets }
         return result
     }
 }

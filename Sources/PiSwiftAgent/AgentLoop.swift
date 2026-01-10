@@ -271,7 +271,9 @@ private func streamAssistantResponse(
             maxTokens: config.maxTokens,
             signal: signal,
             apiKey: resolvedApiKey,
-            reasoning: config.reasoning
+            reasoning: config.reasoning,
+            sessionId: config.sessionId,
+            thinkingBudgets: config.thinkingBudgets
         )
     )
 

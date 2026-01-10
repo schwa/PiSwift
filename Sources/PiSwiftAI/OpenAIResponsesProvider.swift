@@ -14,7 +14,8 @@ public func streamOpenAIResponses(
             signal: options.signal,
             apiKey: options.apiKey,
             reasoningEffort: options.reasoningEffort,
-            reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary)
+            reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary),
+            sessionId: options.sessionId
         )
         return streamOpenAICodexResponses(model: model, context: context, options: codexOptions)
     }

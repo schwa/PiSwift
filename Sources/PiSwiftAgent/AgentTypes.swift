@@ -156,6 +156,8 @@ public struct AgentLoopConfig: Sendable {
     public var maxTokens: Int?
     public var reasoning: ReasoningEffort?
     public var apiKey: String?
+    public var sessionId: String?
+    public var thinkingBudgets: ThinkingBudgets?
     public var convertToLlm: @Sendable ([AgentMessage]) async throws -> [Message]
     public var transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
     public var getApiKey: (@Sendable (String) async -> String?)?
@@ -168,6 +170,8 @@ public struct AgentLoopConfig: Sendable {
         maxTokens: Int? = nil,
         reasoning: ReasoningEffort? = nil,
         apiKey: String? = nil,
+        sessionId: String? = nil,
+        thinkingBudgets: ThinkingBudgets? = nil,
         convertToLlm: @escaping @Sendable ([AgentMessage]) async throws -> [Message],
         transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])? = nil,
         getApiKey: (@Sendable (String) async -> String?)? = nil,
@@ -179,6 +183,8 @@ public struct AgentLoopConfig: Sendable {
         self.maxTokens = maxTokens
         self.reasoning = reasoning
         self.apiKey = apiKey
+        self.sessionId = sessionId
+        self.thinkingBudgets = thinkingBudgets
         self.convertToLlm = convertToLlm
         self.transformContext = transformContext
         self.getApiKey = getApiKey
