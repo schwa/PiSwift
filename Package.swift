@@ -145,9 +145,6 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftCodingAgentCLI",
             ],
-            resources: [
-                .copy("fixtures")
-            ],
             swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
