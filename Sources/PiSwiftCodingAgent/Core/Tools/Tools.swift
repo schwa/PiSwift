@@ -11,6 +11,7 @@ public enum ToolName: String, CaseIterable, Sendable {
     case grep
     case find
     case ls
+    case subagent
 }
 
 #if canImport(UIKit)
@@ -50,14 +51,34 @@ public func createCodingTools(cwd: String) -> [Tool] {
 }
 
 #if canImport(UIKit)
-public func createCodingTools(cwd: String, options: ToolsOptions?) -> [Tool] {
-    [createReadTool(cwd: cwd, options: options?.read), createEditTool(cwd: cwd), createWriteTool(cwd: cwd)]
+public func createCodingTools(cwd: String, options: ToolsOptions?, subagentContext: SubagentToolContext?) -> [Tool] {
+    var tools: [Tool] = [
+        createReadTool(cwd: cwd, options: options?.read),
+        createEditTool(cwd: cwd),
+        createWriteTool(cwd: cwd),
+    ]
+    if let subagentContext {
+        tools.append(createSubagentTool(subagentContext))
+    }
+    return tools
 }
 #else
-public func createCodingTools(cwd: String, options: ToolsOptions?) -> [Tool] {
-    [createReadTool(cwd: cwd, options: options?.read), createBashTool(cwd: cwd), createEditTool(cwd: cwd), createWriteTool(cwd: cwd)]
+public func createCodingTools(cwd: String, options: ToolsOptions?, subagentContext: SubagentToolContext?) -> [Tool] {
+    var tools: [Tool] = [
+        createReadTool(cwd: cwd, options: options?.read),
+        createBashTool(cwd: cwd),
+        createEditTool(cwd: cwd),
+        createWriteTool(cwd: cwd),
+    ]
+    if let subagentContext {
+        tools.append(createSubagentTool(subagentContext))
+    }
+    return tools
 }
 #endif
+public func createCodingTools(cwd: String, options: ToolsOptions?) -> [Tool] {
+    createCodingTools(cwd: cwd, options: options, subagentContext: nil)
+}
 public func createReadOnlyTools(cwd: String) -> [Tool] {
     createReadOnlyTools(cwd: cwd, options: nil)
 }
@@ -70,7 +91,7 @@ public func createAllTools(cwd: String) -> [ToolName: Tool] {
     createAllTools(cwd: cwd, options: nil)
 }
 
-public func createAllTools(cwd: String, options: ToolsOptions?) -> [ToolName: Tool] {
+public func createAllTools(cwd: String, options: ToolsOptions?, subagentContext: SubagentToolContext?) -> [ToolName: Tool] {
 #if canImport(AppKit)
     let extra: [ToolName: Tool] = [.bash: createBashTool(cwd: cwd)]
 #else
@@ -84,8 +105,15 @@ public func createAllTools(cwd: String, options: ToolsOptions?) -> [ToolName: To
         .find: createFindTool(cwd: cwd),
         .ls: createLsTool(cwd: cwd),
     ]
+    if let subagentContext {
+        tools[.subagent] = createSubagentTool(subagentContext)
+    }
     for (k, v) in extra {
         tools[k] = v
     }
     return tools
+}
+
+public func createAllTools(cwd: String, options: ToolsOptions?) -> [ToolName: Tool] {
+    createAllTools(cwd: cwd, options: options, subagentContext: nil)
 }

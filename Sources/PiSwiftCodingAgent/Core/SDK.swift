@@ -38,6 +38,7 @@ public struct CreateAgentSessionOptions: Sendable {
     public var skills: [Skill]?
     public var contextFiles: [ContextFile]?
     public var slashCommands: [FileSlashCommand]?
+    public var promptTemplates: [PromptTemplate]?
     public var sessionManager: SessionManager?
     public var settingsManager: SettingsManager?
 
@@ -59,6 +60,7 @@ public struct CreateAgentSessionOptions: Sendable {
         skills: [Skill]? = nil,
         contextFiles: [ContextFile]? = nil,
         slashCommands: [FileSlashCommand]? = nil,
+        promptTemplates: [PromptTemplate]? = nil,
         sessionManager: SessionManager? = nil,
         settingsManager: SettingsManager? = nil
     ) {
@@ -79,6 +81,7 @@ public struct CreateAgentSessionOptions: Sendable {
         self.skills = skills
         self.contextFiles = contextFiles
         self.slashCommands = slashCommands
+        self.promptTemplates = promptTemplates
         self.sessionManager = sessionManager
         self.settingsManager = settingsManager
     }
@@ -160,6 +163,23 @@ private func writeStderr(_ message: String) {
     }
 }
 
+private let defaultModelPriority: [(KnownProvider, String)] = [
+    (.anthropic, "claude-sonnet-4-5"),
+    (.openai, "gpt-5.2"),
+    (.openaiCodex, "gpt-5.2-codex"),
+    (.opencode, "claude-opus-4-5"),
+]
+
+private func selectDefaultModel(available: [Model], registry: ModelRegistry) async -> Model? {
+    for (provider, modelId) in defaultModelPriority {
+        if let match = available.first(where: { $0.provider == provider.rawValue && $0.id == modelId }),
+           await registry.getApiKey(match.provider) != nil {
+            return match
+        }
+    }
+    return nil
+}
+
 public func discoverAuthStorage(agentDir: String = getAgentDir()) -> AuthStorage {
     AuthStorage((agentDir as NSString).appendingPathComponent("auth.json"))
 }
@@ -190,7 +210,10 @@ public func discoverCustomTools(_ eventBus: EventBus, cwd: String? = nil, agentD
     let resolvedCwd = cwd ?? FileManager.default.currentDirectoryPath
     let resolvedAgentDir = agentDir ?? getAgentDir()
 
-    let builtInToolNames = createAllTools(cwd: resolvedCwd).keys.map { $0.rawValue }
+    var builtInToolNames = createAllTools(cwd: resolvedCwd).keys.map { $0.rawValue }
+    if !builtInToolNames.contains("subagent") {
+        builtInToolNames.append("subagent")
+    }
     let result = discoverAndLoadCustomTools([], resolvedCwd, builtInToolNames, resolvedAgentDir, eventBus)
     for error in result.errors {
         writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
@@ -232,6 +255,21 @@ public func discoverSlashCommands(cwd: String? = nil, agentDir: String? = nil) -
     loadSlashCommands(LoadSlashCommandsOptions(
         cwd: cwd ?? FileManager.default.currentDirectoryPath,
         agentDir: agentDir ?? getAgentDir()
+    ))
+}
+
+public func discoverPromptTemplates(cwd: String? = nil, agentDir: String? = nil) -> [PromptTemplate] {
+    loadPromptTemplates(LoadPromptTemplatesOptions(
+        cwd: cwd ?? FileManager.default.currentDirectoryPath,
+        agentDir: agentDir ?? getAgentDir()
+    ))
+}
+
+public func discoverSubagents(cwd: String? = nil, agentDir: String? = nil, scope: SubagentScope? = nil) -> SubagentDiscoveryResult {
+    loadSubagents(LoadSubagentsOptions(
+        cwd: cwd ?? FileManager.default.currentDirectoryPath,
+        agentDir: agentDir ?? getAgentDir(),
+        scope: scope
     ))
 }
 
@@ -350,10 +388,14 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
 
     if model == nil {
         let available = await modelRegistry.getAvailable()
-        for candidate in available {
-            if await modelRegistry.getApiKey(candidate.provider) != nil {
-                model = candidate
-                break
+        if let preferred = await selectDefaultModel(available: available, registry: modelRegistry) {
+            model = preferred
+        } else {
+            for candidate in available {
+                if await modelRegistry.getApiKey(candidate.provider) != nil {
+                    model = candidate
+                    break
+                }
             }
         }
         time("findAvailableModel")
@@ -381,6 +423,17 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         thinkingLevel = .high
     }
 
+    let resolvedThinkingLevel = thinkingLevel ?? .off
+    let subagentContext = SubagentToolContext()
+    subagentContext.update(SubagentToolDependencies(
+        cwd: cwd,
+        agentDir: agentDir,
+        modelRegistry: modelRegistry,
+        settingsManager: settingsManager,
+        defaultModel: resolvedModel,
+        defaultThinkingLevel: resolvedThinkingLevel
+    ))
+
     let skills = options.skills ?? discoverSkills(cwd: cwd, agentDir: agentDir, settings: settingsManager.getSkillsSettings())
     time("discoverSkills")
 
@@ -388,7 +441,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     time("discoverContextFiles")
 
     let toolsOptions = ToolsOptions(read: ReadToolOptions(autoResizeImages: settingsManager.getAutoResizeImages()))
-    let builtInTools = options.tools ?? createCodingTools(cwd: cwd, options: toolsOptions)
+    let builtInTools = options.tools ?? createCodingTools(cwd: cwd, options: toolsOptions, subagentContext: subagentContext)
     time("createCodingTools")
 
     var customToolsResult: CustomToolsLoadResult
@@ -400,7 +453,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         customToolsResult = CustomToolsLoadResult(tools: loadedTools, errors: [])
     } else {
         let configuredPaths = settingsManager.getCustomTools() + (options.additionalCustomToolPaths ?? [])
-        let builtInToolNames = createAllTools(cwd: cwd, options: toolsOptions).keys.map { $0.rawValue }
+        let builtInToolNames = createAllTools(cwd: cwd, options: toolsOptions, subagentContext: subagentContext).keys.map { $0.rawValue }
         customToolsResult = discoverAndLoadCustomTools(configuredPaths, cwd, builtInToolNames, agentDir, eventBus)
         for error in customToolsResult.errors {
             writeStderr("Failed to load custom tool \"\(error.path)\": \(error.error)\n")
@@ -446,7 +499,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         )
     }
     let wrappedCustomTools = wrapCustomTools(customToolsResult.tools, getCustomToolContext)
-    let allBuiltInToolsMap = createAllTools(cwd: cwd, options: toolsOptions)
+    let allBuiltInToolsMap = createAllTools(cwd: cwd, options: toolsOptions, subagentContext: subagentContext)
     var toolRegistry: [String: AgentTool] = [:]
     for (name, tool) in allBuiltInToolsMap {
         toolRegistry[name.rawValue] = tool
@@ -497,6 +550,8 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
 
     let slashCommands = options.slashCommands ?? discoverSlashCommands(cwd: cwd, agentDir: agentDir)
     time("discoverSlashCommands")
+    let promptTemplates = options.promptTemplates ?? discoverPromptTemplates(cwd: cwd, agentDir: agentDir)
+    time("discoverPromptTemplates")
 
     let transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
     if let hookRunnerSnapshot = hookRunner {
@@ -542,6 +597,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         settingsManager: settingsManager,
         scopedModels: options.scopedModels,
         fileCommands: slashCommands,
+        promptTemplates: promptTemplates,
         hookRunner: hookRunner,
         customTools: customToolsResult.tools,
         modelRegistry: modelRegistry,

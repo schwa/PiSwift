@@ -15,6 +15,7 @@ public enum AppAction: String, CaseIterable, Sendable {
     case toggleThinking
     case externalEditor
     case followUp
+    case dequeue
 }
 
 public typealias KeybindingsConfig = [String: [KeyId]]
@@ -32,6 +33,7 @@ public let DEFAULT_APP_KEYBINDINGS: [AppAction: [KeyId]] = [
     .toggleThinking: [Key.ctrl("t")],
     .externalEditor: [Key.ctrl("g")],
     .followUp: [Key.alt("enter")],
+    .dequeue: [Key.alt("up")],
 ]
 
 public final class KeybindingsManager {

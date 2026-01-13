@@ -36,6 +36,7 @@ public struct AgentSessionConfig: Sendable {
     public var settingsManager: SettingsManager
     public var scopedModels: [ScopedModel]?
     public var fileCommands: [FileSlashCommand]?
+    public var promptTemplates: [PromptTemplate]?
     public var hookRunner: HookRunner?
     public var customTools: [LoadedCustomTool]?
     public var modelRegistry: ModelRegistry
@@ -50,6 +51,7 @@ public struct AgentSessionConfig: Sendable {
         settingsManager: SettingsManager,
         scopedModels: [ScopedModel]? = nil,
         fileCommands: [FileSlashCommand]? = nil,
+        promptTemplates: [PromptTemplate]? = nil,
         hookRunner: HookRunner? = nil,
         customTools: [LoadedCustomTool]? = nil,
         modelRegistry: ModelRegistry,
@@ -63,6 +65,7 @@ public struct AgentSessionConfig: Sendable {
         self.settingsManager = settingsManager
         self.scopedModels = scopedModels
         self.fileCommands = fileCommands
+        self.promptTemplates = promptTemplates
         self.hookRunner = hookRunner
         self.customTools = customTools
         self.modelRegistry = modelRegistry
@@ -75,10 +78,12 @@ public struct AgentSessionConfig: Sendable {
 
 public struct PromptOptions: Sendable {
     public var expandSlashCommands: Bool?
+    public var expandPromptTemplates: Bool?
     public var images: [ImageContent]?
 
-    public init(expandSlashCommands: Bool? = nil, images: [ImageContent]? = nil) {
+    public init(expandSlashCommands: Bool? = nil, expandPromptTemplates: Bool? = nil, images: [ImageContent]? = nil) {
         self.expandSlashCommands = expandSlashCommands
+        self.expandPromptTemplates = expandPromptTemplates
         self.images = images
     }
 }
@@ -211,6 +216,7 @@ public final class AgentSession: Sendable {
         var customToolsInternal: [LoadedCustomTool]
         var scopedModels: [ScopedModel]
         var fileCommands: [FileSlashCommand]
+        var promptTemplates: [PromptTemplate]
         var unsubscribeAgent: (@Sendable () -> Void)?
         var eventListeners: [UUID: @Sendable (AgentSessionEvent) -> Void]
         var steeringMessages: [String]
@@ -245,6 +251,15 @@ public final class AgentSession: Sendable {
     private var fileCommands: [FileSlashCommand] {
         get { state.withLock { $0.fileCommands } }
         set { state.withLock { $0.fileCommands = newValue } }
+    }
+
+    public var promptTemplates: [PromptTemplate] {
+        state.withLock { $0.promptTemplates }
+    }
+
+    private var promptTemplatesInternal: [PromptTemplate] {
+        get { state.withLock { $0.promptTemplates } }
+        set { state.withLock { $0.promptTemplates = newValue } }
     }
 
     private var unsubscribeAgent: (@Sendable () -> Void)? {
@@ -317,6 +332,17 @@ public final class AgentSession: Sendable {
         set { state.withLock { $0.rebuildSystemPrompt = newValue } }
     }
 
+    private func expandPromptText(_ text: String, expandSlashCommands: Bool = true, expandPromptTemplates: Bool = true) -> String {
+        var expanded = text
+        if expandPromptTemplates {
+            expanded = expandPromptTemplate(expanded, promptTemplatesInternal)
+        }
+        if expandSlashCommands {
+            expanded = expandSlashCommand(expanded, fileCommands)
+        }
+        return expanded
+    }
+
     public init(config: AgentSessionConfig) {
         self.agent = config.agent
         self.sessionManager = config.sessionManager
@@ -329,6 +355,7 @@ public final class AgentSession: Sendable {
             customToolsInternal: config.customTools ?? [],
             scopedModels: config.scopedModels ?? [],
             fileCommands: config.fileCommands ?? [],
+            promptTemplates: config.promptTemplates ?? [],
             unsubscribeAgent: nil,
             eventListeners: [:],
             steeringMessages: [],
@@ -543,12 +570,11 @@ public final class AgentSession: Sendable {
             )
         }
 
-        let expandedText: String
-        if options?.expandSlashCommands ?? true {
-            expandedText = expandSlashCommand(text, fileCommands)
-        } else {
-            expandedText = text
-        }
+        let expandedText = expandPromptText(
+            text,
+            expandSlashCommands: options?.expandSlashCommands ?? true,
+            expandPromptTemplates: options?.expandPromptTemplates ?? true
+        )
         var messages: [AgentMessage] = []
         if !pendingNextTurnMessages.isEmpty {
             for message in pendingNextTurnMessages {
@@ -591,13 +617,15 @@ public final class AgentSession: Sendable {
     }
 
     public func steer(_ text: String) {
-        steeringMessages.append(text)
-        agent.steer(buildUserMessage(text: text, images: nil))
+        let expandedText = expandPromptText(text)
+        steeringMessages.append(expandedText)
+        agent.steer(buildUserMessage(text: expandedText, images: nil))
     }
 
     public func followUp(_ text: String) {
-        followUpMessages.append(text)
-        agent.followUp(buildUserMessage(text: text, images: nil))
+        let expandedText = expandPromptText(text)
+        followUpMessages.append(expandedText)
+        agent.followUp(buildUserMessage(text: expandedText, images: nil))
     }
 
     public func sendHookMessage(_ message: HookMessageInput, options: HookSendMessageOptions? = nil) async {

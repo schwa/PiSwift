@@ -91,6 +91,14 @@ public func getCommandsDir() -> String {
     (getAgentDir() as NSString).appendingPathComponent("commands")
 }
 
+public func getPromptsDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("prompts")
+}
+
+public func getAgentsDir() -> String {
+    (getAgentDir() as NSString).appendingPathComponent("agents")
+}
+
 public func getSessionsDir() -> String {
     (getAgentDir() as NSString).appendingPathComponent("sessions")
 }

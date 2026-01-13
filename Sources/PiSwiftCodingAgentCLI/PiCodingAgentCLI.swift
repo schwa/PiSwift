@@ -296,12 +296,14 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let fileCommands = loadSlashCommands(LoadSlashCommandsOptions(cwd: cwd, agentDir: getAgentDir()))
+        let promptTemplates = loadPromptTemplates(LoadPromptTemplatesOptions(cwd: cwd, agentDir: getAgentDir()))
         let createdSession = AgentSession(config: AgentSessionConfig(
             agent: createdAgent,
             sessionManager: sessionManager,
             settingsManager: settingsManager,
             scopedModels: scopedModels,
             fileCommands: fileCommands,
+            promptTemplates: promptTemplates,
             hookRunner: hookRunner,
             customTools: customToolsResult.tools,
             modelRegistry: modelRegistry,

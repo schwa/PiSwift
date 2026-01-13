@@ -283,6 +283,7 @@ public final class InteractiveMode {
             SlashCommand(name: "theme", description: "Select theme"),
             SlashCommand(name: "login", description: "Login with OAuth provider"),
             SlashCommand(name: "logout", description: "Logout from OAuth provider"),
+            SlashCommand(name: "templates", description: "List prompt templates"),
             SlashCommand(name: "export", description: "Export session to HTML"),
             SlashCommand(name: "copy", description: "Copy last assistant message"),
             SlashCommand(name: "session", description: "Show session info"),
@@ -299,7 +300,10 @@ public final class InteractiveMode {
         ]
 
         baseSlashCommands = slashCommands
-        setAutocompleteCommands(slashCommands)
+        let templateCommands = session.promptTemplates.map { template in
+            SlashCommand(name: template.name, description: template.description)
+        }
+        setAutocompleteCommands(slashCommands + templateCommands)
 
         tui.addChild(Spacer(1))
         tui.addChild(Text(header, paddingX: 1, paddingY: 0))
@@ -515,10 +519,13 @@ public final class InteractiveMode {
 
         _ = await hookRunner.emit(SessionStartEvent())
 
+        let templateCommands = session.promptTemplates.map { template in
+            SlashCommand(name: template.name, description: template.description)
+        }
         let hookCommands = hookRunner.getRegisteredCommands().map { command in
             SlashCommand(name: command.name, description: command.description ?? "(hook command)")
         }
-        setAutocompleteCommands(baseSlashCommands + hookCommands)
+        setAutocompleteCommands(baseSlashCommands + templateCommands + hookCommands)
 
         let hookPaths = hookRunner.getHookPaths()
         if !hookPaths.isEmpty {
@@ -876,6 +883,11 @@ public final class InteractiveMode {
                 await self?.handleAltEnter()
             }
         }
+        editor.onAction(.dequeue) { [weak self] in
+            Task { @MainActor in
+                self?.handleDequeue()
+            }
+        }
 
         editor.onChange = { [weak self] text in
             guard let self else { return }
@@ -1212,6 +1224,7 @@ public final class InteractiveMode {
         let toggleThinking = formatKeyDisplay(keybindings.getDisplayString(.toggleThinking))
         let externalEditor = formatKeyDisplay(keybindings.getDisplayString(.externalEditor))
         let followUp = formatKeyDisplay(keybindings.getDisplayString(.followUp))
+        let dequeue = formatKeyDisplay(keybindings.getDisplayString(.dequeue))
         let instructions = [
             theme.fg(.dim, interrupt) + theme.fg(.muted, " to interrupt"),
             theme.fg(.dim, clear) + theme.fg(.muted, " to clear"),
@@ -1228,6 +1241,7 @@ public final class InteractiveMode {
             theme.fg(.dim, "/") + theme.fg(.muted, " for commands"),
             theme.fg(.dim, "!") + theme.fg(.muted, " to run bash"),
             theme.fg(.dim, followUp) + theme.fg(.muted, " to queue follow-up"),
+            theme.fg(.dim, dequeue) + theme.fg(.muted, " to restore queued messages"),
             theme.fg(.dim, "ctrl+v") + theme.fg(.muted, " to paste image"),
         ].joined(separator: "\n")
         return "\(logo)\n\(instructions)"
@@ -1315,19 +1329,7 @@ public final class InteractiveMode {
     @MainActor
     private func handleEscape() {
         if loadingAnimation != nil {
-            if let session {
-                let queued = session.clearQueue()
-                let allQueued = queued.steering + queued.followUp
-                if let editor {
-                    let queuedText = allQueued.joined(separator: "\n\n")
-                    let combined = [queuedText, editor.getText()].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n\n")
-                    editor.setText(combined)
-                }
-                pendingSteeringMessages = queued.steering
-                pendingFollowUpMessages = queued.followUp
-                updatePendingMessagesDisplay()
-                Task { await session.abort() }
-            }
+            _ = restoreQueuedMessagesToEditor(abort: true)
             return
         }
 
@@ -1428,6 +1430,47 @@ public final class InteractiveMode {
         } else {
             await handleEditorSubmit(text)
         }
+    }
+
+    @MainActor
+    private func handleDequeue() {
+        let restored = restoreQueuedMessagesToEditor()
+        if restored == 0 {
+            showStatus("No queued messages to restore")
+        } else {
+            let suffix = restored == 1 ? "" : "s"
+            showStatus("Restored \(restored) queued message\(suffix) to editor")
+        }
+    }
+
+    @MainActor
+    private func restoreQueuedMessagesToEditor(abort: Bool = false, currentText: String? = nil) -> Int {
+        guard let session else { return 0 }
+        let queued = session.clearQueue()
+        let allQueued = queued.steering + queued.followUp
+
+        pendingSteeringMessages.removeAll()
+        pendingFollowUpMessages.removeAll()
+
+        if allQueued.isEmpty {
+            updatePendingMessagesDisplay()
+            if abort {
+                Task { await session.abort() }
+            }
+            return 0
+        }
+
+        let queuedText = allQueued.joined(separator: "\n\n")
+        let existingText = currentText ?? editor?.getText() ?? ""
+        let combined = [queuedText, existingText]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n\n")
+        editor?.setText(combined)
+        updatePendingMessagesDisplay()
+        if abort {
+            Task { await session.abort() }
+        }
+        return allQueued.count
     }
 
     private enum ModelCycleDirection {
@@ -1635,6 +1678,11 @@ public final class InteractiveMode {
         }
         if trimmed == "/logout" {
             showOAuthSelector(.logout)
+            editor.setText("")
+            return
+        }
+        if trimmed == "/templates" || trimmed == "/template" {
+            handleTemplatesCommand()
             editor.setText("")
             return
         }
@@ -2351,6 +2399,7 @@ public final class InteractiveMode {
         let toggleThinking = getAppKeyDisplay(.toggleThinking)
         let externalEditor = getAppKeyDisplay(.externalEditor)
         let followUp = getAppKeyDisplay(.followUp)
+        let dequeue = getAppKeyDisplay(.dequeue)
 
         var hotkeys = """
 **Navigation**
@@ -2384,6 +2433,7 @@ public final class InteractiveMode {
 | `\(toggleThinking)` | Toggle thinking block visibility |
 | `\(externalEditor)` | Edit message in external editor |
 | `\(followUp)` | Queue follow-up message |
+| `\(dequeue)` | Restore queued messages |
 | `Ctrl+V` | Paste image from clipboard |
 | `/` | Slash commands |
 | `!` | Run bash command |
@@ -2411,6 +2461,28 @@ public final class InteractiveMode {
         chatContainer.addChild(Spacer(1))
         chatContainer.addChild(Markdown(hotkeys.trimmingCharacters(in: .whitespacesAndNewlines), paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
         chatContainer.addChild(DynamicBorder())
+        scheduleRender()
+    }
+
+    @MainActor
+    private func handleTemplatesCommand() {
+        guard let session else { return }
+        let templates = session.promptTemplates.sorted { $0.name.lowercased() < $1.name.lowercased() }
+
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Text(theme.bold(theme.fg(.accent, "Prompt Templates")), paddingX: 1, paddingY: 0))
+        chatContainer.addChild(Spacer(1))
+
+        if templates.isEmpty {
+            chatContainer.addChild(Text(theme.fg(.dim, "No prompt templates found"), paddingX: 1, paddingY: 0))
+            scheduleRender()
+            return
+        }
+
+        let list = templates
+            .map { "- /\($0.name) - \($0.description)" }
+            .joined(separator: "\n")
+        chatContainer.addChild(Markdown(list, paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
         scheduleRender()
     }
 

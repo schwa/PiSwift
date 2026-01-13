@@ -28,6 +28,7 @@ private let toolDescriptions: [ToolName: String] = [
     .grep: "Search file contents for patterns (respects .gitignore)",
     .find: "Find files by glob pattern (respects .gitignore)",
     .ls: "List directory contents",
+    .subagent: "Delegate tasks to specialized subagents with isolated context",
 ]
 
 public func resolvePromptInput(_ input: String?, _ description: String) -> String? {
