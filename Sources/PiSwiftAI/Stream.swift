@@ -28,6 +28,14 @@ public func getEnvApiKey(provider: KnownProvider) -> String? {
 public func getEnvApiKey(provider: String) -> String? {
     let env = ProcessInfo.processInfo.environment
 
+    if provider == "amazon-bedrock" {
+        if env["AWS_PROFILE"] != nil ||
+            (env["AWS_ACCESS_KEY_ID"] != nil && env["AWS_SECRET_ACCESS_KEY"] != nil) ||
+            env["AWS_BEARER_TOKEN_BEDROCK"] != nil {
+            return "<authenticated>"
+        }
+    }
+
     if provider == "anthropic" {
         let oauth = env["ANTHROPIC_OAUTH_TOKEN"]
         let apiKey = env["ANTHROPIC_API_KEY"]
@@ -56,10 +64,37 @@ public func getEnvApiKey(provider: String) -> String? {
         return apiKey
     }
 
+    if provider == "vercel-ai-gateway" {
+        let apiKey = env["AI_GATEWAY_API_KEY"]
+        logApiKeyDebug("provider=vercel-ai-gateway env apiKey=\(apiKeyInfo(apiKey))")
+        return apiKey
+    }
+
+    if provider == "minimax" {
+        let apiKey = env["MINIMAX_API_KEY"]
+        logApiKeyDebug("provider=minimax env apiKey=\(apiKeyInfo(apiKey))")
+        return apiKey
+    }
+
+    if provider == "zai" {
+        let apiKey = env["ZAI_API_KEY"]
+        logApiKeyDebug("provider=zai env apiKey=\(apiKeyInfo(apiKey))")
+        return apiKey
+    }
+
     return nil
 }
 
 public func stream(model: Model, context: Context, options: StreamOptions? = nil) throws -> AssistantMessageEventStream {
+    if model.api == .bedrockConverseStream {
+        let providerOptions = BedrockOptions(
+            temperature: options?.temperature,
+            maxTokens: options?.maxTokens,
+            signal: options?.signal
+        )
+        return streamBedrock(model: model, context: context, options: providerOptions)
+    }
+
     let apiKey = options?.apiKey ?? getEnvApiKey(provider: model.provider)
     guard let apiKey else {
         throw StreamError.missingApiKey(model.provider)
@@ -102,6 +137,11 @@ public func complete(model: Model, context: Context, options: StreamOptions? = n
 }
 
 public func streamSimple(model: Model, context: Context, options: SimpleStreamOptions? = nil) throws -> AssistantMessageEventStream {
+    if model.api == .bedrockConverseStream {
+        let providerOptions = mapBedrockOptions(model: model, options: options)
+        return streamBedrock(model: model, context: context, options: providerOptions)
+    }
+
     let apiKey = options?.apiKey ?? getEnvApiKey(provider: model.provider)
     guard let apiKey else {
         throw StreamError.missingApiKey(model.provider)
@@ -196,6 +236,18 @@ private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOption
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId
+    )
+}
+
+private func mapBedrockOptions(model: Model, options: SimpleStreamOptions?) -> BedrockOptions {
+    let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
+    let reasoning = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
+    return BedrockOptions(
+        temperature: options?.temperature,
+        maxTokens: maxTokens,
+        signal: options?.signal,
+        reasoning: reasoning,
+        thinkingBudgets: options?.thinkingBudgets
     )
 }
 

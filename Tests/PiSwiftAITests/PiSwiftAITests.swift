@@ -346,3 +346,36 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(!response.content.isEmpty)
     #expect(response.stopReason != .error)
 }
+
+@Test func minimaxSmoke() async throws {
+    guard ProcessInfo.processInfo.environment["MINIMAX_API_KEY"] != nil else {
+        return
+    }
+    let model = getModel(provider: .minimax, modelId: "MiniMax-M2.1")
+    let context = Context(messages: [.user(UserMessage(content: .text("Reply with hi.")))])
+    let response = try await complete(model: model, context: context)
+    #expect(!response.content.isEmpty)
+    #expect(response.stopReason != .error)
+}
+
+@Test func vercelAiGatewaySmoke() async throws {
+    guard ProcessInfo.processInfo.environment["AI_GATEWAY_API_KEY"] != nil else {
+        return
+    }
+    let model = getModel(provider: .vercelAiGateway, modelId: "google/gemini-2.5-flash")
+    let context = Context(messages: [.user(UserMessage(content: .text("Reply with hi.")))])
+    let response = try await complete(model: model, context: context)
+    #expect(!response.content.isEmpty)
+    #expect(response.stopReason != .error)
+}
+
+@Test func zaiSmoke() async throws {
+    guard ProcessInfo.processInfo.environment["ZAI_API_KEY"] != nil else {
+        return
+    }
+    let model = getModel(provider: .zai, modelId: "glm-4.5-air")
+    let context = Context(messages: [.user(UserMessage(content: .text("Reply with hi.")))])
+    let response = try await complete(model: model, context: context)
+    #expect(!response.content.isEmpty)
+    #expect(response.stopReason != .error)
+}

@@ -117,6 +117,7 @@ public struct SettingsSnapshot: Sendable {
     public var terminal: TerminalSettings
     public var images: ImageSettings
     public var enabledModels: [String]?
+    public var doubleEscapeAction: String
     public var thinkingBudgets: ThinkingBudgets?
 
     public init(
@@ -137,6 +138,7 @@ public struct SettingsSnapshot: Sendable {
         terminal: TerminalSettings,
         images: ImageSettings,
         enabledModels: [String]?,
+        doubleEscapeAction: String,
         thinkingBudgets: ThinkingBudgets?
     ) {
         self.defaultProvider = defaultProvider
@@ -156,6 +158,7 @@ public struct SettingsSnapshot: Sendable {
         self.terminal = terminal
         self.images = images
         self.enabledModels = enabledModels
+        self.doubleEscapeAction = doubleEscapeAction
         self.thinkingBudgets = thinkingBudgets
     }
 }
@@ -296,6 +299,7 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
         terminal: manager.getTerminalSettings(),
         images: ImageSettings(autoResize: manager.getAutoResizeImages(), blockImages: manager.getBlockImages()),
         enabledModels: manager.getEnabledModels(),
+        doubleEscapeAction: manager.getDoubleEscapeAction(),
         thinkingBudgets: manager.getThinkingBudgets()
     )
 }

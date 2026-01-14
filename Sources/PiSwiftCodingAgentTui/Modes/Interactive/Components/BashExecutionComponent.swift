@@ -112,7 +112,11 @@ public final class BashExecutionComponent: Container {
 
         var statusParts: [String] = []
         if hiddenLineCount > 0 {
-            statusParts.append(theme.fg(.dim, "... \(hiddenLineCount) more lines (ctrl+o to expand)"))
+            if expanded {
+                statusParts.append(theme.fg(.dim, "(ctrl+o to collapse)"))
+            } else {
+                statusParts.append(theme.fg(.dim, "... \(hiddenLineCount) more lines (ctrl+o to expand)"))
+            }
         }
 
         if status == "cancelled" {

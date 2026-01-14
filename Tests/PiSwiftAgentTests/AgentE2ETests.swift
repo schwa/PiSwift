@@ -20,6 +20,13 @@ private let RUN_ANTHROPIC_TESTS: Bool = {
     return flag == "1" || flag == "true" || flag == "yes"
 }()
 
+private func hasBedrockCredentials() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    return env["AWS_PROFILE"] != nil ||
+        (env["AWS_ACCESS_KEY_ID"] != nil && env["AWS_SECRET_ACCESS_KEY"] != nil) ||
+        env["AWS_BEARER_TOKEN_BEDROCK"] != nil
+}
+
 @Test func openAIE2E() async throws {
     guard ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil else {
         return
@@ -37,6 +44,20 @@ private let RUN_ANTHROPIC_TESTS: Bool = {
         return
     }
     let model = getModel(provider: .anthropic, modelId: "claude-3-5-haiku-20241022")
+    try await basicPrompt(model: model)
+    try await toolExecution(model: model)
+    try await abortExecution(model: model)
+    try await stateUpdates(model: model)
+    try await multiTurnConversation(model: model)
+}
+
+@Test func bedrockE2E() async throws {
+    guard hasBedrockCredentials() else {
+        return
+    }
+    guard let model = getModel(provider: "amazon-bedrock", modelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0") else {
+        return
+    }
     try await basicPrompt(model: model)
     try await toolExecution(model: model)
     try await abortExecution(model: model)

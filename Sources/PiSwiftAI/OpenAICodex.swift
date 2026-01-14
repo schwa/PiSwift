@@ -29,7 +29,7 @@ func buildOpenAICodexHeaders(
 
     var headers = baseHeaders ?? [:]
     headers["OpenAI-Beta"] = "responses=experimental"
-    headers["originator"] = "codex_cli_rs"
+    headers["originator"] = "pi"
     headers["chatgpt-account-id"] = accountId
     return headers
 }

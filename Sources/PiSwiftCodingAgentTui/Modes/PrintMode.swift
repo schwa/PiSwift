@@ -14,6 +14,10 @@ public func runPrintMode(
 ) async throws {
     let outputJson = mode == .json
 
+    if outputJson, let header = session.sessionManager.getHeader() {
+        writeJsonLine(encodeSessionHeader(header))
+    }
+
     _ = session.subscribe { event in
         guard outputJson else { return }
         let payload = encodeSessionEvent(event)
@@ -31,11 +35,17 @@ public func runPrintMode(
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            setSessionNameHandler: { [weak session] name in
+                _ = session?.sessionManager.appendSessionInfo(name)
+            },
+            getSessionNameHandler: { [weak session] in
+                session?.sessionManager.getSessionName()
+            },
             getActiveToolsHandler: { [weak session] in
                 session?.getActiveToolNames() ?? []
             },
             getAllToolsHandler: { [weak session] in
-                session?.getAllToolNames() ?? []
+                session?.getAllTools() ?? []
             },
             setActiveToolsHandler: { [weak session] toolNames in
                 session?.setActiveToolsByName(toolNames)
@@ -127,4 +137,20 @@ private func flushStdout() {
 
 private func shouldUseAnsiOutput() -> Bool {
     isatty(STDOUT_FILENO) != 0
+}
+
+private func encodeSessionHeader(_ header: SessionHeader) -> [String: Any] {
+    var dict: [String: Any] = [
+        "type": header.type,
+        "id": header.id,
+        "timestamp": header.timestamp,
+        "cwd": header.cwd,
+    ]
+    if let version = header.version {
+        dict["version"] = version
+    }
+    if let parent = header.parentSession {
+        dict["parentSession"] = parent
+    }
+    return dict
 }

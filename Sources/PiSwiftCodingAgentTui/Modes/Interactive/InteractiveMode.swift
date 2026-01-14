@@ -25,6 +25,27 @@ private final class TuiRenderAdapter: RenderRequesting {
 }
 
 @MainActor
+private final class TuiOverlayHandle: HookOverlayHandle {
+    private let handle: OverlayHandle
+
+    init(_ handle: OverlayHandle) {
+        self.handle = handle
+    }
+
+    func hide() {
+        handle.hide()
+    }
+
+    func setHidden(_ hidden: Bool) {
+        handle.setHidden(hidden)
+    }
+
+    func isHidden() -> Bool {
+        handle.isHidden()
+    }
+}
+
+@MainActor
 private final class NullRenderRequester: RenderRequesting {
     func requestRender() {}
 }
@@ -36,10 +57,11 @@ private struct InteractiveHookUIContext: HookUIContext {
     private let inputHandler: (String, String?) async -> String?
     private let notifyHandler: (String, HookNotificationType?) -> Void
     private let setStatusHandler: (String, String?) -> Void
+    private let setWorkingMessageHandler: (String?) -> Void
     private let setWidgetHandler: (String, HookWidgetContent?) -> Void
     private let setFooterHandler: (HookFooterFactory?) -> Void
     private let setTitleHandler: (String) -> Void
-    private let customHandler: (@escaping HookCustomFactory) async -> HookCustomResult?
+    private let customHandler: (@escaping HookCustomFactory, HookCustomOptions?) async -> HookCustomResult?
     private let setEditorTextHandler: (String) -> Void
     private let getEditorTextHandler: () -> String
     private let editorHandler: (String, String?) async -> String?
@@ -55,10 +77,11 @@ private struct InteractiveHookUIContext: HookUIContext {
         input: @escaping (String, String?) async -> String?,
         notify: @escaping (String, HookNotificationType?) -> Void,
         setStatus: @escaping (String, String?) -> Void,
+        setWorkingMessage: @escaping (String?) -> Void,
         setWidget: @escaping (String, HookWidgetContent?) -> Void,
         setFooter: @escaping (HookFooterFactory?) -> Void,
         setTitle: @escaping (String) -> Void,
-        custom: @escaping (@escaping HookCustomFactory) async -> HookCustomResult?,
+        custom: @escaping (@escaping HookCustomFactory, HookCustomOptions?) async -> HookCustomResult?,
         setEditorText: @escaping (String) -> Void,
         getEditorText: @escaping () -> String,
         editor: @escaping (String, String?) async -> String?,
@@ -73,6 +96,7 @@ private struct InteractiveHookUIContext: HookUIContext {
         self.inputHandler = input
         self.notifyHandler = notify
         self.setStatusHandler = setStatus
+        self.setWorkingMessageHandler = setWorkingMessage
         self.setWidgetHandler = setWidget
         self.setFooterHandler = setFooter
         self.setTitleHandler = setTitle
@@ -107,6 +131,10 @@ private struct InteractiveHookUIContext: HookUIContext {
         setStatusHandler(key, text)
     }
 
+    func setWorkingMessage(_ message: String?) {
+        setWorkingMessageHandler(message)
+    }
+
     func setWidget(_ key: String, _ content: HookWidgetContent?) {
         setWidgetHandler(key, content)
     }
@@ -119,8 +147,8 @@ private struct InteractiveHookUIContext: HookUIContext {
         setTitleHandler(title)
     }
 
-    func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
-        await customHandler(factory)
+    func custom(_ factory: @escaping HookCustomFactory, options: HookCustomOptions?) async -> HookCustomResult? {
+        await customHandler(factory, options)
     }
 
     func setEditorText(_ text: String) {
@@ -180,12 +208,16 @@ public final class InteractiveMode {
     private var footer: FooterComponent?
     private var footerContainer: Container?
     private var customFooter: Component?
+    private var footerDataProvider: FooterDataProvider?
+    private var footerBranchUnsubscribe: (() -> Void)?
     private var hookSelector: HookSelectorComponent?
     private var hookInput: HookInputComponent?
     private var hookEditor: HookEditorComponent?
     private var hookWidgets: [String: Component] = [:]
     private var hookWidgetOrder: [String] = []
     private var baseSlashCommands: [SlashCommand] = []
+    private var skillCommands: [String: String] = [:]
+    private var skills: [Skill] = []
     private var customTools: [String: LoadedCustomTool] = [:]
     private var hookShortcuts: [KeyId: HookShortcut] = [:]
     private var keybindings: KeybindingsManager = KeybindingsManager.inMemory()
@@ -203,6 +235,8 @@ public final class InteractiveMode {
     private var pendingTools: [String: ToolExecutionComponent] = [:]
     private var toolOutputExpanded = false
     private var hideThinkingBlock = false
+    private let defaultWorkingMessage = "Working... (esc to interrupt)"
+    private var workingMessage: String?
 
     private var isBashMode = false
     private var bashComponent: BashExecutionComponent?
@@ -305,7 +339,11 @@ public final class InteractiveMode {
         let widgets = Container()
         let defaultEditor = CustomEditor(theme: getEditorTheme(), keybindings: keybindings)
         let editorContainer = Container()
-        let footer = FooterComponent(session: session)
+        let footerDataProvider = FooterDataProvider()
+        footerBranchUnsubscribe = footerDataProvider.onBranchChange { [weak tui] in
+            tui?.requestRender()
+        }
+        let footer = FooterComponent(session: session, footerData: footerDataProvider)
         let footerContainer = Container()
 
         editorContainer.addChild(defaultEditor)
@@ -319,21 +357,30 @@ public final class InteractiveMode {
         self.editorContainer = editorContainer
         self.footer = footer
         self.footerContainer = footerContainer
+        self.footerDataProvider = footerDataProvider
+
+        skills = discoverSkills(
+            cwd: session.sessionManager.getCwd(),
+            agentDir: getAgentDir(),
+            settings: settingsManager.getSkillsSettings()
+        )
 
         let slashCommands: [SlashCommand] = [
             SlashCommand(name: "settings", description: "Open settings menu"),
             SlashCommand(name: "model", description: "Select model"),
+            SlashCommand(name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling"),
             SlashCommand(name: "theme", description: "Select theme"),
             SlashCommand(name: "login", description: "Login with OAuth provider"),
             SlashCommand(name: "logout", description: "Logout from OAuth provider"),
             SlashCommand(name: "templates", description: "List prompt templates"),
             SlashCommand(name: "export", description: "Export session to HTML"),
             SlashCommand(name: "copy", description: "Copy last assistant message"),
+            SlashCommand(name: "name", description: "Set session display name"),
             SlashCommand(name: "session", description: "Show session info"),
             SlashCommand(name: "changelog", description: "Show changelog"),
             SlashCommand(name: "hotkeys", description: "Show shortcuts"),
             SlashCommand(name: "debug", description: "Show theme diagnostics"),
-            SlashCommand(name: "branch", description: "Branch from a user message"),
+            SlashCommand(name: "fork", description: "Create a new fork from a previous message"),
             SlashCommand(name: "tree", description: "Navigate session tree"),
             SlashCommand(name: "new", description: "Start a new session"),
             SlashCommand(name: "compact", description: "Compact session"),
@@ -343,10 +390,7 @@ public final class InteractiveMode {
         ]
 
         baseSlashCommands = slashCommands
-        let templateCommands = session.promptTemplates.map { template in
-            SlashCommand(name: template.name, description: template.description)
-        }
-        setAutocompleteCommands(slashCommands + templateCommands)
+        rebuildAutocomplete()
 
         tui.addChild(Spacer(1))
         tui.addChild(Text(header, paddingX: 1, paddingY: 0))
@@ -409,6 +453,32 @@ public final class InteractiveMode {
     }
 
     @MainActor
+    private func buildSkillCommands(_ settingsManager: SettingsManager) -> [SlashCommand] {
+        skillCommands.removeAll()
+        guard settingsManager.getEnableSkillCommands() else { return [] }
+        var list: [SlashCommand] = []
+        for skill in skills {
+            let commandName = "skill:\(skill.name)"
+            skillCommands[commandName] = skill.filePath
+            list.append(SlashCommand(name: commandName, description: skill.description))
+        }
+        return list
+    }
+
+    @MainActor
+    private func rebuildAutocomplete() {
+        guard let session else { return }
+        let templateCommands = session.promptTemplates.map { template in
+            SlashCommand(name: template.name, description: template.description)
+        }
+        let hookCommands = session.hookRunner?.getRegisteredCommands().map { command in
+            SlashCommand(name: command.name, description: command.description ?? "(hook command)")
+        } ?? []
+        let skillList = buildSkillCommands(session.settingsManager)
+        setAutocompleteCommands(baseSlashCommands + templateCommands + hookCommands + skillList)
+    }
+
+    @MainActor
     private func initializeHooksAndCustomTools() async {
         guard let session else { return }
 
@@ -435,6 +505,11 @@ public final class InteractiveMode {
                     self?.setHookStatus(key, text)
                 }
             },
+            setWorkingMessage: { [weak self] message in
+                Task { @MainActor in
+                    self?.setWorkingMessage(message)
+                }
+            },
             setWidget: { [weak self] key, content in
                 Task { @MainActor in
                     self?.setHookWidget(key, content)
@@ -450,9 +525,9 @@ public final class InteractiveMode {
                     self?.tui?.terminal.setTitle(title)
                 }
             },
-            custom: { [weak self] factory in
+            custom: { [weak self] factory, options in
                 guard let self else { return nil }
-                return await self.showHookCustom(factory)
+                return await self.showHookCustom(factory, options: options)
             },
             setEditorText: { [weak self] text in
                 Task { @MainActor in
@@ -546,11 +621,17 @@ public final class InteractiveMode {
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            setSessionNameHandler: { [weak session] name in
+                _ = session?.sessionManager.appendSessionInfo(name)
+            },
+            getSessionNameHandler: { [weak session] in
+                session?.sessionManager.getSessionName()
+            },
             getActiveToolsHandler: { [weak session] in
                 session?.getActiveToolNames() ?? []
             },
             getAllToolsHandler: { [weak session] in
-                session?.getAllToolNames() ?? []
+                session?.getAllTools() ?? []
             },
             setActiveToolsHandler: { [weak session] toolNames in
                 session?.setActiveToolsByName(toolNames)
@@ -559,9 +640,9 @@ public final class InteractiveMode {
                 guard let self else { return HookCommandResult(cancelled: true) }
                 return await self.handleHookNewSession(options)
             },
-            branchHandler: { [weak self] entryId in
+            forkHandler: { [weak self] entryId in
                 guard let self else { return HookCommandResult(cancelled: true) }
-                return await self.handleHookBranch(entryId)
+                return await self.handleHookFork(entryId)
             },
             navigateTreeHandler: { [weak self] targetId, options in
                 guard let self else { return HookCommandResult(cancelled: true) }
@@ -595,13 +676,7 @@ public final class InteractiveMode {
 
         _ = await hookRunner.emit(SessionStartEvent())
 
-        let templateCommands = session.promptTemplates.map { template in
-            SlashCommand(name: template.name, description: template.description)
-        }
-        let hookCommands = hookRunner.getRegisteredCommands().map { command in
-            SlashCommand(name: command.name, description: command.description ?? "(hook command)")
-        }
-        setAutocompleteCommands(baseSlashCommands + templateCommands + hookCommands)
+        rebuildAutocomplete()
 
         let hookPaths = hookRunner.getHookPaths()
         if !hookPaths.isEmpty {
@@ -641,11 +716,11 @@ public final class InteractiveMode {
     }
 
     @MainActor
-    private func handleHookBranch(_ entryId: String) async -> HookCommandResult {
+    private func handleHookFork(_ entryId: String) async -> HookCommandResult {
         guard let session else { return HookCommandResult(cancelled: true) }
 
         do {
-            let result = try await session.branch(entryId)
+            let result = try await session.fork(entryId)
             if result.cancelled {
                 return HookCommandResult(cancelled: true)
             }
@@ -653,10 +728,10 @@ public final class InteractiveMode {
             chatContainer.clear()
             renderInitialMessages()
             editor?.setText(result.selectedText)
-            showStatus("Branched to new session")
+            showStatus("Forked to new session")
             return HookCommandResult(cancelled: false)
         } catch {
-            showHookError("branch", error.localizedDescription)
+            showHookError("fork", error.localizedDescription)
             return HookCommandResult(cancelled: true)
         }
     }
@@ -763,35 +838,114 @@ public final class InteractiveMode {
     }
 
     @MainActor
-    private func showHookCustom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
+    private func showHookCustom(
+        _ factory: @escaping HookCustomFactory,
+        options: HookCustomOptions?
+    ) async -> HookCustomResult? {
         guard let tui, let editor, let editorContainer else { return nil }
         let savedText = editor.getText()
+        let isOverlay = options?.overlay ?? false
+
+        func restoreEditor() {
+            editorContainer.clear()
+            editorContainer.addChild(editor)
+            editor.setText(savedText)
+            tui.setFocus(editor)
+            tui.requestRender()
+        }
 
         return await withCheckedContinuation { continuation in
             var component: Component?
+            var overlayHandle: HookOverlayHandle?
+            var closed = false
 
             let close: HookCustomClose = { result in
+                guard !closed else { return }
+                closed = true
                 if let disposable = component as? HookDisposableComponent {
                     disposable.dispose()
                 }
-                editorContainer.clear()
-                editorContainer.addChild(editor)
-                editor.setText(savedText)
-                tui.setFocus(editor)
-                tui.requestRender()
+                if isOverlay {
+                    overlayHandle?.hide()
+                    tui.requestRender()
+                } else {
+                    restoreEditor()
+                }
                 continuation.resume(returning: result.map(HookCustomResult.init))
             }
 
             Task { @MainActor in
                 let created = await factory(tui, theme, keybindings, close)
-                if let createdComponent = created as? Component {
-                    component = createdComponent
+                guard !closed else { return }
+                guard let createdComponent = created as? Component else { return }
+                component = createdComponent
+                if isOverlay {
+                    let resolvedOptions = resolveOverlayOptions(options?.overlayOptions)
+                    let handle = tui.showOverlay(createdComponent, options: resolvedOptions)
+                    let wrapper = TuiOverlayHandle(handle)
+                    overlayHandle = wrapper
+                    options?.onHandle?(wrapper)
+                    tui.requestRender()
+                } else {
                     editorContainer.clear()
                     editorContainer.addChild(createdComponent)
                     tui.setFocus(createdComponent)
                     tui.requestRender()
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func resolveOverlayOptions(_ source: HookOverlayOptionsSource?) -> OverlayOptions? {
+        guard let source else { return nil }
+        let resolved: HookOverlayOptions
+        switch source {
+        case .fixed(let options):
+            resolved = options
+        case .dynamic(let provider):
+            resolved = provider()
+        }
+        return convertOverlayOptions(resolved)
+    }
+
+    @MainActor
+    private func convertOverlayOptions(_ options: HookOverlayOptions) -> OverlayOptions {
+        OverlayOptions(
+            width: options.width.map(convertOverlaySize),
+            minWidth: options.minWidth,
+            maxHeight: options.maxHeight.map(convertOverlaySize),
+            anchor: options.anchor.map(convertOverlayAnchor),
+            offsetX: options.offsetX,
+            offsetY: options.offsetY,
+            row: options.row.map(convertOverlaySize),
+            col: options.col.map(convertOverlaySize),
+            margin: options.margin.map { OverlayMargin(top: $0.top, right: $0.right, bottom: $0.bottom, left: $0.left) }
+        )
+    }
+
+    @MainActor
+    private func convertOverlayAnchor(_ anchor: HookOverlayAnchor) -> OverlayAnchor {
+        switch anchor {
+        case .center: return .center
+        case .topLeft: return .topLeft
+        case .topRight: return .topRight
+        case .bottomLeft: return .bottomLeft
+        case .bottomRight: return .bottomRight
+        case .topCenter: return .topCenter
+        case .bottomCenter: return .bottomCenter
+        case .leftCenter: return .leftCenter
+        case .rightCenter: return .rightCenter
+        }
+    }
+
+    @MainActor
+    private func convertOverlaySize(_ size: HookOverlaySize) -> SizeValue {
+        switch size {
+        case .absolute(let value):
+            return .absolute(value)
+        case .percent(let value):
+            return .percent(Double(value))
         }
     }
 
@@ -808,8 +962,16 @@ public final class InteractiveMode {
     }
 
     @MainActor
+    private func setWorkingMessage(_ message: String?) {
+        workingMessage = message
+        if let loadingAnimation {
+            loadingAnimation.setMessage(message ?? defaultWorkingMessage)
+        }
+    }
+
+    @MainActor
     private func setHookStatus(_ key: String, _ text: String?) {
-        footer?.setHookStatus(key, text)
+        footerDataProvider?.setExtensionStatus(key, text)
         scheduleRender()
     }
 
@@ -881,7 +1043,7 @@ public final class InteractiveMode {
 
     @MainActor
     private func setCustomFooter(_ factory: HookFooterFactory?) {
-        guard let tui, let footerContainer, let footer else { return }
+        guard let tui, let footerContainer, let footer, let footerDataProvider else { return }
 
         if let customFooter, let disposable = customFooter as? HookDisposableComponent {
             disposable.dispose()
@@ -890,7 +1052,7 @@ public final class InteractiveMode {
         footerContainer.clear()
 
         if let factory {
-            if let component = factory(tui, theme) as? Component {
+            if let component = factory(tui, theme, footerDataProvider) as? Component {
                 customFooter = component
                 footerContainer.addChild(component)
             } else {
@@ -1120,7 +1282,7 @@ public final class InteractiveMode {
                 ui: tui,
                 spinnerColorFn: { theme.fg(.accent, $0) },
                 messageColorFn: { theme.fg(.muted, $0) },
-                message: "Working... (esc to interrupt)"
+                message: workingMessage ?? defaultWorkingMessage
             )
             loadingAnimation = loader
             statusContainer.addChild(loader)
@@ -1425,6 +1587,7 @@ public final class InteractiveMode {
             return
         }
 
+        let hasQueuedMessages = !pendingSteeringMessages.isEmpty || !pendingFollowUpMessages.isEmpty
         pendingMessagesContainer.addChild(Spacer(1))
         for message in pendingSteeringMessages {
             let text = theme.fg(.dim, "Steering: \(message)")
@@ -1436,6 +1599,11 @@ public final class InteractiveMode {
         }
         for component in pendingBashComponents {
             pendingMessagesContainer.addChild(component)
+        }
+        if hasQueuedMessages {
+            let dequeueHint = getAppKeyDisplay(.dequeue)
+            let hintText = theme.fg(.dim, "-> \(dequeueHint) to edit all queued messages")
+            pendingMessagesContainer.addChild(TruncatedText(hintText, paddingX: 1, paddingY: 0))
         }
     }
 
@@ -1494,7 +1662,11 @@ public final class InteractiveMode {
         if editor?.getText().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
             let now = Date().timeIntervalSince1970
             if now - lastEscapeTime < 0.5 {
-                showUserMessageSelector()
+                if session?.settingsManager.getDoubleEscapeAction() == "tree" {
+                    showTreeSelector()
+                } else {
+                    showUserMessageSelector()
+                }
                 lastEscapeTime = 0
             } else {
                 lastEscapeTime = now
@@ -1553,6 +1725,10 @@ public final class InteractiveMode {
         }
         unsubscribe?()
         unsubscribe = nil
+        footerBranchUnsubscribe?()
+        footerBranchUnsubscribe = nil
+        footerDataProvider?.dispose()
+        footerDataProvider = nil
         tui?.stop()
         if let continuation = exitContinuation {
             exitContinuation = nil
@@ -1627,68 +1803,33 @@ public final class InteractiveMode {
     @MainActor
     private func cycleThinkingLevel() {
         guard let session else { return }
-        let model = session.agent.state.model
-        guard model.reasoning else {
-            showStatus("Current model does not support thinking")
-            return
-        }
-
-        let levels: [ThinkingLevel]
-        if supportsXhigh(model: model) {
-            levels = [.off, .minimal, .low, .medium, .high, .xhigh]
+        if let newLevel = session.cycleThinkingLevel() {
+            footer?.invalidate()
+            updateEditorBorderColor()
+            showStatus("Thinking level: \(newLevel.rawValue)")
         } else {
-            levels = [.off, .minimal, .low, .medium, .high]
+            showStatus("Current model does not support thinking")
         }
-
-        let current = session.agent.state.thinkingLevel
-        guard let idx = levels.firstIndex(of: current) else { return }
-        let next = levels[(idx + 1) % levels.count]
-        session.agent.setThinkingLevel(next)
-        session.settingsManager.setDefaultThinkingLevel(next.rawValue)
-        updateEditorBorderColor()
-        showStatus("Thinking level: \(next.rawValue)")
     }
 
     @MainActor
     private func cycleModel(direction: ModelCycleDirection) async {
         guard let session else { return }
-        let models: [Model]
-        let scoped = !scopedModels.isEmpty
-        if scoped {
-            models = scopedModels.map { $0.model }
-        } else {
-            models = await session.modelRegistry.getAvailable()
+        do {
+            let result = try await session.cycleModel(direction: direction == .forward ? .forward : .backward)
+            if let result {
+                footer?.invalidate()
+                updateEditorBorderColor()
+                let displayName = result.model.name.isEmpty ? result.model.id : result.model.name
+                let thinkingStr = result.model.reasoning && result.thinkingLevel != .off ? " (thinking: \(result.thinkingLevel.rawValue))" : ""
+                showStatus("Switched to \(displayName)\(thinkingStr)")
+            } else {
+                let message = session.scopedModels.isEmpty ? "Only one model available" : "Only one model in scope"
+                showStatus(message)
+            }
+        } catch {
+            showError(error.localizedDescription)
         }
-        guard !models.isEmpty else {
-            showStatus("No models available")
-            return
-        }
-
-        let current = session.agent.state.model
-        let currentIndex = models.firstIndex(where: { modelsAreEqual($0, current) }) ?? 0
-        let nextIndex: Int
-        switch direction {
-        case .forward:
-            nextIndex = (currentIndex + 1) % models.count
-        case .backward:
-            nextIndex = (currentIndex - 1 + models.count) % models.count
-        }
-
-        let nextModel = models[nextIndex]
-        session.agent.setModel(nextModel)
-        session.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id)
-
-        if scoped {
-            let scopedLevel = scopedModels[nextIndex].thinkingLevel
-            session.agent.setThinkingLevel(scopedLevel)
-        } else if !nextModel.reasoning {
-            session.agent.setThinkingLevel(.off)
-        } else if session.agent.state.thinkingLevel == .xhigh && !supportsXhigh(model: nextModel) {
-            session.agent.setThinkingLevel(.high)
-        }
-
-        updateEditorBorderColor()
-        showStatus("Switched to \(nextModel.id)")
     }
 
     @MainActor
@@ -1807,9 +1948,15 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
-        if trimmed == "/model" {
-            showModelSelector()
+        if trimmed == "/scoped-models" {
             editor.setText("")
+            await showModelsSelector()
+            return
+        }
+        if trimmed == "/model" || trimmed.hasPrefix("/model ") {
+            let searchTerm = trimmed.hasPrefix("/model ") ? String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines) : nil
+            editor.setText("")
+            await handleModelCommand(searchTerm)
             return
         }
         if trimmed == "/theme" {
@@ -1842,6 +1989,11 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
+        if trimmed == "/name" || trimmed.hasPrefix("/name ") {
+            handleNameCommand(trimmed)
+            editor.setText("")
+            return
+        }
         if trimmed == "/session" {
             handleSessionCommand()
             editor.setText("")
@@ -1862,7 +2014,7 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
-        if trimmed == "/branch" {
+        if trimmed == "/fork" {
             showUserMessageSelector()
             editor.setText("")
             return
@@ -1894,6 +2046,25 @@ public final class InteractiveMode {
             editor.setText("")
             shutdown()
             return
+        }
+
+        if trimmed.hasPrefix("/skill:") {
+            let spaceIndex = trimmed.firstIndex(of: " ")
+            let commandName: String
+            let args: String
+            if let spaceIndex {
+                commandName = String(trimmed[trimmed.index(after: trimmed.startIndex)..<spaceIndex])
+                args = String(trimmed[trimmed.index(after: spaceIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                commandName = String(trimmed.dropFirst())
+                args = ""
+            }
+            if let skillPath = skillCommands[commandName] {
+                editor.addToHistory(trimmed)
+                editor.setText("")
+                await handleSkillCommand(skillPath: skillPath, args: args)
+                return
+            }
         }
 
         if trimmed.hasPrefix("!!") || trimmed.hasPrefix("!") {
@@ -2123,6 +2294,7 @@ public final class InteractiveMode {
             showImages: settingsManager.getShowImages(),
             autoResizeImages: settingsManager.getAutoResizeImages(),
             blockImages: settingsManager.getBlockImages(),
+            enableSkillCommands: settingsManager.getEnableSkillCommands(),
             steeringMode: settingsManager.getSteeringMode(),
             followUpMode: settingsManager.getFollowUpMode(),
             thinkingLevel: session.agent.state.thinkingLevel,
@@ -2130,7 +2302,8 @@ public final class InteractiveMode {
             currentTheme: settingsManager.getTheme() ?? "dark",
             availableThemes: getAvailableThemes(),
             hideThinkingBlock: hideThinkingBlock,
-            collapseChangelog: settingsManager.getCollapseChangelog()
+            collapseChangelog: settingsManager.getCollapseChangelog(),
+            doubleEscapeAction: settingsManager.getDoubleEscapeAction()
         )
 
         showSelector { done in
@@ -2148,6 +2321,10 @@ public final class InteractiveMode {
                 },
                 onBlockImagesChange: { enabled in
                     settingsManager.setBlockImages(enabled)
+                },
+                onEnableSkillCommandsChange: { [weak self] enabled in
+                    settingsManager.setEnableSkillCommands(enabled)
+                    self?.rebuildAutocomplete()
                 },
                 onSteeringModeChange: { mode in
                     settingsManager.setSteeringMode(mode)
@@ -2180,6 +2357,9 @@ public final class InteractiveMode {
                 onCollapseChangelogChange: { collapse in
                     settingsManager.setCollapseChangelog(collapse)
                 },
+                onDoubleEscapeActionChange: { action in
+                    settingsManager.setDoubleEscapeAction(action)
+                },
                 onCancel: {
                     done()
                 }
@@ -2191,7 +2371,66 @@ public final class InteractiveMode {
     }
 
     @MainActor
-    private func showModelSelector() {
+    private func handleModelCommand(_ searchTerm: String?) async {
+        guard let session else { return }
+        let trimmed = searchTerm?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            showModelSelector()
+            return
+        }
+
+        if let model = await findExactModelMatch(trimmed) {
+            do {
+                try await session.setModel(model)
+                footer?.invalidate()
+                updateEditorBorderColor()
+                showStatus("Model: \(model.id)")
+            } catch {
+                showError(error.localizedDescription)
+            }
+            return
+        }
+
+        showModelSelector(initialSearchInput: trimmed)
+    }
+
+    private func findExactModelMatch(_ searchTerm: String) async -> Model? {
+        let term = searchTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return nil }
+
+        var targetProvider: String?
+        var targetModelId = ""
+
+        if let slashIndex = term.firstIndex(of: "/") {
+            targetProvider = String(term[..<slashIndex]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            targetModelId = String(term[term.index(after: slashIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        } else {
+            targetModelId = term.lowercased()
+        }
+
+        guard !targetModelId.isEmpty else { return nil }
+
+        let models = await getModelCandidates()
+        let exactMatches = models.filter { model in
+            let idMatch = model.id.lowercased() == targetModelId
+            let providerMatch = targetProvider == nil || model.provider.lowercased() == targetProvider
+            return idMatch && providerMatch
+        }
+
+        return exactMatches.count == 1 ? exactMatches[0] : nil
+    }
+
+    private func getModelCandidates() async -> [Model] {
+        guard let session else { return [] }
+        if !session.scopedModels.isEmpty {
+            return session.scopedModels.map { $0.model }
+        }
+        session.modelRegistry.refresh()
+        return await session.modelRegistry.getAvailable()
+    }
+
+    @MainActor
+    private func showModelSelector(initialSearchInput: String? = nil) {
         guard let session, let tui else { return }
         showSelector { done in
             let selector = ModelSelectorComponent(
@@ -2199,16 +2438,123 @@ public final class InteractiveMode {
                 currentModel: session.agent.state.model,
                 settingsManager: session.settingsManager,
                 modelRegistry: session.modelRegistry,
-                scopedModels: scopedModels,
+                scopedModels: session.scopedModels,
                 onSelect: { [weak self] model in
-                    session.agent.setModel(model)
-                    self?.updateEditorBorderColor()
-                    done()
-                    self?.showStatus("Model: \(model.id)")
+                    Task { @MainActor in
+                        guard let self else { return }
+                        do {
+                            try await session.setModel(model)
+                            self.footer?.invalidate()
+                            self.updateEditorBorderColor()
+                            done()
+                            self.showStatus("Model: \(model.id)")
+                        } catch {
+                            done()
+                            self.showError(error.localizedDescription)
+                        }
+                    }
                 },
                 onCancel: {
                     done()
+                },
+                initialSearchInput: initialSearchInput
+            )
+            return (component: selector, focus: selector)
+        }
+    }
+
+    @MainActor
+    private func showModelsSelector() async {
+        guard let session else { return }
+        session.modelRegistry.refresh()
+        let allModels = await session.modelRegistry.getAvailable()
+
+        guard !allModels.isEmpty else {
+            showStatus("No models available")
+            return
+        }
+
+        let sessionScopedModels = session.scopedModels
+        let hasSessionScope = !sessionScopedModels.isEmpty
+
+        var enabledModelIds: [String] = []
+        var hasFilter = false
+
+        if hasSessionScope {
+            enabledModelIds = sessionScopedModels.map { "\($0.model.provider)/\($0.model.id)" }
+            hasFilter = true
+        } else if let patterns = session.settingsManager.getEnabledModels(), !patterns.isEmpty {
+            hasFilter = true
+            let scoped = await resolveModelScope(patterns, session.modelRegistry)
+            enabledModelIds = scoped.map { "\($0.model.provider)/\($0.model.id)" }
+        }
+
+        var currentEnabledIds = enabledModelIds
+
+        let updateSessionModels: ([String]) async -> Void = { enabledIds in
+            if enabledIds.count > 0 && enabledIds.count < allModels.count {
+                let currentThinkingLevel = session.agent.state.thinkingLevel
+                let scoped = await resolveModelScope(enabledIds, session.modelRegistry)
+                let resolved = scoped.map { scopedModel in
+                    let level = scopedModel.thinkingLevel == .off ? currentThinkingLevel : scopedModel.thinkingLevel
+                    return ScopedModel(model: scopedModel.model, thinkingLevel: level)
                 }
+                session.setScopedModels(resolved)
+                self.scopedModels = resolved
+            } else {
+                session.setScopedModels([])
+                self.scopedModels = []
+            }
+        }
+
+        showSelector { done in
+            let selector = ScopedModelsSelectorComponent(
+                config: ModelsConfig(
+                    allModels: allModels,
+                    enabledModelIds: currentEnabledIds,
+                    hasEnabledModelsFilter: hasFilter
+                ),
+                callbacks: ModelsCallbacks(
+                    onModelToggle: { modelId, enabled in
+                        if enabled {
+                            if !currentEnabledIds.contains(modelId) {
+                                currentEnabledIds.append(modelId)
+                            }
+                        } else {
+                            currentEnabledIds.removeAll { $0 == modelId }
+                        }
+                        Task { await updateSessionModels(currentEnabledIds) }
+                    },
+                    onPersist: { enabledIds in
+                        let newPatterns = enabledIds.count == allModels.count ? nil : enabledIds
+                        session.settingsManager.setEnabledModels(newPatterns)
+                        self.showStatus("Model selection saved to settings")
+                    },
+                    onEnableAll: { allModelIds in
+                        currentEnabledIds = allModelIds
+                        Task { await updateSessionModels(currentEnabledIds) }
+                    },
+                    onClearAll: {
+                        currentEnabledIds = []
+                        Task { await updateSessionModels(currentEnabledIds) }
+                    },
+                    onToggleProvider: { _, modelIds, enabled in
+                        for id in modelIds {
+                            if enabled {
+                                if !currentEnabledIds.contains(id) {
+                                    currentEnabledIds.append(id)
+                                }
+                            } else {
+                                currentEnabledIds.removeAll { $0 == id }
+                            }
+                        }
+                        Task { await updateSessionModels(currentEnabledIds) }
+                    },
+                    onCancel: {
+                        done()
+                        self.ui.requestRender()
+                    }
+                )
             )
             return (component: selector, focus: selector)
         }
@@ -2241,9 +2587,9 @@ public final class InteractiveMode {
     @MainActor
     private func showUserMessageSelector() {
         guard let session else { return }
-        let messages = session.getUserMessagesForBranching()
+        let messages = session.getUserMessagesForForking()
         guard !messages.isEmpty else {
-            showStatus("No messages to branch from")
+            showStatus("No messages to fork from")
             return
         }
 
@@ -2252,7 +2598,7 @@ public final class InteractiveMode {
                 Task {
                     guard let self else { return }
                     do {
-                        let result = try await session.branch(entryId)
+                        let result = try await session.fork(entryId)
                         if result.cancelled {
                             done()
                             self.scheduleRender()
@@ -2262,7 +2608,7 @@ public final class InteractiveMode {
                         self.renderInitialMessages()
                         self.editor?.setText(result.selectedText)
                         done()
-                        self.showStatus("Branched to new session")
+                        self.showStatus("Forked to new session")
                     } catch {
                         done()
                         self.showError(error.localizedDescription)
@@ -2318,7 +2664,65 @@ public final class InteractiveMode {
 
     @MainActor
     private func showSessionSelector() {
-        showStatus("Session resume is not implemented yet")
+        guard let session else { return }
+        showSelector { done in
+            let selector = SessionSelectorComponent(
+                currentSessionsLoader: { onProgress in
+                    await SessionManager.list(session.sessionManager.getCwd(), session.sessionManager.getSessionDir(), onProgress)
+                },
+                allSessionsLoader: { onProgress in
+                    await SessionManager.listAll(onProgress)
+                },
+                onSelect: { [weak self] sessionPath in
+                    guard let self else { return }
+                    done()
+                    Task { @MainActor in
+                        await self.handleResumeSession(sessionPath)
+                    }
+                },
+                onCancel: { [weak self] in
+                    done()
+                    self?.ui.requestRender()
+                },
+                onExit: { [weak self] in
+                    self?.shutdown()
+                },
+                requestRender: { [weak self] in
+                    self?.ui.requestRender()
+                }
+            )
+            return (component: selector, focus: selector.getSessionList())
+        }
+    }
+
+    @MainActor
+    private func handleResumeSession(_ sessionPath: String) async {
+        guard let session else { return }
+
+        if let loadingAnimation {
+            loadingAnimation.stop()
+            self.loadingAnimation = nil
+        }
+        statusContainer?.clear()
+
+        pendingMessagesContainer?.clear()
+        pendingSteeringMessages.removeAll()
+        pendingFollowUpMessages.removeAll()
+        pendingBashComponents.removeAll()
+        pendingBashMessages.removeAll()
+        streamingComponent = nil
+        streamingMessage = nil
+        pendingTools.removeAll()
+
+        let switched = await session.switchSession(sessionPath)
+        guard switched else {
+            showStatus("Resume cancelled")
+            return
+        }
+
+        chatContainer.clear()
+        renderInitialMessages()
+        showStatus("Resumed session")
     }
 
     private struct OAuthLoginCancelled: Error, LocalizedError {
@@ -2511,75 +2915,100 @@ public final class InteractiveMode {
     @MainActor
     private func handleSessionCommand() {
         guard let session else { return }
-        let entries = session.sessionManager.getEntries()
-        var userMessages = 0
-        var assistantMessages = 0
-        var toolCalls = 0
-        var toolResults = 0
-        var totalInput = 0
-        var totalOutput = 0
-        var totalCacheRead = 0
-        var totalCacheWrite = 0
-        var totalCost: Double = 0
-
-        for entry in entries {
-            if case .message(let messageEntry) = entry {
-                switch messageEntry.message {
-                case .user:
-                    userMessages += 1
-                case .assistant(let assistant):
-                    assistantMessages += 1
-                    totalInput += assistant.usage.input
-                    totalOutput += assistant.usage.output
-                    totalCacheRead += assistant.usage.cacheRead
-                    totalCacheWrite += assistant.usage.cacheWrite
-                    totalCost += assistant.usage.cost.total
-                    toolCalls += assistant.content.filter { if case .toolCall = $0 { return true } else { return false } }.count
-                case .toolResult:
-                    toolResults += 1
-                default:
-                    break
-                }
-            }
+        let stats = session.getSessionStats()
+        let sessionName = session.sessionManager.getSessionName()
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        let formatNumber: (Int) -> String = { value in
+            formatter.string(from: NSNumber(value: value)) ?? "\(value)"
         }
 
-        let totalMessages = userMessages + assistantMessages + toolResults
-        var info = "Session Info\n\n"
-        info += "File: \(session.sessionManager.getSessionFile() ?? "n/a")\n"
-        info += "ID: \(session.sessionManager.getSessionId())\n\n"
-        info += "Messages\n"
-        info += "User: \(userMessages)\n"
-        info += "Assistant: \(assistantMessages)\n"
-        info += "Tool Calls: \(toolCalls)\n"
-        info += "Tool Results: \(toolResults)\n"
-        info += "Total: \(totalMessages)\n\n"
-        info += "Tokens\n"
-        info += "Input: \(totalInput)\n"
-        info += "Output: \(totalOutput)\n"
-        info += "Cache Read: \(totalCacheRead)\n"
-        info += "Cache Write: \(totalCacheWrite)\n"
-        info += "Total: \(totalInput + totalOutput + totalCacheRead + totalCacheWrite)\n"
-        if totalCost > 0 {
-            info += "\nCost\nTotal: \(String(format: "%.4f", totalCost))\n"
+        var info = "\(theme.bold("Session Info"))\n\n"
+        if let sessionName {
+            info += "\(theme.fg(.dim, "Name:")) \(sessionName)\n"
+        }
+        info += "\(theme.fg(.dim, "File:")) \(stats.sessionFile ?? "In-memory")\n"
+        info += "\(theme.fg(.dim, "ID:")) \(stats.sessionId)\n\n"
+        info += "\(theme.bold("Messages"))\n"
+        info += "\(theme.fg(.dim, "User:")) \(stats.userMessages)\n"
+        info += "\(theme.fg(.dim, "Assistant:")) \(stats.assistantMessages)\n"
+        info += "\(theme.fg(.dim, "Tool Calls:")) \(stats.toolCalls)\n"
+        info += "\(theme.fg(.dim, "Tool Results:")) \(stats.toolResults)\n"
+        info += "\(theme.fg(.dim, "Total:")) \(stats.totalMessages)\n\n"
+        info += "\(theme.bold("Tokens"))\n"
+        info += "\(theme.fg(.dim, "Input:")) \(formatNumber(stats.tokens.input))\n"
+        info += "\(theme.fg(.dim, "Output:")) \(formatNumber(stats.tokens.output))\n"
+        if stats.tokens.cacheRead > 0 {
+            info += "\(theme.fg(.dim, "Cache Read:")) \(formatNumber(stats.tokens.cacheRead))\n"
+        }
+        if stats.tokens.cacheWrite > 0 {
+            info += "\(theme.fg(.dim, "Cache Write:")) \(formatNumber(stats.tokens.cacheWrite))\n"
+        }
+        info += "\(theme.fg(.dim, "Total:")) \(formatNumber(stats.tokens.total))\n"
+        if stats.cost > 0 {
+            info += "\n\(theme.bold("Cost"))\n"
+            info += "\(theme.fg(.dim, "Total:")) \(String(format: "%.4f", stats.cost))"
         }
 
         chatContainer.addChild(Spacer(1))
-        chatContainer.addChild(Text(theme.fg(.dim, info), paddingX: 1, paddingY: 0))
+        chatContainer.addChild(Text(info, paddingX: 1, paddingY: 0))
         scheduleRender()
+    }
+
+    @MainActor
+    private func handleNameCommand(_ text: String) {
+        guard let session else { return }
+        let stripped = text.replacingOccurrences(of: "^/name\\s*", with: "", options: .regularExpression)
+        let name = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if name.isEmpty {
+            if let currentName = session.sessionManager.getSessionName() {
+                chatContainer.addChild(Spacer(1))
+                chatContainer.addChild(Text(theme.fg(.dim, "Session name: \(currentName)"), paddingX: 1, paddingY: 0))
+            } else {
+                showWarning("Usage: /name <name>")
+            }
+            scheduleRender()
+            return
+        }
+
+        session.sessionManager.appendSessionInfo(name)
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Text(theme.fg(.dim, "Session name set: \(name)"), paddingX: 1, paddingY: 0))
+        scheduleRender()
+    }
+
+    @MainActor
+    private func handleSkillCommand(skillPath: String, args: String) async {
+        do {
+            let content = try String(contentsOfFile: skillPath, encoding: .utf8)
+            let body = content
+                .replacingOccurrences(of: "^---\\n[\\s\\S]*?\\n---\\n", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = args.isEmpty ? body : "\(body)\n\n---\n\nUser: \(args)"
+            await prompt(message, images: nil)
+        } catch {
+            showError("Failed to load skill: \(error.localizedDescription)")
+        }
     }
 
     @MainActor
     private func handleChangelogCommand() {
         let path = getChangelogPath()
-        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
-            showStatus("No changelog found")
-            return
+        let entries = parseChangelog(path)
+        let changelogMarkdown: String
+        if entries.isEmpty {
+            changelogMarkdown = "No changelog entries found."
+        } else {
+            changelogMarkdown = entries.reversed().map { $0.content }.joined(separator: "\n\n")
         }
 
         chatContainer.addChild(Spacer(1))
-        chatContainer.addChild(Text(theme.bold(theme.fg(.accent, "Changelog")), paddingX: 1, paddingY: 0))
+        chatContainer.addChild(DynamicBorder())
+        chatContainer.addChild(Text(theme.bold(theme.fg(.accent, "What's New")), paddingX: 1, paddingY: 0))
         chatContainer.addChild(Spacer(1))
-        chatContainer.addChild(Markdown(content.trimmingCharacters(in: .whitespacesAndNewlines), paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
+        chatContainer.addChild(Markdown(changelogMarkdown, paddingX: 1, paddingY: 1, theme: getMarkdownTheme()))
+        chatContainer.addChild(DynamicBorder())
         scheduleRender()
     }
 

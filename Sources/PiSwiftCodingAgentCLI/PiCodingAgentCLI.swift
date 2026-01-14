@@ -74,8 +74,15 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
         var resumeSession: String? = nil
         if parsed.resume == true {
-            let sessions = SessionManager.list(cwd, parsed.sessionDir)
-            resumeSession = selectSession(sessions)
+            _ = KeybindingsManager.create()
+            resumeSession = await selectSession(
+                currentSessionsLoader: { onProgress in
+                    await SessionManager.list(cwd, parsed.sessionDir, onProgress)
+                },
+                allSessionsLoader: { onProgress in
+                    await SessionManager.listAll(onProgress)
+                }
+            )
             if resumeSession == nil {
                 print("No session selected")
                 return
@@ -549,10 +556,8 @@ private func getChangelogForDisplay(_ parsed: Args, _ settingsManager: SettingsM
     let entries = parseChangelog(changelogPath)
 
     if lastVersion == nil {
-        if !entries.isEmpty {
-            settingsManager.setLastChangelogVersion(VERSION)
-            return entries.map { $0.content }.joined(separator: "\n\n")
-        }
+        settingsManager.setLastChangelogVersion(VERSION)
+        return nil
     } else if let lastVersion {
         let newEntries = getNewEntries(entries, lastVersion: lastVersion)
         if !newEntries.isEmpty {

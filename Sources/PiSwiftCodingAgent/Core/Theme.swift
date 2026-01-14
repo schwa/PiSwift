@@ -886,3 +886,7 @@ public func getLanguageFromPath(_ filePath: String) -> String? {
 
     return extToLang[ext]
 }
+
+public func highlightCode(_ code: String, lang: String? = nil) -> [String] {
+    return code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+}

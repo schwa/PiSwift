@@ -106,8 +106,9 @@ public func executeBash(_ command: String, options: BashExecutorOptions? = nil) 
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             let stdoutRemainder = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
             let stderrRemainder = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            buffer.append(stdoutRemainder, onChunk: nil)
-            buffer.append(stderrRemainder, onChunk: nil)
+            buffer.append(stdoutRemainder, onChunk: options?.onChunk)
+            buffer.append(stderrRemainder, onChunk: options?.onChunk)
+            buffer.flushPending(onChunk: options?.onChunk)
             cancellationTimer.cancel()
             timeoutTimerRef?.cancel()
 
@@ -158,21 +159,67 @@ private final class ManagedAtomic: Sendable {
 }
 
 private final class OutputBuffer: Sendable {
-    private let state = LockedState(Data())
+    private struct State: Sendable {
+        var data: Data
+        var decoder: Utf8StreamDecoder
+    }
+
+    private let state = LockedState(State(data: Data(), decoder: Utf8StreamDecoder()))
 
     func append(_ chunk: Data, onChunk: (@Sendable (String) -> Void)?) {
         guard !chunk.isEmpty else { return }
-        state.withLock { data in
-            data.append(chunk)
+        var decoded: String?
+        state.withLock { state in
+            state.data.append(chunk)
+            decoded = state.decoder.decode(chunk)
         }
-        if let text = String(data: chunk, encoding: .utf8) {
-            let sanitized = sanitizeBinaryOutput(text.replacingOccurrences(of: "\r", with: ""))
+        if let decoded, !decoded.isEmpty {
+            let sanitized = sanitizeBinaryOutput(decoded.replacingOccurrences(of: "\r", with: ""))
             onChunk?(sanitized)
         }
     }
 
+    func flushPending(onChunk: (@Sendable (String) -> Void)?) {
+        guard let onChunk else { return }
+        var flushed: String?
+        state.withLock { state in
+            flushed = state.decoder.flush()
+        }
+        if let flushed, !flushed.isEmpty {
+            let sanitized = sanitizeBinaryOutput(flushed.replacingOccurrences(of: "\r", with: ""))
+            onChunk(sanitized)
+        }
+    }
+
     func snapshot() -> Data {
-        state.withLock { $0 }
+        state.withLock { $0.data }
+    }
+}
+
+private struct Utf8StreamDecoder: Sendable {
+    private var buffer: [UInt8] = []
+
+    mutating func decode(_ data: Data) -> String {
+        guard !data.isEmpty else { return "" }
+        buffer.append(contentsOf: data)
+        var prefixLength = buffer.count
+        while prefixLength > 0 {
+            if String(bytes: buffer[0..<prefixLength], encoding: .utf8) != nil {
+                break
+            }
+            prefixLength -= 1
+        }
+        guard prefixLength > 0 else { return "" }
+        let decoded = String(bytes: buffer[0..<prefixLength], encoding: .utf8) ?? ""
+        buffer = Array(buffer[prefixLength...])
+        return decoded
+    }
+
+    mutating func flush() -> String {
+        guard !buffer.isEmpty else { return "" }
+        let decoded = String(decoding: buffer, as: UTF8.self)
+        buffer.removeAll()
+        return decoded
     }
 }
 #endif

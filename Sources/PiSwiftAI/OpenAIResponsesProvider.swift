@@ -199,6 +199,7 @@ public func streamOpenAIResponses(
                             totalTokens: usage.totalTokens
                         )
                         calculateCost(model: model, usage: &output.usage)
+                        applyServiceTierPricing(&output.usage, serviceTier: options.serviceTier)
                     }
                     output.stopReason = mapResponsesStopReason(completed.response.status)
                     if output.content.contains(where: { if case .toolCall = $0 { return true } else { return false } }) && output.stopReason == .stop {
@@ -270,6 +271,7 @@ private func buildResponsesQuery(
         instructions: nil,
         maxOutputTokens: options.maxTokens,
         reasoning: reasoning,
+        serviceTier: mapResponsesServiceTier(options.serviceTier),
         store: nil,
         stream: true,
         temperature: options.temperature,
@@ -318,6 +320,42 @@ private func mapCodexReasoningSummary(_ summary: OpenAIReasoningSummary?) -> Ope
     case .none:
         return nil
     }
+}
+
+private func mapResponsesServiceTier(_ tier: OpenAIServiceTier?) -> ServiceTier? {
+    switch tier {
+    case .auto:
+        return .auto
+    case .defaultTier:
+        return .defaultTier
+    case .flex:
+        return .flexTier
+    case .priority, .onDemand:
+        return .onDemand
+    case .none:
+        return nil
+    }
+}
+
+private func serviceTierMultiplier(_ tier: OpenAIServiceTier?) -> Double {
+    switch tier {
+    case .flex:
+        return 0.5
+    case .priority, .onDemand:
+        return 2
+    default:
+        return 1
+    }
+}
+
+private func applyServiceTierPricing(_ usage: inout Usage, serviceTier: OpenAIServiceTier?) {
+    let multiplier = serviceTierMultiplier(serviceTier)
+    guard multiplier != 1 else { return }
+    usage.cost.input *= multiplier
+    usage.cost.output *= multiplier
+    usage.cost.cacheRead *= multiplier
+    usage.cost.cacheWrite *= multiplier
+    usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite
 }
 
 private func convertResponsesMessages(model: Model, context: Context) -> [InputItem] {

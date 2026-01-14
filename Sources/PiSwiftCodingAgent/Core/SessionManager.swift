@@ -191,6 +191,14 @@ public struct LabelEntry: SessionEntryBase, Sendable {
     public var label: String?
 }
 
+public struct SessionInfoEntry: SessionEntryBase, Sendable {
+    public var type: String = "session_info"
+    public var id: String
+    public var parentId: String?
+    public var timestamp: String
+    public var name: String?
+}
+
 public enum SessionEntry: Sendable {
     case message(SessionMessageEntry)
     case thinkingLevel(ThinkingLevelChangeEntry)
@@ -200,6 +208,7 @@ public enum SessionEntry: Sendable {
     case custom(CustomEntry)
     case customMessage(CustomMessageEntry)
     case label(LabelEntry)
+    case sessionInfo(SessionInfoEntry)
 
     public var type: String {
         switch self {
@@ -211,6 +220,7 @@ public enum SessionEntry: Sendable {
         case .custom: return "custom"
         case .customMessage: return "custom_message"
         case .label: return "label"
+        case .sessionInfo: return "session_info"
         }
     }
 
@@ -225,6 +235,7 @@ public enum SessionEntry: Sendable {
             case .custom(let entry): return entry.id
             case .customMessage(let entry): return entry.id
             case .label(let entry): return entry.id
+            case .sessionInfo(let entry): return entry.id
             }
         }
         set {
@@ -253,6 +264,9 @@ public enum SessionEntry: Sendable {
             case .label(var entry):
                 entry.id = newValue
                 self = .label(entry)
+            case .sessionInfo(var entry):
+                entry.id = newValue
+                self = .sessionInfo(entry)
             }
         }
     }
@@ -268,6 +282,7 @@ public enum SessionEntry: Sendable {
             case .custom(let entry): return entry.parentId
             case .customMessage(let entry): return entry.parentId
             case .label(let entry): return entry.parentId
+            case .sessionInfo(let entry): return entry.parentId
             }
         }
         set {
@@ -296,6 +311,9 @@ public enum SessionEntry: Sendable {
             case .label(var entry):
                 entry.parentId = newValue
                 self = .label(entry)
+            case .sessionInfo(var entry):
+                entry.parentId = newValue
+                self = .sessionInfo(entry)
             }
         }
     }
@@ -310,6 +328,7 @@ public enum SessionEntry: Sendable {
         case .custom(let entry): return entry.timestamp
         case .customMessage(let entry): return entry.timestamp
         case .label(let entry): return entry.timestamp
+        case .sessionInfo(let entry): return entry.timestamp
         }
     }
 }
@@ -341,6 +360,8 @@ public struct SessionContext: Sendable {
 public struct SessionInfo: Sendable {
     public var path: String
     public var id: String
+    public var cwd: String
+    public var name: String?
     public var created: Date
     public var modified: Date
     public var messageCount: Int
@@ -539,6 +560,92 @@ public func findMostRecentSession(_ dir: String) -> String? {
     return newest?.path
 }
 
+private func isMessageWithContent(_ message: AgentMessage) -> Bool {
+    switch message {
+    case .user, .assistant:
+        return true
+    default:
+        return false
+    }
+}
+
+private func extractTextContent(_ message: AgentMessage) -> String {
+    switch message {
+    case .user(let user):
+        return extractUserContentText(user.content)
+    case .assistant(let assistant):
+        return assistant.content.compactMap { block -> String? in
+            if case .text(let text) = block { return text.text }
+            return nil
+        }.joined(separator: " ")
+    default:
+        return ""
+    }
+}
+
+private func extractUserContentText(_ content: UserContent) -> String {
+    switch content {
+    case .text(let text):
+        return text
+    case .blocks(let blocks):
+        return blocks.compactMap { block -> String? in
+            if case .text(let text) = block { return text.text }
+            return nil
+        }.joined(separator: " ")
+    }
+}
+
+private func buildSessionInfo(_ filePath: String) -> SessionInfo? {
+    let entries = loadEntriesFromFile(filePath)
+    guard let first = entries.first, case .session(let header) = first else {
+        return nil
+    }
+
+    let stats = (try? FileManager.default.attributesOfItem(atPath: filePath)) ?? [:]
+    let modified = stats[.modificationDate] as? Date ?? Date()
+    let created = ISO8601DateFormatter().date(from: header.timestamp) ?? modified
+
+    var messageCount = 0
+    var firstMessage = ""
+    var allMessages: [String] = []
+    var name: String?
+
+    for entry in entries {
+        guard case .entry(let sessionEntry) = entry else { continue }
+        if case .sessionInfo(let info) = sessionEntry, let infoName = info.name?.trimmingCharacters(in: .whitespacesAndNewlines), !infoName.isEmpty {
+            name = infoName
+        }
+        guard case .message(let messageEntry) = sessionEntry else { continue }
+        messageCount += 1
+        let message = messageEntry.message
+        guard isMessageWithContent(message) else { continue }
+        guard message.role == "user" || message.role == "assistant" else { continue }
+        let textContent = extractTextContent(message)
+        guard !textContent.isEmpty else { continue }
+        allMessages.append(textContent)
+        if firstMessage.isEmpty, message.role == "user" {
+            firstMessage = textContent
+        }
+    }
+
+    let cwd = header.cwd
+    let resolvedFirstMessage = firstMessage.isEmpty ? "(no messages)" : firstMessage
+
+    return SessionInfo(
+        path: filePath,
+        id: header.id,
+        cwd: cwd,
+        name: name,
+        created: created,
+        modified: modified,
+        messageCount: messageCount,
+        firstMessage: resolvedFirstMessage,
+        allMessagesText: allMessages.joined(separator: " ")
+    )
+}
+
+public typealias SessionListProgress = @Sendable (_ loaded: Int, _ total: Int) -> Void
+
 public final class SessionManager: Sendable {
     private struct State: Sendable {
         var cwd: String
@@ -646,64 +753,66 @@ public final class SessionManager: Sendable {
         SessionManager(cwd, "", nil, false)
     }
 
-    public static func list(_ cwd: String, _ sessionDir: String? = nil) -> [SessionInfo] {
+    public static func list(
+        _ cwd: String,
+        _ sessionDir: String? = nil,
+        _ onProgress: SessionListProgress? = nil
+    ) async -> [SessionInfo] {
         let dir = sessionDir ?? defaultSessionDir(cwd: cwd)
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else {
             return []
         }
+        let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") }.map { URL(fileURLWithPath: dir).appendingPathComponent($0).path }
+        let total = jsonlFiles.count
+        var loaded = 0
         var result: [SessionInfo] = []
-        for file in files where file.hasSuffix(".jsonl") {
-            let path = URL(fileURLWithPath: dir).appendingPathComponent(file).path
-            let entries = loadEntriesFromFile(path)
-            guard let first = entries.first, case .session(let header) = first else { continue }
-            let stats = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
-            let created = stats[.creationDate] as? Date ?? Date()
-            let modified = stats[.modificationDate] as? Date ?? created
-            let messageEntries = entries.compactMap { entry -> SessionEntry? in
-                if case .entry(let entry) = entry { return entry }
-                return nil
-            }.filter { $0.type == "message" }
-            let messageCount = messageEntries.count
-            let firstMessage = messageEntries.compactMap { entry -> String? in
-                guard case .message(let msg) = entry else { return nil }
-                if case .user(let user) = msg.message {
-                    switch user.content {
-                    case .text(let text):
-                        return text
-                    case .blocks(let blocks):
-                        return blocks.compactMap { block in
-                            if case .text(let text) = block { return text.text }
-                            return nil
-                        }.joined(separator: " ")
-                    }
-                }
-                return nil
-            }.first ?? ""
 
-            let allMessagesText = messageEntries.compactMap { entry -> String? in
-                guard case .message(let msg) = entry else { return nil }
-                if case .user(let user) = msg.message {
-                    switch user.content {
-                    case .text(let text):
-                        return text
-                    case .blocks(let blocks):
-                        return blocks.compactMap { block in
-                            if case .text(let text) = block { return text.text }
-                            return nil
-                        }.joined(separator: " ")
-                    }
-                }
-                if case .assistant(let assistant) = msg.message {
-                    return assistant.content.compactMap { block in
-                        if case .text(let text) = block { return text.text }
-                        return nil
-                    }.joined(separator: " ")
-                }
-                return nil
-            }.joined(separator: " ")
-
-            result.append(SessionInfo(path: path, id: header.id, created: created, modified: modified, messageCount: messageCount, firstMessage: firstMessage, allMessagesText: allMessagesText))
+        for path in jsonlFiles {
+            if let info = buildSessionInfo(path) {
+                result.append(info)
+            }
+            loaded += 1
+            onProgress?(loaded, total)
         }
+
+        result.sort { $0.modified > $1.modified }
+        return result
+    }
+
+    public static func listAll(_ onProgress: SessionListProgress? = nil) async -> [SessionInfo] {
+        let sessionsDir = getSessionsDir()
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: sessionsDir),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else {
+            return []
+        }
+
+        var files: [String] = []
+        for entry in entries {
+            let isDir = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard isDir else { continue }
+            if let dirFiles = try? FileManager.default.contentsOfDirectory(atPath: entry.path) {
+                for file in dirFiles where file.hasSuffix(".jsonl") {
+                    files.append(URL(fileURLWithPath: entry.path).appendingPathComponent(file).path)
+                }
+            }
+        }
+
+        let total = files.count
+        var loaded = 0
+        var result: [SessionInfo] = []
+
+        for path in files {
+            if let info = buildSessionInfo(path) {
+                result.append(info)
+            }
+            loaded += 1
+            onProgress?(loaded, total)
+        }
+
+        result.sort { $0.modified > $1.modified }
         return result
     }
 
@@ -904,6 +1013,24 @@ public final class SessionManager: Sendable {
     }
 
     @discardableResult
+    public func appendSessionInfo(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = SessionInfoEntry(id: generateId(existing: Set(byId.keys)), parentId: leafId, timestamp: isoNow(), name: trimmed)
+        appendEntry(.sessionInfo(entry))
+        return entry.id
+    }
+
+    public func getSessionName() -> String? {
+        let entries = getEntries()
+        for entry in entries.reversed() {
+            if case .sessionInfo(let info) = entry, let name = info.name, !name.isEmpty {
+                return name
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
     public func appendLabelChange(_ targetId: String, _ label: String?) throws -> String {
         guard byId[targetId] != nil else {
             throw SessionManagerError.entryNotFound(targetId)
@@ -1099,10 +1226,10 @@ private func encodeSessionEntry(_ entry: SessionEntry) -> String {
 
 private func decodeSessionHeader(_ dict: [String: Any]) -> SessionHeader? {
     guard let id = dict["id"] as? String,
-          let timestamp = dict["timestamp"] as? String,
-          let cwd = dict["cwd"] as? String else {
+          let timestamp = dict["timestamp"] as? String else {
         return nil
     }
+    let cwd = dict["cwd"] as? String ?? ""
     let version = dict["version"] as? Int
     let parentSession = dict["parentSession"] as? String
     return SessionHeader(type: "session", version: version, id: id, timestamp: timestamp, cwd: cwd, parentSession: parentSession)
@@ -1166,6 +1293,9 @@ private func decodeSessionEntry(_ dict: [String: Any]) -> SessionEntry? {
         let targetId = dict["targetId"] as? String ?? ""
         let label = dict["label"] as? String
         return .label(LabelEntry(id: id, parentId: parentId, timestamp: timestamp, targetId: targetId, label: label))
+    case "session_info":
+        let name = dict["name"] as? String
+        return .sessionInfo(SessionInfoEntry(id: id, parentId: parentId, timestamp: timestamp, name: name))
     default:
         return nil
     }
@@ -1298,6 +1428,8 @@ private func sessionEntryToDict(_ entry: SessionEntry) -> [String: Any] {
     case .label(let entry):
         dict["targetId"] = entry.targetId
         dict["label"] = entry.label as Any
+    case .sessionInfo(let entry):
+        dict["name"] = entry.name as Any
     }
 
     return dict

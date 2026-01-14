@@ -17,6 +17,7 @@ public struct SettingsConfig: Sendable {
     public var showImages: Bool
     public var autoResizeImages: Bool
     public var blockImages: Bool
+    public var enableSkillCommands: Bool
     public var steeringMode: String
     public var followUpMode: String
     public var thinkingLevel: ThinkingLevel
@@ -25,12 +26,14 @@ public struct SettingsConfig: Sendable {
     public var availableThemes: [String]
     public var hideThinkingBlock: Bool
     public var collapseChangelog: Bool
+    public var doubleEscapeAction: String
 
     public init(
         autoCompact: Bool,
         showImages: Bool,
         autoResizeImages: Bool,
         blockImages: Bool,
+        enableSkillCommands: Bool,
         steeringMode: String,
         followUpMode: String,
         thinkingLevel: ThinkingLevel,
@@ -38,12 +41,14 @@ public struct SettingsConfig: Sendable {
         currentTheme: String,
         availableThemes: [String],
         hideThinkingBlock: Bool,
-        collapseChangelog: Bool
+        collapseChangelog: Bool,
+        doubleEscapeAction: String
     ) {
         self.autoCompact = autoCompact
         self.showImages = showImages
         self.autoResizeImages = autoResizeImages
         self.blockImages = blockImages
+        self.enableSkillCommands = enableSkillCommands
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
         self.thinkingLevel = thinkingLevel
@@ -52,6 +57,7 @@ public struct SettingsConfig: Sendable {
         self.availableThemes = availableThemes
         self.hideThinkingBlock = hideThinkingBlock
         self.collapseChangelog = collapseChangelog
+        self.doubleEscapeAction = doubleEscapeAction
     }
 }
 
@@ -60,6 +66,7 @@ public struct SettingsCallbacks {
     public var onShowImagesChange: (Bool) -> Void
     public var onAutoResizeImagesChange: (Bool) -> Void
     public var onBlockImagesChange: (Bool) -> Void
+    public var onEnableSkillCommandsChange: (Bool) -> Void
     public var onSteeringModeChange: (String) -> Void
     public var onFollowUpModeChange: (String) -> Void
     public var onThinkingLevelChange: (ThinkingLevel) -> Void
@@ -67,6 +74,7 @@ public struct SettingsCallbacks {
     public var onThemePreview: ((String) -> Void)?
     public var onHideThinkingBlockChange: (Bool) -> Void
     public var onCollapseChangelogChange: (Bool) -> Void
+    public var onDoubleEscapeActionChange: (String) -> Void
     public var onCancel: () -> Void
 
     public init(
@@ -74,6 +82,7 @@ public struct SettingsCallbacks {
         onShowImagesChange: @escaping (Bool) -> Void,
         onAutoResizeImagesChange: @escaping (Bool) -> Void,
         onBlockImagesChange: @escaping (Bool) -> Void,
+        onEnableSkillCommandsChange: @escaping (Bool) -> Void,
         onSteeringModeChange: @escaping (String) -> Void,
         onFollowUpModeChange: @escaping (String) -> Void,
         onThinkingLevelChange: @escaping (ThinkingLevel) -> Void,
@@ -81,12 +90,14 @@ public struct SettingsCallbacks {
         onThemePreview: ((String) -> Void)? = nil,
         onHideThinkingBlockChange: @escaping (Bool) -> Void,
         onCollapseChangelogChange: @escaping (Bool) -> Void,
+        onDoubleEscapeActionChange: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.onAutoCompactChange = onAutoCompactChange
         self.onShowImagesChange = onShowImagesChange
         self.onAutoResizeImagesChange = onAutoResizeImagesChange
         self.onBlockImagesChange = onBlockImagesChange
+        self.onEnableSkillCommandsChange = onEnableSkillCommandsChange
         self.onSteeringModeChange = onSteeringModeChange
         self.onFollowUpModeChange = onFollowUpModeChange
         self.onThinkingLevelChange = onThinkingLevelChange
@@ -94,6 +105,7 @@ public struct SettingsCallbacks {
         self.onThemePreview = onThemePreview
         self.onHideThinkingBlockChange = onHideThinkingBlockChange
         self.onCollapseChangelogChange = onCollapseChangelogChange
+        self.onDoubleEscapeActionChange = onDoubleEscapeActionChange
         self.onCancel = onCancel
     }
 }
@@ -189,6 +201,13 @@ public final class SettingsSelectorComponent: Container {
                 values: ["true", "false"]
             ),
             SettingItem(
+                id: "double-escape-action",
+                label: "Double-escape action",
+                description: "Action when pressing Escape twice with empty editor",
+                currentValue: config.doubleEscapeAction,
+                values: ["tree", "fork"]
+            ),
+            SettingItem(
                 id: "thinking",
                 label: "Thinking level",
                 description: "Reasoning depth for thinking-capable models",
@@ -276,6 +295,18 @@ public final class SettingsSelectorComponent: Container {
             at: blockImagesIndex
         )
 
+        let skillCommandsIndex = blockImagesIndex + 1
+        items.insert(
+            SettingItem(
+                id: "skill-commands",
+                label: "Skill commands",
+                description: "Register skills as /skill:name commands",
+                currentValue: config.enableSkillCommands ? "true" : "false",
+                values: ["true", "false"]
+            ),
+            at: skillCommandsIndex
+        )
+
         self.settingsList = SettingsList(
             items: items,
             maxVisible: 10,
@@ -290,6 +321,8 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onAutoResizeImagesChange(newValue == "true")
                 case "block-images":
                     callbacks.onBlockImagesChange(newValue == "true")
+                case "skill-commands":
+                    callbacks.onEnableSkillCommandsChange(newValue == "true")
                 case "steering-mode":
                     callbacks.onSteeringModeChange(newValue)
                 case "follow-up-mode":
@@ -298,11 +331,14 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onHideThinkingBlockChange(newValue == "true")
                 case "collapse-changelog":
                     callbacks.onCollapseChangelogChange(newValue == "true")
+                case "double-escape-action":
+                    callbacks.onDoubleEscapeActionChange(newValue)
                 default:
                     break
                 }
             },
-            onCancel: callbacks.onCancel
+            onCancel: callbacks.onCancel,
+            options: SettingsListOptions(enableSearch: true)
         )
 
         super.init()

@@ -214,7 +214,7 @@ private func hookContext(from ctx: HookCommandContext) -> HookContext {
         cwd: ctx.cwd,
         sessionManager: ctx.sessionManager,
         modelRegistry: ctx.modelRegistry,
-        model: ctx.model,
+        model: { ctx.model },
         isIdle: ctx.isIdle,
         abort: ctx.abort,
         hasPendingMessages: ctx.hasPendingMessages

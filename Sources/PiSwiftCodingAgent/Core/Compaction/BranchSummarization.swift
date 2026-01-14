@@ -147,7 +147,7 @@ Include:
     let conversationText = serializeConversation(llmMessages)
     let instructions: String
     if let custom = options.customInstructions, !custom.isEmpty {
-        instructions = custom
+        instructions = "\(summaryPrompt)\n\nAdditional focus: \(custom)"
     } else {
         instructions = summaryPrompt
     }

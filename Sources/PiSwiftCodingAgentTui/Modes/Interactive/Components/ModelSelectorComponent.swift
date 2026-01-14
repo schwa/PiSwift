@@ -29,6 +29,7 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
     private var errorMessage: String?
     private let tui: TUI
     private let scopedModels: [ScopedModelItem]
+    private let initialSearchInput: String?
     public var usesSystemCursor: Bool {
         get { searchInput.usesSystemCursor }
         set { searchInput.usesSystemCursor = newValue }
@@ -41,7 +42,8 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
         modelRegistry: ModelRegistry,
         scopedModels: [ScopedModel],
         onSelect: @escaping (Model) -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        initialSearchInput: String? = nil
     ) {
         self.tui = tui
         self.currentModel = currentModel
@@ -50,8 +52,12 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
         self.scopedModels = scopedModels.map { ScopedModelItem(model: $0.model, thinkingLevel: $0.thinkingLevel.rawValue) }
         self.onSelectCallback = onSelect
         self.onCancelCallback = onCancel
+        self.initialSearchInput = initialSearchInput
 
         self.searchInput = Input()
+        if let initialSearchInput, !initialSearchInput.isEmpty {
+            self.searchInput.setValue(initialSearchInput)
+        }
         self.listContainer = Container()
 
         super.init()
@@ -90,9 +96,8 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
                     ModelItem(provider: scoped.model.provider, id: scoped.model.id, model: scoped.model)
                 }
             } else {
-                if let error = modelRegistry.getError() {
-                    errorMessage = error
-                }
+                modelRegistry.refresh()
+                errorMessage = modelRegistry.getError()
                 let available = await modelRegistry.getAvailable()
                 items = available.map { model in
                     ModelItem(provider: model.provider, id: model.id, model: model)
@@ -111,7 +116,11 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
             allModels = items
             filteredModels = items
             selectedIndex = min(selectedIndex, max(0, items.count - 1))
-            updateList()
+            if let initialSearchInput, !initialSearchInput.isEmpty {
+                filterModels(initialSearchInput)
+            } else {
+                updateList()
+            }
             tui.requestRender()
         }
     }
@@ -164,25 +173,26 @@ public final class ModelSelectorComponent: Container, SystemCursorAware {
     }
 
     public override func handleInput(_ keyData: String) {
-        if isArrowUp(keyData) {
+        let kb = getEditorKeybindings()
+        if kb.matches(keyData, .selectUp) {
             guard !filteredModels.isEmpty else { return }
             selectedIndex = selectedIndex == 0 ? filteredModels.count - 1 : selectedIndex - 1
             updateList()
             return
         }
-        if isArrowDown(keyData) {
+        if kb.matches(keyData, .selectDown) {
             guard !filteredModels.isEmpty else { return }
             selectedIndex = selectedIndex == filteredModels.count - 1 ? 0 : selectedIndex + 1
             updateList()
             return
         }
-        if isEnter(keyData) {
+        if kb.matches(keyData, .selectConfirm) {
             if let selected = filteredModels[safe: selectedIndex] {
                 handleSelect(selected.model)
             }
             return
         }
-        if isEscape(keyData) || isCtrlC(keyData) {
+        if kb.matches(keyData, .selectCancel) {
             onCancelCallback()
             return
         }

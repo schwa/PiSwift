@@ -78,7 +78,103 @@ public struct HookFlagOptions: Sendable {
 
 public typealias HookWidgetFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
 
-public typealias HookFooterFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
+public typealias HookFooterFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme, _ footerData: FooterDataProviding) -> HookComponent
+
+public enum HookOverlayAnchor: String, Sendable {
+    case center
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+    case topCenter
+    case bottomCenter
+    case leftCenter
+    case rightCenter
+}
+
+public enum HookOverlaySize: Sendable {
+    case absolute(Int)
+    case percent(Int)
+}
+
+public struct HookOverlayMargin: Sendable {
+    public var top: Int
+    public var right: Int
+    public var bottom: Int
+    public var left: Int
+
+    public init(top: Int, right: Int, bottom: Int, left: Int) {
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+        self.left = left
+    }
+
+    public init(all: Int) {
+        self.init(top: all, right: all, bottom: all, left: all)
+    }
+}
+
+public struct HookOverlayOptions: Sendable {
+    public var width: HookOverlaySize?
+    public var minWidth: Int?
+    public var maxHeight: HookOverlaySize?
+    public var anchor: HookOverlayAnchor?
+    public var offsetX: Int?
+    public var offsetY: Int?
+    public var row: HookOverlaySize?
+    public var col: HookOverlaySize?
+    public var margin: HookOverlayMargin?
+
+    public init(
+        width: HookOverlaySize? = nil,
+        minWidth: Int? = nil,
+        maxHeight: HookOverlaySize? = nil,
+        anchor: HookOverlayAnchor? = nil,
+        offsetX: Int? = nil,
+        offsetY: Int? = nil,
+        row: HookOverlaySize? = nil,
+        col: HookOverlaySize? = nil,
+        margin: HookOverlayMargin? = nil
+    ) {
+        self.width = width
+        self.minWidth = minWidth
+        self.maxHeight = maxHeight
+        self.anchor = anchor
+        self.offsetX = offsetX
+        self.offsetY = offsetY
+        self.row = row
+        self.col = col
+        self.margin = margin
+    }
+}
+
+public protocol HookOverlayHandle: Sendable {
+    func hide()
+    func setHidden(_ hidden: Bool)
+    func isHidden() -> Bool
+}
+
+public enum HookOverlayOptionsSource: Sendable {
+    case fixed(HookOverlayOptions)
+    case dynamic(@Sendable () -> HookOverlayOptions)
+}
+
+public struct HookCustomOptions: Sendable {
+    public var overlay: Bool
+    public var overlayOptions: HookOverlayOptionsSource?
+    public var onHandle: (@Sendable (HookOverlayHandle) -> Void)?
+
+    public init(
+        overlay: Bool = false,
+        overlayOptions: HookOverlayOptionsSource? = nil,
+        onHandle: (@Sendable (HookOverlayHandle) -> Void)? = nil
+    ) {
+        self.overlay = overlay
+        self.overlayOptions = overlayOptions
+        self.onHandle = onHandle
+    }
+}
 
 public protocol HookEditorTheme: Sendable {}
 
@@ -136,10 +232,22 @@ public struct HookMessageInput: Sendable {
 
 public typealias HookSendMessageHandler = @Sendable (_ message: HookMessageInput, _ options: HookSendMessageOptions?) -> Void
 public typealias HookAppendEntryHandler = @Sendable (_ customType: String, _ data: [String: Any]) -> Void
+public typealias HookSetSessionNameHandler = @Sendable (_ name: String) -> Void
+public typealias HookGetSessionNameHandler = @Sendable () -> String?
 public typealias HookSendMessageSetter = @Sendable (@escaping HookSendMessageHandler) -> Void
 public typealias HookAppendEntrySetter = @Sendable (@escaping HookAppendEntryHandler) -> Void
 public typealias HookGetActiveToolsHandler = @Sendable () -> [String]
-public typealias HookGetAllToolsHandler = @Sendable () -> [String]
+public struct ToolInfo: Sendable {
+    public var name: String
+    public var description: String
+
+    public init(name: String, description: String) {
+        self.name = name
+        self.description = description
+    }
+}
+
+public typealias HookGetAllToolsHandler = @Sendable () -> [ToolInfo]
 public typealias HookSetActiveToolsHandler = @Sendable (_ toolNames: [String]) -> Void
 public typealias HookGetActiveToolsSetter = @Sendable (@escaping HookGetActiveToolsHandler) -> Void
 public typealias HookGetAllToolsSetter = @Sendable (@escaping HookGetAllToolsHandler) -> Void
@@ -173,7 +281,7 @@ public struct HookNavigateTreeOptions: Sendable {
 }
 
 public typealias HookNewSessionHandler = @Sendable (_ options: HookNewSessionOptions?) async -> HookCommandResult
-public typealias HookBranchHandler = @Sendable (_ entryId: String) async -> HookCommandResult
+public typealias HookForkHandler = @Sendable (_ entryId: String) async -> HookCommandResult
 public typealias HookNavigateTreeHandler = @Sendable (_ targetId: String, _ options: HookNavigateTreeOptions?) async -> HookCommandResult
 
 public struct RegisteredCommand: Sendable {
@@ -235,10 +343,11 @@ public protocol HookUIContext: Sendable {
     func input(_ title: String, _ placeholder: String?) async -> String?
     func notify(_ message: String, _ type: HookNotificationType?)
     func setStatus(_ key: String, _ text: String?)
+    func setWorkingMessage(_ message: String?)
     func setWidget(_ key: String, _ content: HookWidgetContent?)
     func setFooter(_ factory: HookFooterFactory?)
     func setTitle(_ title: String)
-    func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult?
+    func custom(_ factory: @escaping HookCustomFactory, options: HookCustomOptions?) async -> HookCustomResult?
     func setEditorText(_ text: String)
     func getEditorText() -> String
     func editor(_ title: String, _ prefill: String?) async -> String?
@@ -267,10 +376,11 @@ public final class NoOpHookUIContext: HookUIContext {
     public func input(_ title: String, _ placeholder: String?) async -> String? { nil }
     public func notify(_ message: String, _ type: HookNotificationType?) {}
     public func setStatus(_ key: String, _ text: String?) {}
+    public func setWorkingMessage(_ message: String?) {}
     public func setWidget(_ key: String, _ content: HookWidgetContent?) {}
     public func setFooter(_ factory: HookFooterFactory?) {}
     public func setTitle(_ title: String) {}
-    public func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? { nil }
+    public func custom(_ factory: @escaping HookCustomFactory, options: HookCustomOptions?) async -> HookCustomResult? { nil }
     public func setEditorText(_ text: String) {}
     public func getEditorText() -> String { "" }
     public func editor(_ title: String, _ prefill: String?) async -> String? { nil }
@@ -289,7 +399,7 @@ public struct HookContext: Sendable {
     public var cwd: String
     public var sessionManager: SessionManager
     public var modelRegistry: ModelRegistry
-    public var model: Model?
+    private var getModelHandler: @Sendable () -> Model?
     public var isIdle: @Sendable () -> Bool
     public var abort: @Sendable () -> Void
     public var hasPendingMessages: @Sendable () -> Bool
@@ -300,7 +410,7 @@ public struct HookContext: Sendable {
         cwd: String,
         sessionManager: SessionManager,
         modelRegistry: ModelRegistry,
-        model: Model?,
+        model: @escaping @Sendable () -> Model?,
         isIdle: @escaping @Sendable () -> Bool,
         abort: @escaping @Sendable () -> Void,
         hasPendingMessages: @escaping @Sendable () -> Bool
@@ -310,7 +420,7 @@ public struct HookContext: Sendable {
         self.cwd = cwd
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
-        self.model = model
+        self.getModelHandler = model
         self.isIdle = isIdle
         self.abort = abort
         self.hasPendingMessages = hasPendingMessages
@@ -323,11 +433,15 @@ public struct HookContext: Sendable {
             cwd: FileManager.default.currentDirectoryPath,
             sessionManager: sessionManager,
             modelRegistry: modelRegistry,
-            model: model,
+            model: { model },
             isIdle: { true },
             abort: {},
             hasPendingMessages: { false }
         )
+    }
+
+    public var model: Model? {
+        getModelHandler()
     }
 }
 
@@ -337,13 +451,13 @@ public struct HookCommandContext: Sendable {
     public var cwd: String
     public var sessionManager: SessionManager
     public var modelRegistry: ModelRegistry
-    public var model: Model?
+    private var getModelHandler: @Sendable () -> Model?
     public var isIdle: @Sendable () -> Bool
     public var abort: @Sendable () -> Void
     public var hasPendingMessages: @Sendable () -> Bool
     public var waitForIdle: @Sendable () async -> Void
     public var newSession: HookNewSessionHandler
-    public var branch: HookBranchHandler
+    public var fork: HookForkHandler
     public var navigateTree: HookNavigateTreeHandler
 
     public init(
@@ -352,13 +466,13 @@ public struct HookCommandContext: Sendable {
         cwd: String,
         sessionManager: SessionManager,
         modelRegistry: ModelRegistry,
-        model: Model?,
+        model: @escaping @Sendable () -> Model?,
         isIdle: @escaping @Sendable () -> Bool,
         abort: @escaping @Sendable () -> Void,
         hasPendingMessages: @escaping @Sendable () -> Bool,
         waitForIdle: @escaping @Sendable () async -> Void,
         newSession: @escaping HookNewSessionHandler,
-        branch: @escaping HookBranchHandler,
+        fork: @escaping HookForkHandler,
         navigateTree: @escaping HookNavigateTreeHandler
     ) {
         self.ui = ui
@@ -366,14 +480,18 @@ public struct HookCommandContext: Sendable {
         self.cwd = cwd
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
-        self.model = model
+        self.getModelHandler = model
         self.isIdle = isIdle
         self.abort = abort
         self.hasPendingMessages = hasPendingMessages
         self.waitForIdle = waitForIdle
         self.newSession = newSession
-        self.branch = branch
+        self.fork = fork
         self.navigateTree = navigateTree
+    }
+
+    public var model: Model? {
+        getModelHandler()
     }
 }
 
@@ -498,6 +616,25 @@ public struct TurnEndEvent: HookEvent, Sendable {
     }
 }
 
+public enum ModelSelectSource: String, Sendable {
+    case set
+    case cycle
+    case restore
+}
+
+public struct ModelSelectEvent: HookEvent, Sendable {
+    public let type: String = "model_select"
+    public var model: Model
+    public var previousModel: Model?
+    public var source: ModelSelectSource
+
+    public init(model: Model, previousModel: Model?, source: ModelSelectSource) {
+        self.model = model
+        self.previousModel = previousModel
+        self.source = source
+    }
+}
+
 public struct UserBashEvent: HookEvent, Sendable {
     public let type: String = "user_bash"
     public var command: String
@@ -547,8 +684,8 @@ public struct SessionCompactEvent: HookEvent, Sendable {
     }
 }
 
-public struct SessionBeforeBranchEvent: HookEvent, Sendable {
-    public let type: String = "session_before_branch"
+public struct SessionBeforeForkEvent: HookEvent, Sendable {
+    public let type: String = "session_before_fork"
     public var entryId: String
 
     public init(entryId: String) {
@@ -556,8 +693,8 @@ public struct SessionBeforeBranchEvent: HookEvent, Sendable {
     }
 }
 
-public struct SessionBranchEvent: HookEvent, Sendable {
-    public let type: String = "session_branch"
+public struct SessionForkEvent: HookEvent, Sendable {
+    public let type: String = "session_fork"
     public var previousSessionFile: String?
 
     public init(previousSessionFile: String?) {
@@ -688,7 +825,7 @@ public struct SessionBeforeSwitchResult: Sendable {
     }
 }
 
-public struct SessionBeforeBranchResult: Sendable {
+public struct SessionBeforeForkResult: Sendable {
     public var cancel: Bool
     public var skipConversationRestore: Bool
 
@@ -742,6 +879,8 @@ public struct LoadedHook: Sendable {
     public var shortcuts: [KeyId: HookShortcut]
     public var setSendMessageHandler: HookSendMessageSetter
     public var setAppendEntryHandler: HookAppendEntrySetter
+    public var setSetSessionNameHandler: (@Sendable (@escaping HookSetSessionNameHandler) -> Void)
+    public var setGetSessionNameHandler: (@Sendable (@escaping HookGetSessionNameHandler) -> Void)
     public var setGetActiveToolsHandler: HookGetActiveToolsSetter
     public var setGetAllToolsHandler: HookGetAllToolsSetter
     public var setSetActiveToolsHandler: HookSetActiveToolsSetter
@@ -757,6 +896,8 @@ public struct LoadedHook: Sendable {
         shortcuts: [KeyId: HookShortcut] = [:],
         setSendMessageHandler: @escaping HookSendMessageSetter = { _ in },
         setAppendEntryHandler: @escaping HookAppendEntrySetter = { _ in },
+        setSetSessionNameHandler: @escaping (@Sendable (@escaping HookSetSessionNameHandler) -> Void) = { _ in },
+        setGetSessionNameHandler: @escaping (@Sendable (@escaping HookGetSessionNameHandler) -> Void) = { _ in },
         setGetActiveToolsHandler: @escaping HookGetActiveToolsSetter = { _ in },
         setGetAllToolsHandler: @escaping HookGetAllToolsSetter = { _ in },
         setSetActiveToolsHandler: @escaping HookSetActiveToolsSetter = { _ in },
@@ -771,6 +912,8 @@ public struct LoadedHook: Sendable {
         self.shortcuts = shortcuts
         self.setSendMessageHandler = setSendMessageHandler
         self.setAppendEntryHandler = setAppendEntryHandler
+        self.setSetSessionNameHandler = setSetSessionNameHandler
+        self.setGetSessionNameHandler = setGetSessionNameHandler
         self.setGetActiveToolsHandler = setGetActiveToolsHandler
         self.setGetAllToolsHandler = setGetAllToolsHandler
         self.setSetActiveToolsHandler = setSetActiveToolsHandler
@@ -806,6 +949,8 @@ public final class HookAPI: Sendable {
         var shortcuts: [KeyId: HookShortcut]
         var sendMessageHandler: HookSendMessageHandler
         var appendEntryHandler: HookAppendEntryHandler
+        var setSessionNameHandler: HookSetSessionNameHandler
+        var getSessionNameHandler: HookGetSessionNameHandler
         var getActiveToolsHandler: HookGetActiveToolsHandler
         var getAllToolsHandler: HookGetAllToolsHandler
         var setActiveToolsHandler: HookSetActiveToolsHandler
@@ -849,6 +994,16 @@ public final class HookAPI: Sendable {
         set { state.withLock { $0.appendEntryHandler = newValue } }
     }
 
+    private var setSessionNameHandler: HookSetSessionNameHandler {
+        get { state.withLock { $0.setSessionNameHandler } }
+        set { state.withLock { $0.setSessionNameHandler = newValue } }
+    }
+
+    private var getSessionNameHandler: HookGetSessionNameHandler {
+        get { state.withLock { $0.getSessionNameHandler } }
+        set { state.withLock { $0.getSessionNameHandler = newValue } }
+    }
+
     private var getActiveToolsHandler: HookGetActiveToolsHandler {
         get { state.withLock { $0.getActiveToolsHandler } }
         set { state.withLock { $0.getActiveToolsHandler = newValue } }
@@ -890,6 +1045,8 @@ public final class HookAPI: Sendable {
             shortcuts: [:],
             sendMessageHandler: { _, _ in },
             appendEntryHandler: { _, _ in },
+            setSessionNameHandler: { _ in },
+            getSessionNameHandler: { nil },
             getActiveToolsHandler: { [] },
             getAllToolsHandler: { [] },
             setActiveToolsHandler: { _ in },
@@ -913,6 +1070,14 @@ public final class HookAPI: Sendable {
 
     public func setAppendEntryHandler(_ handler: @escaping HookAppendEntryHandler) {
         appendEntryHandler = handler
+    }
+
+    public func setSetSessionNameHandler(_ handler: @escaping HookSetSessionNameHandler) {
+        setSessionNameHandler = handler
+    }
+
+    public func setGetSessionNameHandler(_ handler: @escaping HookGetSessionNameHandler) {
+        getSessionNameHandler = handler
     }
 
     public func setGetActiveToolsHandler(_ handler: @escaping HookGetActiveToolsHandler) {
@@ -951,11 +1116,19 @@ public final class HookAPI: Sendable {
         appendEntryHandler(customType, data)
     }
 
+    public func setSessionName(_ name: String) {
+        setSessionNameHandler(name)
+    }
+
+    public func getSessionName() -> String? {
+        getSessionNameHandler()
+    }
+
     public func getActiveTools() -> [String] {
         getActiveToolsHandler()
     }
 
-    public func getAllTools() -> [String] {
+    public func getAllTools() -> [ToolInfo] {
         getAllToolsHandler()
     }
 

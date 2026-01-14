@@ -31,6 +31,7 @@ public struct SkillsSettings: Sendable {
         enableClaudeProject: Bool? = nil,
         enablePiUser: Bool? = nil,
         enablePiProject: Bool? = nil,
+        enableSkillCommands: Bool? = nil,
         customDirectories: [String]? = nil,
         ignoredSkills: [String]? = nil,
         includeSkills: [String]? = nil
@@ -41,6 +42,7 @@ public struct SkillsSettings: Sendable {
         self.enableClaudeProject = enableClaudeProject
         self.enablePiUser = enablePiUser
         self.enablePiProject = enablePiProject
+        self.enableSkillCommands = enableSkillCommands
         self.customDirectories = customDirectories
         self.ignoredSkills = ignoredSkills
         self.includeSkills = includeSkills
@@ -52,6 +54,7 @@ public struct SkillsSettings: Sendable {
     public var enableClaudeProject: Bool?
     public var enablePiUser: Bool?
     public var enablePiProject: Bool?
+    public var enableSkillCommands: Bool?
     public var customDirectories: [String]?
     public var ignoredSkills: [String]?
     public var includeSkills: [String]?
@@ -100,6 +103,7 @@ public struct Settings: Sendable {
     public var terminal: TerminalSettings?
     public var images: ImageSettings?
     public var enabledModels: [String]?
+    public var doubleEscapeAction: String?
     public var thinkingBudgets: ThinkingBudgetsSettings?
 
     public init() {}
@@ -326,11 +330,47 @@ public final class SettingsManager: Sendable {
     }
 
     public func getSkillsSettings() -> SkillsSettings {
-        settings.skills ?? SkillsSettings()
+        let skills = settings.skills ?? SkillsSettings()
+        return SkillsSettings(
+            enabled: skills.enabled ?? true,
+            enableCodexUser: skills.enableCodexUser ?? true,
+            enableClaudeUser: skills.enableClaudeUser ?? true,
+            enableClaudeProject: skills.enableClaudeProject ?? true,
+            enablePiUser: skills.enablePiUser ?? true,
+            enablePiProject: skills.enablePiProject ?? true,
+            enableSkillCommands: skills.enableSkillCommands ?? true,
+            customDirectories: skills.customDirectories ?? [],
+            ignoredSkills: skills.ignoredSkills ?? [],
+            includeSkills: skills.includeSkills ?? []
+        )
+    }
+
+    public func getEnableSkillCommands() -> Bool {
+        settings.skills?.enableSkillCommands ?? true
+    }
+
+    public func setEnableSkillCommands(_ enabled: Bool) {
+        if globalSettings.skills == nil { globalSettings.skills = SkillsSettings() }
+        globalSettings.skills?.enableSkillCommands = enabled
+        save()
     }
 
     public func getEnabledModels() -> [String]? {
         settings.enabledModels
+    }
+
+    public func setEnabledModels(_ patterns: [String]?) {
+        globalSettings.enabledModels = patterns
+        save()
+    }
+
+    public func getDoubleEscapeAction() -> String {
+        settings.doubleEscapeAction ?? "tree"
+    }
+
+    public func setDoubleEscapeAction(_ action: String) {
+        globalSettings.doubleEscapeAction = action
+        save()
     }
 
     public func getTerminalSettings() -> TerminalSettings {
@@ -414,6 +454,7 @@ public final class SettingsManager: Sendable {
         settings.hooks = json["hooks"] as? [String]
         settings.customTools = json["customTools"] as? [String]
         settings.enabledModels = json["enabledModels"] as? [String]
+        settings.doubleEscapeAction = json["doubleEscapeAction"] as? String
 
         if let compaction = json["compaction"] as? [String: Any] {
             settings.compaction = CompactionSettingsOverrides(
@@ -443,6 +484,7 @@ public final class SettingsManager: Sendable {
                 enableClaudeProject: skills["enableClaudeProject"] as? Bool,
                 enablePiUser: skills["enablePiUser"] as? Bool,
                 enablePiProject: skills["enablePiProject"] as? Bool,
+                enableSkillCommands: skills["enableSkillCommands"] as? Bool,
                 customDirectories: skills["customDirectories"] as? [String],
                 ignoredSkills: skills["ignoredSkills"] as? [String],
                 includeSkills: skills["includeSkills"] as? [String]
@@ -488,6 +530,7 @@ public final class SettingsManager: Sendable {
         json["hooks"] = globalSettings.hooks
         json["customTools"] = globalSettings.customTools
         json["enabledModels"] = globalSettings.enabledModels
+        json["doubleEscapeAction"] = globalSettings.doubleEscapeAction
 
         if let compaction = globalSettings.compaction {
             json["compaction"] = [
@@ -517,6 +560,7 @@ public final class SettingsManager: Sendable {
                 "enableClaudeProject": skills.enableClaudeProject as Any,
                 "enablePiUser": skills.enablePiUser as Any,
                 "enablePiProject": skills.enablePiProject as Any,
+                "enableSkillCommands": skills.enableSkillCommands as Any,
                 "customDirectories": skills.customDirectories as Any,
                 "ignoredSkills": skills.ignoredSkills as Any,
                 "includeSkills": skills.includeSkills as Any,
@@ -574,6 +618,7 @@ public final class SettingsManager: Sendable {
         if override.terminal != nil { result.terminal = override.terminal }
         if override.images != nil { result.images = override.images }
         if override.enabledModels != nil { result.enabledModels = override.enabledModels }
+        if override.doubleEscapeAction != nil { result.doubleEscapeAction = override.doubleEscapeAction }
         if override.thinkingBudgets != nil { result.thinkingBudgets = override.thinkingBudgets }
         return result
     }

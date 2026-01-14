@@ -51,8 +51,8 @@ public enum RpcCommandType: String, Sendable {
     case getSessionStats = "get_session_stats"
     case exportHtml = "export_html"
     case switchSession = "switch_session"
-    case branch
-    case getBranchMessages = "get_branch_messages"
+    case fork
+    case getForkMessages = "get_fork_messages"
     case getLastAssistantText = "get_last_assistant_text"
     case getMessages = "get_messages"
 }
@@ -109,7 +109,7 @@ public struct RpcCycleModelResult: Sendable {
     }
 }
 
-public struct RpcBranchResult: Sendable {
+public struct RpcForkResult: Sendable {
     public var text: String
     public var cancelled: Bool
 
@@ -539,24 +539,24 @@ public actor RpcClient {
         return data["cancelled"] as? Bool ?? false
     }
 
-    public func branch(entryId: String) async throws -> RpcBranchResult {
-        let response = try await send(["type": "branch", "entryId": entryId])
+    public func fork(entryId: String) async throws -> RpcForkResult {
+        let response = try await send(["type": "fork", "entryId": entryId])
         guard let data = try responseData(response) as? [String: Any] else {
-            throw RpcClientError("Invalid branch response")
+            throw RpcClientError("Invalid fork response")
         }
         let text = data["text"] as? String ?? ""
         let cancelled = data["cancelled"] as? Bool ?? false
-        return RpcBranchResult(text: text, cancelled: cancelled)
+        return RpcForkResult(text: text, cancelled: cancelled)
     }
 
-    public func getBranchMessages() async throws -> [BranchableMessage] {
-        let response = try await send(["type": "get_branch_messages"])
+    public func getForkMessages() async throws -> [ForkableMessage] {
+        let response = try await send(["type": "get_fork_messages"])
         guard let data = try responseData(response) as? [String: Any],
               let messages = data["messages"] as? [[String: Any]] else {
-            throw RpcClientError("Invalid get_branch_messages response")
+            throw RpcClientError("Invalid get_fork_messages response")
         }
         return messages.map {
-            BranchableMessage(entryId: $0["entryId"] as? String ?? "", text: $0["text"] as? String ?? "")
+            ForkableMessage(entryId: $0["entryId"] as? String ?? "", text: $0["text"] as? String ?? "")
         }
     }
 

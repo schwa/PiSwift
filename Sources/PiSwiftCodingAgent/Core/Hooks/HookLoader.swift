@@ -100,6 +100,8 @@ private func loadHook(_ hookPath: String, cwd: String, eventBus: EventBus) -> (h
             shortcuts: api.shortcuts,
             setSendMessageHandler: api.setSendMessageHandler,
             setAppendEntryHandler: api.setAppendEntryHandler,
+            setSetSessionNameHandler: api.setSetSessionNameHandler,
+            setGetSessionNameHandler: api.setGetSessionNameHandler,
             setGetActiveToolsHandler: api.setGetActiveToolsHandler,
             setGetAllToolsHandler: api.setGetAllToolsHandler,
             setSetActiveToolsHandler: api.setSetActiveToolsHandler,

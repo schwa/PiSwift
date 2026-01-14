@@ -34,7 +34,7 @@ public final class HookRunner: Sendable {
         var abort: @Sendable () -> Void
         var hasPendingMessages: @Sendable () -> Bool
         var newSessionHandler: HookNewSessionHandler
-        var branchHandler: HookBranchHandler
+        var forkHandler: HookForkHandler
         var navigateTreeHandler: HookNavigateTreeHandler
         var uiContext: HookUIContext
         var hasUI: Bool
@@ -76,9 +76,9 @@ public final class HookRunner: Sendable {
         set { state.withLock { $0.newSessionHandler = newValue } }
     }
 
-    private var branchHandler: HookBranchHandler {
-        get { state.withLock { $0.branchHandler } }
-        set { state.withLock { $0.branchHandler = newValue } }
+    private var forkHandler: HookForkHandler {
+        get { state.withLock { $0.forkHandler } }
+        set { state.withLock { $0.forkHandler = newValue } }
     }
 
     private var navigateTreeHandler: HookNavigateTreeHandler {
@@ -113,7 +113,7 @@ public final class HookRunner: Sendable {
             abort: {},
             hasPendingMessages: { false },
             newSessionHandler: { _ in HookCommandResult(cancelled: false) },
-            branchHandler: { _ in HookCommandResult(cancelled: false) },
+            forkHandler: { _ in HookCommandResult(cancelled: false) },
             navigateTreeHandler: { _, _ in HookCommandResult(cancelled: false) },
             uiContext: NoOpHookUIContext(),
             hasUI: false,
@@ -125,11 +125,13 @@ public final class HookRunner: Sendable {
         getModel: @escaping @Sendable () -> Model?,
         sendMessageHandler: @escaping HookSendMessageHandler = { _, _ in },
         appendEntryHandler: @escaping HookAppendEntryHandler = { _, _ in },
+        setSessionNameHandler: @escaping HookSetSessionNameHandler = { _ in },
+        getSessionNameHandler: @escaping HookGetSessionNameHandler = { nil },
         getActiveToolsHandler: HookGetActiveToolsHandler? = nil,
         getAllToolsHandler: HookGetAllToolsHandler? = nil,
         setActiveToolsHandler: HookSetActiveToolsHandler? = nil,
         newSessionHandler: HookNewSessionHandler? = nil,
-        branchHandler: HookBranchHandler? = nil,
+        forkHandler: HookForkHandler? = nil,
         navigateTreeHandler: HookNavigateTreeHandler? = nil,
         isIdle: (@Sendable () -> Bool)? = nil,
         waitForIdle: (@Sendable () async -> Void)? = nil,
@@ -146,8 +148,8 @@ public final class HookRunner: Sendable {
         if let newSessionHandler {
             self.newSessionHandler = newSessionHandler
         }
-        if let branchHandler {
-            self.branchHandler = branchHandler
+        if let forkHandler {
+            self.forkHandler = forkHandler
         }
         if let navigateTreeHandler {
             self.navigateTreeHandler = navigateTreeHandler
@@ -158,6 +160,8 @@ public final class HookRunner: Sendable {
         for hook in hooks {
             hook.setSendMessageHandler(sendMessageHandler)
             hook.setAppendEntryHandler(appendEntryHandler)
+            hook.setSetSessionNameHandler(setSessionNameHandler)
+            hook.setGetSessionNameHandler(getSessionNameHandler)
             hook.setGetActiveToolsHandler(getActiveToolsHandler ?? { [] })
             hook.setGetAllToolsHandler(getAllToolsHandler ?? { [] })
             hook.setSetActiveToolsHandler(setActiveToolsHandler ?? { _ in })
@@ -268,7 +272,9 @@ public final class HookRunner: Sendable {
             cwd: cwd,
             sessionManager: sessionManager,
             modelRegistry: modelRegistry,
-            model: getModel(),
+            model: { [weak self] in
+                self?.getModel()
+            },
             isIdle: { [weak self] in self?.isIdle() ?? true },
             abort: { [weak self] in self?.abort() },
             hasPendingMessages: { [weak self] in self?.hasPendingMessages() ?? false }
@@ -286,7 +292,9 @@ public final class HookRunner: Sendable {
             cwd: cwd,
             sessionManager: sessionManager,
             modelRegistry: modelRegistry,
-            model: getModel(),
+            model: { [weak self] in
+                self?.getModel()
+            },
             isIdle: { [weak self] in self?.isIdle() ?? true },
             abort: { [weak self] in self?.abort() },
             hasPendingMessages: { [weak self] in self?.hasPendingMessages() ?? false },
@@ -295,9 +303,9 @@ public final class HookRunner: Sendable {
                 guard let self else { return HookCommandResult(cancelled: true) }
                 return await self.newSessionHandler(options)
             },
-            branch: { [weak self] entryId in
+            fork: { [weak self] entryId in
                 guard let self else { return HookCommandResult(cancelled: true) }
-                return await self.branchHandler(entryId)
+                return await self.forkHandler(entryId)
             },
             navigateTree: { [weak self] targetId, options in
                 guard let self else { return HookCommandResult(cancelled: true) }
@@ -322,7 +330,7 @@ public final class HookRunner: Sendable {
                         if let result = result as? SessionBeforeTreeResult, result.cancel {
                             return result
                         }
-                        if let result = result as? SessionBeforeBranchResult, result.cancel {
+                        if let result = result as? SessionBeforeForkResult, result.cancel {
                             return result
                         }
                         if let result = result as? SessionBeforeSwitchResult, result.cancel {

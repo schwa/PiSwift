@@ -132,6 +132,10 @@ private final class RpcHookUIContext: HookUIContext {
         ])
     }
 
+    func setWorkingMessage(_ message: String?) {
+        _ = message
+    }
+
     func setWidget(_ key: String, _ content: HookWidgetContent?) {
         switch content {
         case .lines(let lines):
@@ -168,8 +172,9 @@ private final class RpcHookUIContext: HookUIContext {
         ])
     }
 
-    func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? {
+    func custom(_ factory: @escaping HookCustomFactory, options: HookCustomOptions?) async -> HookCustomResult? {
         _ = factory
+        _ = options
         return nil
     }
 
@@ -273,11 +278,17 @@ public func runRpcMode(_ session: AgentSession) async {
             appendEntryHandler: { [weak session] customType, data in
                 session?.sessionManager.appendCustomEntry(customType, data)
             },
+            setSessionNameHandler: { [weak session] name in
+                _ = session?.sessionManager.appendSessionInfo(name)
+            },
+            getSessionNameHandler: { [weak session] in
+                session?.sessionManager.getSessionName()
+            },
             getActiveToolsHandler: { [weak session] in
                 session?.getActiveToolNames() ?? []
             },
             getAllToolsHandler: { [weak session] in
-                session?.getAllToolNames() ?? []
+                session?.getAllTools() ?? []
             },
             setActiveToolsHandler: { [weak session] toolNames in
                 session?.setActiveToolsByName(toolNames)
@@ -513,16 +524,16 @@ private func handleRpcCommand(
         let cancelled = !(await session.switchSession(sessionPath))
         return makeSuccessResponse(idValue, "switch_session", ["cancelled": cancelled])
 
-    case "branch":
+    case "fork":
         guard let entryId = dict["entryId"] as? String else {
-            return makeErrorResponse(idValue, "branch", "Missing entryId")
+            return makeErrorResponse(idValue, "fork", "Missing entryId")
         }
-        let result = try await session.branch(entryId)
-        return makeSuccessResponse(idValue, "branch", ["text": result.selectedText, "cancelled": result.cancelled])
+        let result = try await session.fork(entryId)
+        return makeSuccessResponse(idValue, "fork", ["text": result.selectedText, "cancelled": result.cancelled])
 
-    case "get_branch_messages":
-        let messages = session.getUserMessagesForBranching().map { ["entryId": $0.entryId, "text": $0.text] }
-        return makeSuccessResponse(idValue, "get_branch_messages", ["messages": messages])
+    case "get_fork_messages":
+        let messages = session.getUserMessagesForForking().map { ["entryId": $0.entryId, "text": $0.text] }
+        return makeSuccessResponse(idValue, "get_fork_messages", ["messages": messages])
 
     case "get_last_assistant_text":
         return makeSuccessResponse(idValue, "get_last_assistant_text", ["text": session.getLastAssistantText() as Any])

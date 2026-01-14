@@ -19,10 +19,15 @@ public func streamOpenAICompletions(
         )
 
         do {
-            let client = try makeOpenAIClient(model: model, apiKey: options.apiKey)
             let compat = resolveCompat(model: model)
             let query = try buildCompletionsQuery(model: model, context: context, options: options, compat: compat)
-            let openAIStream: AsyncThrowingStream<ChatStreamResult, Error> = client.chatsStream(query: query)
+            let openAIStream: AsyncThrowingStream<ChatStreamResult, Error>
+            if compat.thinkingFormat == .zai {
+                openAIStream = try streamZaiCompletions(model: model, context: context, options: options, query: query)
+            } else {
+                let client = try makeOpenAIClient(model: model, apiKey: options.apiKey)
+                openAIStream = client.chatsStream(query: query)
+            }
             stream.push(.start(partial: output))
 
             var currentBlockIndex: Int? = nil
@@ -183,14 +188,17 @@ private struct ResolvedOpenAICompat {
     let supportsStore: Bool
     let supportsDeveloperRole: Bool
     let supportsReasoningEffort: Bool
+    let supportsUsageInStreaming: Bool
     let maxTokensField: OpenAICompatMaxTokensField
     let requiresToolResultName: Bool
     let requiresAssistantAfterToolResult: Bool
     let requiresThinkingAsText: Bool
     let requiresMistralToolIds: Bool
+    let thinkingFormat: OpenAICompatThinkingFormat
 }
 
 private func detectCompatFromUrl(_ baseUrl: String) -> ResolvedOpenAICompat {
+    let lowercased = baseUrl.lowercased()
     let isNonStandard = baseUrl.contains("cerebras.ai") ||
         baseUrl.contains("api.x.ai") ||
         baseUrl.contains("mistral.ai") ||
@@ -199,16 +207,19 @@ private func detectCompatFromUrl(_ baseUrl: String) -> ResolvedOpenAICompat {
     let useMaxTokens = baseUrl.contains("mistral.ai") || baseUrl.contains("chutes.ai")
     let isGrok = baseUrl.contains("api.x.ai")
     let isMistral = baseUrl.contains("mistral.ai")
+    let isZai = lowercased.contains("z.ai")
 
     return ResolvedOpenAICompat(
         supportsStore: !isNonStandard,
         supportsDeveloperRole: !isNonStandard,
-        supportsReasoningEffort: !isGrok,
+        supportsReasoningEffort: !isGrok && !isZai,
+        supportsUsageInStreaming: true,
         maxTokensField: useMaxTokens ? .maxTokens : .maxCompletionTokens,
         requiresToolResultName: isMistral,
         requiresAssistantAfterToolResult: false,
         requiresThinkingAsText: isMistral,
-        requiresMistralToolIds: isMistral
+        requiresMistralToolIds: isMistral,
+        thinkingFormat: isZai ? .zai : .openai
     )
 }
 
@@ -220,11 +231,13 @@ private func resolveCompat(model: Model) -> ResolvedOpenAICompat {
         supportsStore: compat.supportsStore ?? detected.supportsStore,
         supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
         supportsReasoningEffort: compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+        supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
         maxTokensField: compat.maxTokensField ?? detected.maxTokensField,
         requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
         requiresAssistantAfterToolResult: compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
         requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-        requiresMistralToolIds: compat.requiresMistralToolIds ?? detected.requiresMistralToolIds
+        requiresMistralToolIds: compat.requiresMistralToolIds ?? detected.requiresMistralToolIds,
+        thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat
     )
 }
 
@@ -288,11 +301,15 @@ private func buildCompletionsQuery(
         return nil
     }()
 
-    let reasoningEffort = (options.reasoningEffort != nil && model.reasoning && compat.supportsReasoningEffort)
+    let reasoningEffort = (options.reasoningEffort != nil &&
+        model.reasoning &&
+        compat.supportsReasoningEffort &&
+        compat.thinkingFormat == .openai)
         ? mapChatReasoningEffort(options.reasoningEffort!)
         : nil
 
     let maxCompletionTokens = options.maxTokens
+    let streamOptions: ChatQuery.StreamOptions? = compat.supportsUsageInStreaming ? .init(includeUsage: true) : nil
 
     let query = ChatQuery(
         messages: messages,
@@ -304,7 +321,7 @@ private func buildCompletionsQuery(
         toolChoice: toolChoice,
         tools: tools,
         stream: true,
-        streamOptions: .init(includeUsage: true)
+        streamOptions: streamOptions
     )
 
     return query
@@ -387,13 +404,14 @@ private func convertCompletionsMessages(
 
             let thinkingBlocks = assistant.content.compactMap { block -> ThinkingContent? in
                 if case .thinking(let thinking) = block {
-                    return thinking
+                    let trimmed = thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : thinking
                 }
                 return nil
             }
 
             if !thinkingBlocks.isEmpty && compat.requiresThinkingAsText {
-                let thinkingText = thinkingBlocks.map { "<thinking>\n\($0.thinking)\n</thinking>" }.joined(separator: "\n")
+                let thinkingText = thinkingBlocks.map { $0.thinking }.joined(separator: "\n\n")
                 contentText = thinkingText + contentText
             }
 
@@ -471,7 +489,165 @@ private func convertCompletionsTools(_ tools: [AITool]) -> [ChatQuery.ChatComple
     }
 }
 
-private enum OpenAICompletionsStreamError: Error {
+private func streamZaiCompletions(
+    model: Model,
+    context: Context,
+    options: OpenAICompletionsOptions,
+    query: ChatQuery
+) throws -> AsyncThrowingStream<ChatStreamResult, Error> {
+    guard let apiKey = options.apiKey, !apiKey.isEmpty else {
+        throw StreamError.missingApiKey(model.provider)
+    }
+
+    var request = URLRequest(url: chatCompletionsUrl(baseUrl: model.baseUrl))
+    request.httpMethod = "POST"
+    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    request.setValue("text/event-stream", forHTTPHeaderField: "accept")
+    request.setValue("application/json", forHTTPHeaderField: "content-type")
+
+    if let headers = model.headers {
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+    }
+
+    request.httpBody = try buildZaiRequestBody(query: query, model: model, options: options)
+    return streamChatCompletions(request: request, signal: options.signal)
+}
+
+private func buildZaiRequestBody(query: ChatQuery, model: Model, options: OpenAICompletionsOptions) throws -> Data {
+    let encoded = try JSONEncoder().encode(query)
+    guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+        throw OpenAICompletionsStreamError.invalidResponse
+    }
+
+    if model.reasoning {
+        let enabled = options.reasoningEffort != nil
+        object["thinking"] = ["type": enabled ? "enabled" : "disabled"]
+    }
+
+    return try JSONSerialization.data(withJSONObject: object, options: [])
+}
+
+private func chatCompletionsUrl(baseUrl: String) -> URL {
+    var trimmed = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty {
+        trimmed = "https://api.openai.com/v1"
+    }
+    if trimmed.hasSuffix("/") {
+        trimmed.removeLast()
+    }
+    if trimmed.hasSuffix("/chat/completions") {
+        return URL(string: trimmed)!
+    }
+    return URL(string: trimmed + "/chat/completions")!
+}
+
+private func streamChatCompletions(
+    request: URLRequest,
+    signal: CancellationToken?
+) -> AsyncThrowingStream<ChatStreamResult, Error> {
+    AsyncThrowingStream { continuation in
+        Task {
+            var buffer = Data()
+            let delimiterCrlf = Data([13, 10, 13, 10])
+            let delimiterLf = Data([10, 10])
+
+            do {
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw OpenAICompletionsStreamError.invalidResponse
+                }
+                if !(200..<300).contains(http.statusCode) {
+                    let body = try await collectStreamData(from: bytes)
+                    let message = String(data: body, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+                    throw OpenAICompletionsStreamError.apiError(message)
+                }
+
+                for try await byte in bytes {
+                    if signal?.isCancelled == true {
+                        throw OpenAICompletionsStreamError.aborted
+                    }
+                    buffer.append(byte)
+                    while let range = findStreamDelimiter(in: buffer, crlf: delimiterCrlf, lf: delimiterLf) {
+                        let chunk = buffer.subdata(in: 0..<range.lowerBound)
+                        buffer.removeSubrange(0..<range.upperBound)
+                        if let event = parseOpenAISseEvent(from: chunk) {
+                            continuation.yield(event)
+                        }
+                    }
+                }
+
+                if !buffer.isEmpty, let event = parseOpenAISseEvent(from: buffer) {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+}
+
+private func findStreamDelimiter(in buffer: Data, crlf: Data, lf: Data) -> Range<Data.Index>? {
+    let crlfRange = buffer.range(of: crlf)
+    let lfRange = buffer.range(of: lf)
+
+    switch (crlfRange, lfRange) {
+    case (nil, nil):
+        return nil
+    case (let range?, nil):
+        return range
+    case (nil, let range?):
+        return range
+    case (let range1?, let range2?):
+        return range1.lowerBound <= range2.lowerBound ? range1 : range2
+    }
+}
+
+private func parseOpenAISseEvent(from chunk: Data) -> ChatStreamResult? {
+    guard !chunk.isEmpty, let raw = String(data: chunk, encoding: .utf8) else { return nil }
+    let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+    let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
+    var dataLines: [String] = []
+    for line in lines {
+        if line.hasPrefix("data:") {
+            let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            dataLines.append(data)
+        }
+    }
+
+    guard !dataLines.isEmpty else { return nil }
+    let payload = dataLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !payload.isEmpty, payload != "[DONE]" else { return nil }
+    guard let json = payload.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(ChatStreamResult.self, from: json)
+}
+
+private func collectStreamData(from bytes: URLSession.AsyncBytes) async throws -> Data {
+    var data = Data()
+    for try await byte in bytes {
+        data.append(byte)
+    }
+    return data
+}
+
+private enum OpenAICompletionsStreamError: Error, LocalizedError {
     case aborted
     case unknown
+    case invalidResponse
+    case apiError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .aborted:
+            return "Request was aborted"
+        case .unknown:
+            return "OpenAI request failed"
+        case .invalidResponse:
+            return "OpenAI request failed: invalid response"
+        case .apiError(let message):
+            return message
+        }
+    }
 }

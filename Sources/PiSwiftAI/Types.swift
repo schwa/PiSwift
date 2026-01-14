@@ -4,12 +4,17 @@ public enum Api: String, Sendable {
     case openAICompletions = "openai-completions"
     case openAIResponses = "openai-responses"
     case anthropicMessages = "anthropic-messages"
+    case bedrockConverseStream = "bedrock-converse-stream"
 }
 
 public enum KnownProvider: String, Sendable {
     case openai
     case openaiCodex = "openai-codex"
     case anthropic
+    case amazonBedrock = "amazon-bedrock"
+    case minimax
+    case vercelAiGateway = "vercel-ai-gateway"
+    case zai
     case opencode
 }
 
@@ -81,34 +86,45 @@ public enum OpenAICompatMaxTokensField: String, Sendable {
     case maxTokens = "max_tokens"
 }
 
+public enum OpenAICompatThinkingFormat: String, Sendable {
+    case openai
+    case zai
+}
+
 public struct OpenAICompat: Sendable {
     public var supportsStore: Bool?
     public var supportsDeveloperRole: Bool?
     public var supportsReasoningEffort: Bool?
+    public var supportsUsageInStreaming: Bool?
     public var maxTokensField: OpenAICompatMaxTokensField?
     public var requiresToolResultName: Bool?
     public var requiresAssistantAfterToolResult: Bool?
     public var requiresThinkingAsText: Bool?
     public var requiresMistralToolIds: Bool?
+    public var thinkingFormat: OpenAICompatThinkingFormat?
 
     public init(
         supportsStore: Bool? = nil,
         supportsDeveloperRole: Bool? = nil,
         supportsReasoningEffort: Bool? = nil,
+        supportsUsageInStreaming: Bool? = nil,
         maxTokensField: OpenAICompatMaxTokensField? = nil,
         requiresToolResultName: Bool? = nil,
         requiresAssistantAfterToolResult: Bool? = nil,
         requiresThinkingAsText: Bool? = nil,
-        requiresMistralToolIds: Bool? = nil
+        requiresMistralToolIds: Bool? = nil,
+        thinkingFormat: OpenAICompatThinkingFormat? = nil
     ) {
         self.supportsStore = supportsStore
         self.supportsDeveloperRole = supportsDeveloperRole
         self.supportsReasoningEffort = supportsReasoningEffort
+        self.supportsUsageInStreaming = supportsUsageInStreaming
         self.maxTokensField = maxTokensField
         self.requiresToolResultName = requiresToolResultName
         self.requiresAssistantAfterToolResult = requiresAssistantAfterToolResult
         self.requiresThinkingAsText = requiresThinkingAsText
         self.requiresMistralToolIds = requiresMistralToolIds
+        self.thinkingFormat = thinkingFormat
     }
 }
 
@@ -446,6 +462,14 @@ public enum OpenAIReasoningSummary: String, Sendable {
     case concise
 }
 
+public enum OpenAIServiceTier: String, Sendable {
+    case auto
+    case defaultTier = "default"
+    case flex
+    case priority
+    case onDemand = "on_demand"
+}
+
 public enum OpenAICodexReasoningSummary: String, Sendable {
     case auto
     case concise
@@ -467,6 +491,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var apiKey: String?
     public var reasoningEffort: ThinkingLevel?
     public var reasoningSummary: OpenAIReasoningSummary?
+    public var serviceTier: OpenAIServiceTier?
     public var sessionId: String?
 
     public init(
@@ -476,6 +501,7 @@ public struct OpenAIResponsesOptions: Sendable {
         apiKey: String? = nil,
         reasoningEffort: ThinkingLevel? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
+        serviceTier: OpenAIServiceTier? = nil,
         sessionId: String? = nil
     ) {
         self.temperature = temperature
@@ -484,6 +510,7 @@ public struct OpenAIResponsesOptions: Sendable {
         self.apiKey = apiKey
         self.reasoningEffort = reasoningEffort
         self.reasoningSummary = reasoningSummary
+        self.serviceTier = serviceTier
         self.sessionId = sessionId
     }
 }
@@ -557,6 +584,47 @@ public struct AnthropicOptions: Sendable {
         self.thinkingBudgetTokens = thinkingBudgetTokens
         self.interleavedThinking = interleavedThinking
         self.toolChoice = toolChoice
+    }
+}
+
+public enum BedrockToolChoice: Sendable {
+    case auto
+    case any
+    case none
+    case tool(name: String)
+}
+
+public struct BedrockOptions: Sendable {
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var region: String?
+    public var profile: String?
+    public var toolChoice: BedrockToolChoice?
+    public var reasoning: ThinkingLevel?
+    public var thinkingBudgets: ThinkingBudgets?
+    public var interleavedThinking: Bool?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        region: String? = nil,
+        profile: String? = nil,
+        toolChoice: BedrockToolChoice? = nil,
+        reasoning: ThinkingLevel? = nil,
+        thinkingBudgets: ThinkingBudgets? = nil,
+        interleavedThinking: Bool? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.region = region
+        self.profile = profile
+        self.toolChoice = toolChoice
+        self.reasoning = reasoning
+        self.thinkingBudgets = thinkingBudgets
+        self.interleavedThinking = interleavedThinking
     }
 }
 

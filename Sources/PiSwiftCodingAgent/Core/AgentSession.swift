@@ -88,7 +88,7 @@ public struct PromptOptions: Sendable {
     }
 }
 
-public struct BranchableMessage: Sendable {
+public struct ForkableMessage: Sendable {
     public var entryId: String
     public var text: String
 
@@ -171,7 +171,7 @@ public enum AgentSessionError: LocalizedError, Sendable {
     case missingApiKeyForProvider(provider: String, authPath: String)
     case alreadyProcessingContinue
     case missingApiKeyForModel(provider: String, modelId: String)
-    case invalidEntryIdForBranching
+    case invalidEntryIdForForking
     case missingApiKey(provider: String)
     case nothingToCompact
     case compactionCancelled
@@ -191,8 +191,8 @@ public enum AgentSessionError: LocalizedError, Sendable {
             return "Agent is already processing. Wait for completion before continuing."
         case .missingApiKeyForModel(let provider, let modelId):
             return "No API key for \(provider)/\(modelId)"
-        case .invalidEntryIdForBranching:
-            return "Invalid entry ID for branching"
+        case .invalidEntryIdForForking:
+            return "Invalid entry ID for forking"
         case .missingApiKey(let provider):
             return "No API key for \(provider)"
         case .nothingToCompact:
@@ -243,7 +243,7 @@ public final class AgentSession: Sendable {
         set { state.withLock { $0.customToolsInternal = newValue } }
     }
 
-    private var scopedModels: [ScopedModel] {
+    private var scopedModelsInternal: [ScopedModel] {
         get { state.withLock { $0.scopedModels } }
         set { state.withLock { $0.scopedModels = newValue } }
     }
@@ -375,7 +375,13 @@ public final class AgentSession: Sendable {
         self._hookRunner?.initialize(
             getModel: { [weak agent] in agent?.state.model },
             getActiveToolsHandler: { [weak self] in self?.getActiveToolNames() ?? [] },
-            getAllToolsHandler: { [weak self] in self?.getAllToolNames() ?? [] },
+            getAllToolsHandler: { [weak self] in self?.getAllTools() ?? [] },
+            setSessionNameHandler: { [weak self] name in
+                self?.sessionManager.appendSessionInfo(name)
+            },
+            getSessionNameHandler: { [weak self] in
+                self?.sessionManager.getSessionName()
+            },
             setActiveToolsHandler: { [weak self] names in self?.setActiveToolsByName(names) },
             hasUI: false
         )
@@ -528,12 +534,24 @@ public final class AgentSession: Sendable {
         steeringMessages.count + followUpMessages.count
     }
 
+    public var scopedModels: [ScopedModel] {
+        scopedModelsInternal
+    }
+
+    public func setScopedModels(_ scopedModels: [ScopedModel]) {
+        scopedModelsInternal = scopedModels
+    }
+
     public func getActiveToolNames() -> [String] {
         agent.state.tools.map { $0.name }
     }
 
     public func getAllToolNames() -> [String] {
         Array(toolRegistry.keys)
+    }
+
+    public func getAllTools() -> [ToolInfo] {
+        toolRegistry.values.map { ToolInfo(name: $0.name, description: $0.description) }
     }
 
     public func setActiveToolsByName(_ toolNames: [String]) {
@@ -800,7 +818,7 @@ public final class AgentSession: Sendable {
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionSwitchEvent(reason: .resume, previousSessionFile: previousSession))
         }
-        syncAgentContext()
+        await syncAgentContext()
         await emitCustomToolSessionEvent(.switch, previousSessionFile: previousSession)
         return true
     }
@@ -809,37 +827,51 @@ public final class AgentSession: Sendable {
         await modelRegistry.getAvailable()
     }
 
+    private func emitModelSelect(
+        nextModel: Model,
+        previousModel: Model?,
+        source: ModelSelectSource
+    ) async {
+        guard let hookRunner = _hookRunner else { return }
+        if modelsAreEqual(previousModel, nextModel) { return }
+        _ = await hookRunner.emit(ModelSelectEvent(model: nextModel, previousModel: previousModel, source: source))
+    }
+
     public func setModel(_ model: Model) async throws {
         guard await modelRegistry.getApiKey(model.provider) != nil else {
             throw AgentSessionError.missingApiKeyForModel(provider: model.provider, modelId: model.id)
         }
+        let previousModel = agent.state.model
         agent.setModel(model)
         sessionManager.appendModelChange(model.provider, model.id)
         settingsManager.setDefaultModelAndProvider(model.provider, model.id)
         setThinkingLevel(agent.state.thinkingLevel)
+        await emitModelSelect(nextModel: model, previousModel: previousModel, source: .set)
     }
 
     public func cycleModel(direction: ModelCycleDirection = .forward) async throws -> ModelCycleResult? {
-        if !scopedModels.isEmpty {
+        if !scopedModelsInternal.isEmpty {
             return try await cycleScopedModel(direction)
         }
         return try await cycleAvailableModel(direction)
     }
 
     private func cycleScopedModel(_ direction: ModelCycleDirection) async throws -> ModelCycleResult? {
-        guard scopedModels.count > 1 else { return nil }
+        guard scopedModelsInternal.count > 1 else { return nil }
         let current = agent.state.model
-        let currentIndex = scopedModels.firstIndex { modelsAreEqual($0.model, current) } ?? 0
-        let count = scopedModels.count
+        let currentIndex = scopedModelsInternal.firstIndex { modelsAreEqual($0.model, current) } ?? 0
+        let count = scopedModelsInternal.count
         let nextIndex = direction == .forward ? (currentIndex + 1) % count : (currentIndex - 1 + count) % count
-        let next = scopedModels[nextIndex]
+        let next = scopedModelsInternal[nextIndex]
         guard await modelRegistry.getApiKey(next.model.provider) != nil else {
             throw AgentSessionError.missingApiKeyForModel(provider: next.model.provider, modelId: next.model.id)
         }
+        let previousModel = agent.state.model
         agent.setModel(next.model)
         sessionManager.appendModelChange(next.model.provider, next.model.id)
         settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id)
         setThinkingLevel(next.thinkingLevel)
+        await emitModelSelect(nextModel: next.model, previousModel: previousModel, source: .cycle)
         return ModelCycleResult(model: next.model, thinkingLevel: agent.state.thinkingLevel, isScoped: true)
     }
 
@@ -854,10 +886,12 @@ public final class AgentSession: Sendable {
         guard await modelRegistry.getApiKey(next.provider) != nil else {
             throw AgentSessionError.missingApiKeyForModel(provider: next.provider, modelId: next.id)
         }
+        let previousModel = agent.state.model
         agent.setModel(next)
         sessionManager.appendModelChange(next.provider, next.id)
         settingsManager.setDefaultModelAndProvider(next.provider, next.id)
         setThinkingLevel(agent.state.thinkingLevel)
+        await emitModelSelect(nextModel: next, previousModel: previousModel, source: .cycle)
         return ModelCycleResult(model: next, thinkingLevel: agent.state.thinkingLevel, isScoped: false)
     }
 
@@ -967,30 +1001,30 @@ public final class AgentSession: Sendable {
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
     }
 
-    public func getUserMessagesForBranching() -> [BranchableMessage] {
+    public func getUserMessagesForForking() -> [ForkableMessage] {
         let entries = sessionManager.getEntries()
-        var result: [BranchableMessage] = []
+        var result: [ForkableMessage] = []
         for entry in entries {
             if case .message(let msg) = entry, case .user(let user) = msg.message {
                 let text = extractUserContentText(user.content)
-                result.append(BranchableMessage(entryId: entry.id, text: text))
+                result.append(ForkableMessage(entryId: entry.id, text: text))
             }
         }
         return result
     }
 
-    public func branch(_ entryId: String) async throws -> (selectedText: String, cancelled: Bool) {
+    public func fork(_ entryId: String) async throws -> (selectedText: String, cancelled: Bool) {
         let selectedEntry = sessionManager.getEntry(entryId)
         guard case .message(let msg) = selectedEntry, case .user(let user) = msg.message else {
-            throw AgentSessionError.invalidEntryIdForBranching
+            throw AgentSessionError.invalidEntryIdForForking
         }
 
         let selectedText = extractUserContentText(user.content)
         let previousSession = sessionFile
         var skipConversationRestore = false
 
-        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_branch") {
-            if let result = await hookRunner.emit(SessionBeforeBranchEvent(entryId: entryId)) as? SessionBeforeBranchResult {
+        if let hookRunner = _hookRunner, hookRunner.hasHandlers("session_before_fork") {
+            if let result = await hookRunner.emit(SessionBeforeForkEvent(entryId: entryId)) as? SessionBeforeForkResult {
                 if result.cancel {
                     return (selectedText, true)
                 }
@@ -1006,14 +1040,14 @@ public final class AgentSession: Sendable {
         agent.sessionId = sessionManager.getSessionId()
 
         if let hookRunner = _hookRunner {
-            _ = await hookRunner.emit(SessionBranchEvent(previousSessionFile: previousSession))
+            _ = await hookRunner.emit(SessionForkEvent(previousSessionFile: previousSession))
         }
 
-        await emitCustomToolSessionEvent(.branch, previousSessionFile: previousSession)
+        await emitCustomToolSessionEvent(.fork, previousSessionFile: previousSession)
         pendingNextTurnMessages.removeAll()
 
         if !skipConversationRestore {
-            syncAgentContext()
+            await syncAgentContext()
         }
 
         return (selectedText, false)
@@ -1126,7 +1160,7 @@ public final class AgentSession: Sendable {
             sessionManager.branch(newLeafId)
         }
 
-        syncAgentContext()
+        await syncAgentContext()
 
         if let hookRunner = _hookRunner {
             _ = await hookRunner.emit(SessionTreeEvent(newLeafId: sessionManager.getLeafId(), oldLeafId: oldLeafId, summaryEntry: summaryEntry, fromHook: summaryEntry != nil ? fromHook : nil))
@@ -1204,7 +1238,7 @@ public final class AgentSession: Sendable {
             fromHook: fromHook
         )
 
-        syncAgentContext()
+        await syncAgentContext()
 
         if let hookRunner = _hookRunner {
             if let entry = sessionManager.getEntries().compactMap({ entry -> CompactionEntry? in
@@ -1218,12 +1252,14 @@ public final class AgentSession: Sendable {
         return result
     }
 
-    private func syncAgentContext() {
+    private func syncAgentContext() async {
         let context = sessionManager.buildSessionContext()
+        let previousModel = agent.state.model
         agent.replaceMessages(context.messages)
         if let modelInfo = context.model {
             if let model = modelRegistry.find(modelInfo.provider, modelInfo.modelId) {
                 agent.setModel(model)
+                await emitModelSelect(nextModel: model, previousModel: previousModel, source: .restore)
             }
         }
         agent.setThinkingLevel(ThinkingLevel(rawValue: context.thinkingLevel) ?? .off)

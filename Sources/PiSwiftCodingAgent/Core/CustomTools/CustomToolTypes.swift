@@ -41,7 +41,7 @@ public struct CustomToolSessionEvent: Sendable {
     public enum Reason: String, Sendable {
         case start
         case `switch`
-        case branch
+        case fork
         case tree
         case shutdown
     }

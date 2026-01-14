@@ -1,6 +1,6 @@
 import Foundation
 
-private func normalizeCopilotToolCallId(_ id: String) -> String {
+private func normalizeToolCallId(_ id: String) -> String {
     let filtered = id.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
     return String(filtered.prefix(40))
 }
@@ -24,18 +24,21 @@ public func transformMessages(_ messages: [Message], model: Model) -> [Message] 
                 return msg
             }
 
-            let needsToolCallIdNormalization =
-                assistant.provider == "github-copilot" &&
+            let targetRequiresStrictIds = model.api == .anthropicMessages || model.provider == "github-copilot"
+            let crossProviderSwitch = assistant.provider != model.provider
+            let copilotCrossApiSwitch = assistant.provider == "github-copilot" &&
                 model.provider == "github-copilot" &&
                 assistant.api != model.api
+            let needsToolCallIdNormalization = targetRequiresStrictIds && (crossProviderSwitch || copilotCrossApiSwitch)
 
-            let transformedContent: [ContentBlock] = assistant.content.map { block in
+            let transformedContent: [ContentBlock] = assistant.content.compactMap { block in
                 switch block {
                 case .thinking(let thinking):
-                    let text = "<thinking>\n\(thinking.thinking)\n</thinking>"
-                    return .text(TextContent(text: text))
+                    let trimmed = thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty { return nil }
+                    return .text(TextContent(text: thinking.thinking))
                 case .toolCall(let toolCall) where needsToolCallIdNormalization:
-                    let normalized = normalizeCopilotToolCallId(toolCall.id)
+                    let normalized = normalizeToolCallId(toolCall.id)
                     if normalized != toolCall.id {
                         toolCallIdMap[toolCall.id] = normalized
                         var updated = toolCall

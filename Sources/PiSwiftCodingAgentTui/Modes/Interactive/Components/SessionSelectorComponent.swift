@@ -2,20 +2,108 @@ import Foundation
 import MiniTui
 import PiSwiftCodingAgent
 
-private final class SessionList: Component {
+private enum SessionScope: String {
+    case current
+    case all
+}
+
+public typealias SessionsLoader = (_ onProgress: SessionListProgress?) async -> [SessionInfo]
+
+private func shortenPath(_ path: String) -> String {
+    let home = NSHomeDirectory()
+    guard !path.isEmpty else { return path }
+    if path.hasPrefix(home) {
+        return "~" + path.dropFirst(home.count)
+    }
+    return path
+}
+
+private func formatSessionDate(_ date: Date) -> String {
+    let now = Date()
+    let diff = now.timeIntervalSince(date)
+    let diffMins = Int(diff / 60)
+    let diffHours = Int(diff / 3600)
+    let diffDays = Int(diff / 86400)
+
+    if diffMins < 1 { return "just now" }
+    if diffMins < 60 { return "\(diffMins) minute\(diffMins == 1 ? "" : "s") ago" }
+    if diffHours < 24 { return "\(diffHours) hour\(diffHours == 1 ? "" : "s") ago" }
+    if diffDays == 1 { return "1 day ago" }
+    if diffDays < 7 { return "\(diffDays) days ago" }
+
+    let formatter = DateFormatter()
+    formatter.dateStyle = .short
+    return formatter.string(from: date)
+}
+
+private final class SessionSelectorHeader: Component {
+    private var scope: SessionScope
+    private var loading = false
+    private var loadProgress: (loaded: Int, total: Int)?
+
+    init(scope: SessionScope) {
+        self.scope = scope
+    }
+
+    func setScope(_ scope: SessionScope) {
+        self.scope = scope
+    }
+
+    func setLoading(_ loading: Bool) {
+        self.loading = loading
+        if !loading {
+            loadProgress = nil
+        }
+    }
+
+    func setProgress(loaded: Int, total: Int) {
+        loadProgress = (loaded, total)
+    }
+
+    func invalidate() {}
+
+    func render(width: Int) -> [String] {
+        let title = scope == .current ? "Resume Session (Current Folder)" : "Resume Session (All)"
+        let leftText = theme.bold(title)
+        let scopeText: String
+        if loading {
+            let progressText = loadProgress.map { "\($0.loaded)/\($0.total)" } ?? "..."
+            scopeText = theme.fg(.muted, "o Current Folder | ") + theme.fg(.accent, "Loading \(progressText)")
+        } else {
+            scopeText = scope == .current
+                ? theme.fg(.accent, "* Current Folder") + theme.fg(.muted, " | o All")
+                : theme.fg(.muted, "o Current Folder | ") + theme.fg(.accent, "* All")
+        }
+        let rightText = truncateToWidth(scopeText, maxWidth: width, ellipsis: "")
+        let availableLeft = max(0, width - visibleWidth(rightText) - 1)
+        let left = truncateToWidth(leftText, maxWidth: availableLeft, ellipsis: "")
+        let spacing = max(0, width - visibleWidth(left) - visibleWidth(rightText))
+        let hint = theme.fg(.muted, "Tab to toggle scope")
+        return ["\(left)\(String(repeating: " ", count: spacing))\(rightText)", hint]
+    }
+}
+
+private final class SessionList: Component, SystemCursorAware {
     private var allSessions: [SessionInfo]
     private var filteredSessions: [SessionInfo]
     private var selectedIndex: Int = 0
     private let searchInput: Input
+    private var showCwd = false
     var onSelect: ((String) -> Void)?
     var onCancel: (() -> Void)?
     var onExit: (() -> Void)?
+    var onToggleScope: (() -> Void)?
     private let maxVisible = 5
+    var usesSystemCursor: Bool {
+        get { searchInput.usesSystemCursor }
+        set { searchInput.usesSystemCursor = newValue }
+    }
 
-    init(sessions: [SessionInfo]) {
+    init(sessions: [SessionInfo], showCwd: Bool) {
         self.allSessions = sessions
         self.filteredSessions = sessions
         self.searchInput = Input()
+        self.showCwd = showCwd
         self.searchInput.onSubmit = { [weak self] _ in
             guard let self else { return }
             if let selected = self.filteredSessions[safe: self.selectedIndex] {
@@ -24,7 +112,15 @@ private final class SessionList: Component {
         }
     }
 
-    func invalidate() {}
+    func setSessions(_ sessions: [SessionInfo], showCwd: Bool) {
+        allSessions = sessions
+        self.showCwd = showCwd
+        filterSessions(searchInput.getValue())
+    }
+
+    func invalidate() {
+        searchInput.invalidate()
+    }
 
     func render(width: Int) -> [String] {
         var lines: [String] = []
@@ -32,7 +128,11 @@ private final class SessionList: Component {
         lines.append("")
 
         if filteredSessions.isEmpty {
-            lines.append(theme.fg(.muted, "  No sessions found"))
+            if showCwd {
+                lines.append(theme.fg(.muted, "  No sessions found"))
+            } else {
+                lines.append(theme.fg(.muted, "  No sessions in current folder. Press Tab to view all."))
+            }
             return lines
         }
 
@@ -42,16 +142,30 @@ private final class SessionList: Component {
         for i in startIndex..<endIndex {
             let session = filteredSessions[i]
             let isSelected = i == selectedIndex
-            let normalizedMessage = session.firstMessage.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
 
-            let cursor = isSelected ? theme.fg(.accent, "› ") : "  "
+            let hasName = session.name != nil && !(session.name?.isEmpty ?? true)
+            let displayText = session.name ?? session.firstMessage
+            let normalizedMessage = displayText.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let cursor = isSelected ? theme.fg(.accent, "> ") : "  "
             let maxMsgWidth = width - 2
             let truncatedMsg = truncateToWidth(normalizedMessage, maxWidth: maxMsgWidth, ellipsis: "...")
-            let messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg)
+            var styledMsg = truncatedMsg
+            if hasName {
+                styledMsg = theme.fg(.warning, truncatedMsg)
+            }
+            if isSelected {
+                styledMsg = theme.bold(styledMsg)
+            }
+            let messageLine = cursor + styledMsg
 
-            let modified = formatDate(session.modified)
+            let modified = formatSessionDate(session.modified)
             let msgCount = "\(session.messageCount) message\(session.messageCount == 1 ? "" : "s")"
-            let metadata = "  \(modified) · \(msgCount)"
+            var metadataParts = [modified, msgCount]
+            if showCwd, !session.cwd.isEmpty {
+                metadataParts.append(shortenPath(session.cwd))
+            }
+            let metadata = "  " + metadataParts.joined(separator: " · ")
             let metadataLine = theme.fg(.dim, truncateToWidth(metadata, maxWidth: width, ellipsis: ""))
 
             lines.append(messageLine)
@@ -68,26 +182,35 @@ private final class SessionList: Component {
     }
 
     func handleInput(_ keyData: String) {
-        if isArrowUp(keyData) {
+        let kb = getEditorKeybindings()
+        if kb.matches(keyData, .tab) {
+            onToggleScope?()
+            return
+        }
+        if kb.matches(keyData, .selectUp) {
             selectedIndex = max(0, selectedIndex - 1)
             return
         }
-        if isArrowDown(keyData) {
+        if kb.matches(keyData, .selectDown) {
             selectedIndex = min(filteredSessions.count - 1, selectedIndex + 1)
             return
         }
-        if isEnter(keyData) {
+        if kb.matches(keyData, .selectPageUp) {
+            selectedIndex = max(0, selectedIndex - maxVisible)
+            return
+        }
+        if kb.matches(keyData, .selectPageDown) {
+            selectedIndex = min(filteredSessions.count - 1, selectedIndex + maxVisible)
+            return
+        }
+        if kb.matches(keyData, .selectConfirm) {
             if let selected = filteredSessions[safe: selectedIndex] {
                 onSelect?(selected.path)
             }
             return
         }
-        if isEscape(keyData) {
+        if kb.matches(keyData, .selectCancel) {
             onCancel?()
-            return
-        }
-        if isCtrlC(keyData) {
-            onExit?()
             return
         }
 
@@ -96,43 +219,42 @@ private final class SessionList: Component {
     }
 
     private func filterSessions(_ query: String) {
-        filteredSessions = fuzzyFilter(allSessions, query) { $0.allMessagesText }
+        filteredSessions = fuzzyFilter(allSessions, query: query) { session in
+            "\(session.id) \(session.name ?? "") \(session.allMessagesText) \(session.cwd)"
+        }
         selectedIndex = min(selectedIndex, max(0, filteredSessions.count - 1))
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let now = Date()
-        let diff = now.timeIntervalSince(date)
-        let diffMins = Int(diff / 60)
-        let diffHours = Int(diff / 3600)
-        let diffDays = Int(diff / 86400)
-
-        if diffMins < 1 { return "just now" }
-        if diffMins < 60 { return "\(diffMins) minute\(diffMins == 1 ? "" : "s") ago" }
-        if diffHours < 24 { return "\(diffHours) hour\(diffHours == 1 ? "" : "s") ago" }
-        if diffDays == 1 { return "1 day ago" }
-        if diffDays < 7 { return "\(diffDays) days ago" }
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        return formatter.string(from: date)
     }
 }
 
 public final class SessionSelectorComponent: Container {
     private let sessionList: SessionList
+    private let header: SessionSelectorHeader
+    private var scope: SessionScope = .current
+    private var currentSessions: [SessionInfo]?
+    private var allSessions: [SessionInfo]?
+    private let currentSessionsLoader: SessionsLoader
+    private let allSessionsLoader: SessionsLoader
+    private let onCancel: () -> Void
+    private let requestRender: () -> Void
 
     public init(
-        sessions: [SessionInfo],
+        currentSessionsLoader: @escaping SessionsLoader,
+        allSessionsLoader: @escaping SessionsLoader,
         onSelect: @escaping (String) -> Void,
         onCancel: @escaping () -> Void,
-        onExit: @escaping () -> Void
+        onExit: @escaping () -> Void,
+        requestRender: @escaping () -> Void
     ) {
-        self.sessionList = SessionList(sessions: sessions)
+        self.currentSessionsLoader = currentSessionsLoader
+        self.allSessionsLoader = allSessionsLoader
+        self.onCancel = onCancel
+        self.requestRender = requestRender
+        self.header = SessionSelectorHeader(scope: scope)
+        self.sessionList = SessionList(sessions: [], showCwd: false)
         super.init()
 
         addChild(Spacer(1))
-        addChild(Text(theme.bold("Resume Session"), paddingX: 1, paddingY: 0))
+        addChild(header)
         addChild(Spacer(1))
         addChild(DynamicBorder())
         addChild(Spacer(1))
@@ -140,18 +262,68 @@ public final class SessionSelectorComponent: Container {
         sessionList.onSelect = onSelect
         sessionList.onCancel = onCancel
         sessionList.onExit = onExit
+        sessionList.onToggleScope = { [weak self] in
+            self?.toggleScope()
+        }
 
         addChild(sessionList)
-
         addChild(Spacer(1))
         addChild(DynamicBorder())
 
-        if sessions.isEmpty {
-            onCancel()
+        loadCurrentSessions()
+    }
+
+    private func loadCurrentSessions() {
+        header.setLoading(true)
+        requestRender()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let sessions = await currentSessionsLoader { [weak self] loaded, total in
+                self?.header.setProgress(loaded: loaded, total: total)
+                self?.requestRender()
+            }
+            self.currentSessions = sessions
+            self.header.setLoading(false)
+            self.sessionList.setSessions(sessions, showCwd: false)
+            self.requestRender()
         }
     }
 
-    public func getSessionList() -> Component {
+    private func toggleScope() {
+        if scope == .current {
+            if allSessions == nil {
+                header.setLoading(true)
+                header.setScope(.all)
+                sessionList.setSessions([], showCwd: true)
+                requestRender()
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let sessions = await allSessionsLoader { [weak self] loaded, total in
+                        self?.header.setProgress(loaded: loaded, total: total)
+                        self?.requestRender()
+                    }
+                    self.allSessions = sessions
+                    self.header.setLoading(false)
+                    self.scope = .all
+                    self.sessionList.setSessions(sessions, showCwd: true)
+                    self.requestRender()
+                    if (self.allSessions?.isEmpty ?? true) && (self.currentSessions?.isEmpty ?? true) {
+                        self.onCancel()
+                    }
+                }
+            } else {
+                scope = .all
+                sessionList.setSessions(allSessions ?? [], showCwd: true)
+                header.setScope(scope)
+            }
+        } else {
+            scope = .current
+            sessionList.setSessions(currentSessions ?? [], showCwd: false)
+            header.setScope(scope)
+        }
+    }
+
+    public func getSessionList() -> SessionList {
         sessionList
     }
 }

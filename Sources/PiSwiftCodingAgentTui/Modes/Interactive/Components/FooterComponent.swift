@@ -6,28 +6,19 @@ import PiSwiftCodingAgent
 public final class FooterComponent: Component {
     private let session: AgentSession
     private var autoCompactEnabled = true
-    private var hookStatuses: [String: String] = [:]
-    private var cachedBranch: String?
-    private var branchCacheValid = false
+    private let footerData: FooterDataProviding
 
-    public init(session: AgentSession) {
+    public init(session: AgentSession, footerData: FooterDataProviding) {
         self.session = session
+        self.footerData = footerData
     }
 
     public func setAutoCompactEnabled(_ enabled: Bool) {
         autoCompactEnabled = enabled
     }
 
-    public func setHookStatus(_ key: String, _ text: String?) {
-        if let text {
-            hookStatuses[key] = sanitizeStatusText(text)
-        } else {
-            hookStatuses.removeValue(forKey: key)
-        }
-    }
-
     public func invalidate() {
-        branchCacheValid = false
+        // Branch cache invalidation handled by FooterDataProvider.
     }
 
     public func render(width: Int) -> [String] {
@@ -75,7 +66,7 @@ public final class FooterComponent: Component {
             pwd = "~" + pwd.dropFirst(home.count)
         }
 
-        if let branch = getCurrentBranch() {
+        if let branch = footerData.getGitBranch() {
             pwd += " (\(branch))"
         }
 
@@ -154,57 +145,16 @@ public final class FooterComponent: Component {
 
         var lines = [theme.fg(.dim, pwd), dimStatsLeft + dimRemainder]
 
-        if !hookStatuses.isEmpty {
-            let sortedStatuses = hookStatuses.keys.sorted().compactMap { hookStatuses[$0] }
+        let extensionStatuses = footerData.getExtensionStatuses()
+        if !extensionStatuses.isEmpty {
+            let sortedStatuses = extensionStatuses.keys.sorted().compactMap { key in
+                extensionStatuses[key].map(sanitizeStatusText)
+            }
             let statusLine = sortedStatuses.joined(separator: " ")
             lines.append(truncateToWidth(statusLine, maxWidth: width, ellipsis: theme.fg(.dim, "...")))
         }
 
         return lines
-    }
-
-    private func findGitHeadPath() -> String? {
-        var dir = FileManager.default.currentDirectoryPath
-        let fm = FileManager.default
-        while true {
-            let gitHead = (dir as NSString).appendingPathComponent(".git/HEAD")
-            if fm.fileExists(atPath: gitHead) {
-                return gitHead
-            }
-            let parent = (dir as NSString).deletingLastPathComponent
-            if parent.isEmpty || parent == dir {
-                return nil
-            }
-            dir = parent
-        }
-    }
-
-    private func getCurrentBranch() -> String? {
-        if branchCacheValid {
-            return cachedBranch
-        }
-
-        guard let gitHeadPath = findGitHeadPath() else {
-            branchCacheValid = true
-            cachedBranch = nil
-            return nil
-        }
-
-        do {
-            let content = try String(contentsOfFile: gitHeadPath, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if content.hasPrefix("ref: refs/heads/") {
-                let branch = String(content.dropFirst("ref: refs/heads/".count))
-                cachedBranch = branch
-            } else {
-                cachedBranch = "detached"
-            }
-        } catch {
-            cachedBranch = nil
-        }
-
-        branchCacheValid = true
-        return cachedBranch
     }
 }
 
