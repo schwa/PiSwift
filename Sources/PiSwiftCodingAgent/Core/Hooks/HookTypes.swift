@@ -78,6 +78,17 @@ public struct HookFlagOptions: Sendable {
 
 public typealias HookWidgetFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
 
+public typealias HookFooterFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme) -> HookComponent
+
+public protocol HookEditorTheme: Sendable {}
+
+public protocol HookKeybindings: Sendable {
+    func matches(_ data: String, _ action: AppAction) -> Bool
+    func getDisplayString(_ action: AppAction) -> String
+}
+
+public typealias HookEditorComponentFactory = @MainActor @Sendable (_ ui: HookUIHost, _ theme: HookEditorTheme, _ keybindings: HookKeybindings) -> HookComponent
+
 public enum HookWidgetContent {
     case lines([String])
     case component(HookWidgetFactory)
@@ -190,7 +201,32 @@ public struct HookCustomResult: Sendable {
 }
 
 public typealias HookCustomClose = @MainActor @Sendable ((any Sendable)?) -> Void
-public typealias HookCustomFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme, _ done: @escaping HookCustomClose) async -> HookComponent
+public typealias HookCustomFactory = @Sendable (_ ui: HookUIHost, _ theme: Theme, _ keybindings: HookKeybindings, _ done: @escaping HookCustomClose) async -> HookComponent
+
+public struct HookThemeInfo: Sendable {
+    public var name: String
+    public var path: String?
+
+    public init(name: String, path: String?) {
+        self.name = name
+        self.path = path
+    }
+}
+
+public enum HookThemeInput: Sendable {
+    case name(String)
+    case theme(Theme)
+}
+
+public struct HookThemeResult: Sendable {
+    public var success: Bool
+    public var error: String?
+
+    public init(success: Bool, error: String? = nil) {
+        self.success = success
+        self.error = error
+    }
+}
 
 @MainActor
 public protocol HookUIContext: Sendable {
@@ -200,11 +236,16 @@ public protocol HookUIContext: Sendable {
     func notify(_ message: String, _ type: HookNotificationType?)
     func setStatus(_ key: String, _ text: String?)
     func setWidget(_ key: String, _ content: HookWidgetContent?)
+    func setFooter(_ factory: HookFooterFactory?)
     func setTitle(_ title: String)
     func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult?
     func setEditorText(_ text: String)
     func getEditorText() -> String
     func editor(_ title: String, _ prefill: String?) async -> String?
+    func setEditorComponent(_ factory: HookEditorComponentFactory?)
+    func getAllThemes() -> [HookThemeInfo]
+    func getTheme(_ name: String) -> Theme?
+    func setTheme(_ theme: HookThemeInput) -> HookThemeResult
     var theme: Theme { get }
 }
 
@@ -227,11 +268,18 @@ public final class NoOpHookUIContext: HookUIContext {
     public func notify(_ message: String, _ type: HookNotificationType?) {}
     public func setStatus(_ key: String, _ text: String?) {}
     public func setWidget(_ key: String, _ content: HookWidgetContent?) {}
+    public func setFooter(_ factory: HookFooterFactory?) {}
     public func setTitle(_ title: String) {}
     public func custom(_ factory: @escaping HookCustomFactory) async -> HookCustomResult? { nil }
     public func setEditorText(_ text: String) {}
     public func getEditorText() -> String { "" }
     public func editor(_ title: String, _ prefill: String?) async -> String? { nil }
+    public func setEditorComponent(_ factory: HookEditorComponentFactory?) {}
+    public func getAllThemes() -> [HookThemeInfo] { [] }
+    public func getTheme(_ name: String) -> Theme? { nil }
+    public func setTheme(_ theme: HookThemeInput) -> HookThemeResult {
+        HookThemeResult(success: false, error: "UI not available")
+    }
     public var theme: Theme { Theme.fallback() }
 }
 
@@ -447,6 +495,29 @@ public struct TurnEndEvent: HookEvent, Sendable {
         self.turnIndex = turnIndex
         self.message = message
         self.toolResults = toolResults
+    }
+}
+
+public struct UserBashEvent: HookEvent, Sendable {
+    public let type: String = "user_bash"
+    public var command: String
+    public var excludeFromContext: Bool
+    public var cwd: String
+
+    public init(command: String, excludeFromContext: Bool, cwd: String) {
+        self.command = command
+        self.excludeFromContext = excludeFromContext
+        self.cwd = cwd
+    }
+}
+
+public struct UserBashEventResult: Sendable {
+    public var operations: BashOperations?
+    public var result: BashResult?
+
+    public init(operations: BashOperations? = nil, result: BashResult? = nil) {
+        self.operations = operations
+        self.result = result
     }
 }
 

@@ -16,6 +16,7 @@ public struct SettingsConfig: Sendable {
     public var autoCompact: Bool
     public var showImages: Bool
     public var autoResizeImages: Bool
+    public var blockImages: Bool
     public var steeringMode: String
     public var followUpMode: String
     public var thinkingLevel: ThinkingLevel
@@ -29,6 +30,7 @@ public struct SettingsConfig: Sendable {
         autoCompact: Bool,
         showImages: Bool,
         autoResizeImages: Bool,
+        blockImages: Bool,
         steeringMode: String,
         followUpMode: String,
         thinkingLevel: ThinkingLevel,
@@ -41,6 +43,7 @@ public struct SettingsConfig: Sendable {
         self.autoCompact = autoCompact
         self.showImages = showImages
         self.autoResizeImages = autoResizeImages
+        self.blockImages = blockImages
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
         self.thinkingLevel = thinkingLevel
@@ -56,6 +59,7 @@ public struct SettingsCallbacks {
     public var onAutoCompactChange: (Bool) -> Void
     public var onShowImagesChange: (Bool) -> Void
     public var onAutoResizeImagesChange: (Bool) -> Void
+    public var onBlockImagesChange: (Bool) -> Void
     public var onSteeringModeChange: (String) -> Void
     public var onFollowUpModeChange: (String) -> Void
     public var onThinkingLevelChange: (ThinkingLevel) -> Void
@@ -69,6 +73,7 @@ public struct SettingsCallbacks {
         onAutoCompactChange: @escaping (Bool) -> Void,
         onShowImagesChange: @escaping (Bool) -> Void,
         onAutoResizeImagesChange: @escaping (Bool) -> Void,
+        onBlockImagesChange: @escaping (Bool) -> Void,
         onSteeringModeChange: @escaping (String) -> Void,
         onFollowUpModeChange: @escaping (String) -> Void,
         onThinkingLevelChange: @escaping (ThinkingLevel) -> Void,
@@ -81,6 +86,7 @@ public struct SettingsCallbacks {
         self.onAutoCompactChange = onAutoCompactChange
         self.onShowImagesChange = onShowImagesChange
         self.onAutoResizeImagesChange = onAutoResizeImagesChange
+        self.onBlockImagesChange = onBlockImagesChange
         self.onSteeringModeChange = onSteeringModeChange
         self.onFollowUpModeChange = onFollowUpModeChange
         self.onThinkingLevelChange = onThinkingLevelChange
@@ -258,6 +264,18 @@ public final class SettingsSelectorComponent: Container {
             at: autoResizeIndex
         )
 
+        let blockImagesIndex = autoResizeIndex + 1
+        items.insert(
+            SettingItem(
+                id: "block-images",
+                label: "Block images",
+                description: "Prevent images from being sent to LLM providers",
+                currentValue: config.blockImages ? "true" : "false",
+                values: ["true", "false"]
+            ),
+            at: blockImagesIndex
+        )
+
         self.settingsList = SettingsList(
             items: items,
             maxVisible: 10,
@@ -270,6 +288,8 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onShowImagesChange(newValue == "true")
                 case "auto-resize-images":
                     callbacks.onAutoResizeImagesChange(newValue == "true")
+                case "block-images":
+                    callbacks.onBlockImagesChange(newValue == "true")
                 case "steering-mode":
                     callbacks.onSteeringModeChange(newValue)
                 case "follow-up-mode":

@@ -195,7 +195,10 @@ private func resolveTools(
     cwd: String,
     dependencies: SubagentToolDependencies
 ) -> (tools: [AgentTool], selected: [ToolName], unknown: [String]) {
-    let toolsOptions = ToolsOptions(read: ReadToolOptions(autoResizeImages: dependencies.settingsManager.getAutoResizeImages()))
+    let toolsOptions = ToolsOptions(read: ReadToolOptions(
+        autoResizeImages: dependencies.settingsManager.getAutoResizeImages(),
+        blockImages: dependencies.settingsManager.getBlockImages()
+    ))
     var allTools = createAllTools(cwd: cwd, options: toolsOptions)
     if let _ = allTools[.subagent] {
         allTools[.subagent] = nil
@@ -386,6 +389,19 @@ private func runSingleAgent(
         skills: skills
     ))
 
+    let blockImages = dependencies.settingsManager.getBlockImages()
+    let convertToLlmWithBlockImages: @Sendable ([AgentMessage]) -> [Message] = { messages in
+        let converted = convertToLlm(messages)
+        guard blockImages else { return converted }
+        let filtered = filterImagesFromMessages(converted)
+        if filtered.filtered > 0 {
+            if let data = "[blockImages] Defense-in-depth: filtered \(filtered.filtered) image(s) at convertToLlm layer\n".data(using: .utf8) {
+                FileHandle.standardError.write(data)
+            }
+        }
+        return filtered.messages
+    }
+
     let agentInstance = Agent(AgentOptions(
         initialState: AgentState(
             systemPrompt: systemPrompt,
@@ -394,7 +410,7 @@ private func runSingleAgent(
             tools: toolResolution.tools
         ),
         convertToLlm: { messages in
-            convertToLlm(messages)
+            convertToLlmWithBlockImages(messages)
         },
         thinkingBudgets: dependencies.settingsManager.getThinkingBudgets(),
         getApiKey: { provider in

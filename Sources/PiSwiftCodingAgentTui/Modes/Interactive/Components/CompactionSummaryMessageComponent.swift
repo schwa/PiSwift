@@ -17,6 +17,11 @@ public final class CompactionSummaryMessageComponent: Box {
         updateDisplay()
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        updateDisplay()
+    }
+
     private func updateDisplay() {
         clear()
         let tokenStr = NumberFormatter.localizedString(from: NSNumber(value: message.tokensBefore), number: .decimal)

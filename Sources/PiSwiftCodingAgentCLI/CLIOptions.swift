@@ -46,11 +46,17 @@ struct CLIOptions: ParsableArguments {
     @Option(name: .customLong("tools"), help: "Comma-separated list of tools to enable")
     var tools: String?
 
+    @Flag(name: .customLong("no-tools"), help: "Disable all built-in tools")
+    var noTools: Bool = false
+
     @Option(name: .customLong("hook"), help: "Load a hook file (can be used multiple times)")
     var hooks: [String] = []
 
     @Option(name: .customLong("tool"), help: "Load a custom tool file (can be used multiple times)")
     var customTools: [String] = []
+
+    @Flag(name: .customLong("no-extensions"), help: "Disable extension discovery")
+    var noExtensions: Bool = false
 
     @Flag(name: [.customShort("p"), .customLong("print")], help: "Non-interactive mode: process prompt and exit")
     var print: Bool = false
@@ -119,11 +125,17 @@ extension CLIOptions {
             }
             result.tools = valid
         }
+        if noTools {
+            result.noTools = true
+        }
         if !hooks.isEmpty {
             result.hooks = hooks
         }
         if !customTools.isEmpty {
             result.customTools = customTools
+        }
+        if noExtensions {
+            result.noExtensions = true
         }
         if print {
             result.print = true

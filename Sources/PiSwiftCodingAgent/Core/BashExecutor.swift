@@ -29,6 +29,14 @@ public struct BashResult: Sendable {
     }
 }
 
+public func executeBashWithOperations(
+    _ command: String,
+    operations: BashOperations,
+    options: BashExecutorOptions? = nil
+) async throws -> BashResult {
+    try await operations.execute(command, options: options)
+}
+
 
 #if canImport(UIKit)
 public func executeBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {

@@ -50,6 +50,8 @@ public func clipboardHasImage() -> Bool {
     return NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil)
 #elseif canImport(UIKit)
     UIPasteboard.general.hasImages
+#elseif os(Linux)
+    return linuxClipboardHasImage()
 #else
     return false
 #endif
@@ -67,10 +69,66 @@ public func getClipboardImagePngData() -> Data? {
     return rep.representation(using: .png, properties: [:])
 #elseif canImport(UIKit)
     return UIPasteboard.general.image?.pngData()
+#elseif os(Linux)
+    return readLinuxClipboardImagePngData()
 #else
     return nil
 #endif
 }
+
+#if os(Linux)
+private func linuxClipboardHasImage() -> Bool {
+    readLinuxClipboardImagePngData() != nil
+}
+
+private func readLinuxClipboardImagePngData() -> Data? {
+    if isWaylandSession() {
+        if let data = runClipboardCommandBinary(command: "wl-paste", args: ["--type", "image/png"]) {
+            return data
+        }
+    }
+
+    return runClipboardCommandBinary(command: "xclip", args: ["-selection", "clipboard", "-t", "image/png", "-o"])
+}
+
+private func isWaylandSession() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    if let wayland = env["WAYLAND_DISPLAY"], !wayland.isEmpty {
+        return true
+    }
+    if let session = env["XDG_SESSION_TYPE"], session.lowercased() == "wayland" {
+        return true
+    }
+    return false
+}
+
+private func runClipboardCommandBinary(command: String, args: [String]) -> Data? {
+    let process = Process()
+    if command.contains("/") {
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = args
+    } else {
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + args
+    }
+
+    let stdoutPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = Pipe()
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    guard process.terminationStatus == 0, !data.isEmpty else { return nil }
+    return data
+}
+#endif
 
 #if !canImport(UIKit)
 private func runClipboardCommand(command: String, args: [String], input: String) throws {

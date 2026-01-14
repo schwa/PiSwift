@@ -3,6 +3,8 @@ import MiniTui
 import PiSwiftCodingAgent
 import PiSwiftSyntaxHighlight
 
+extension EditorTheme: HookEditorTheme {}
+
 public func highlightCode(_ code: String, lang: String? = nil) -> [String] {
     let adapter = ThemeSyntaxAdapter(theme: theme)
     return SyntaxHighlighter.highlight(code: code, lang: lang, theme: adapter)

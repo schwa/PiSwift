@@ -155,6 +155,10 @@ private final class RpcHookUIContext: HookUIContext {
         }
     }
 
+    func setFooter(_ factory: HookFooterFactory?) {
+        _ = factory
+    }
+
     func setTitle(_ title: String) {
         output.send([
             "type": "hook_ui_request",
@@ -203,6 +207,24 @@ private final class RpcHookUIContext: HookUIContext {
             if let prefill { payload["prefill"] = prefill }
             output.send(payload)
         }
+    }
+
+    func setEditorComponent(_ factory: HookEditorComponentFactory?) {
+        _ = factory
+    }
+
+    func getAllThemes() -> [HookThemeInfo] {
+        []
+    }
+
+    func getTheme(_ name: String) -> Theme? {
+        _ = name
+        return nil
+    }
+
+    func setTheme(_ theme: HookThemeInput) -> HookThemeResult {
+        _ = theme
+        return HookThemeResult(success: false, error: "UI not available")
     }
 
     var theme: Theme {

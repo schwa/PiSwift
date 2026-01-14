@@ -63,6 +63,7 @@ public struct TerminalSettings: Sendable {
 
 public struct ImageSettings: Sendable {
     public var autoResize: Bool?
+    public var blockImages: Bool?
 }
 
 public struct ThinkingBudgetsSettings: Sendable {
@@ -356,6 +357,18 @@ public final class SettingsManager: Sendable {
         save()
     }
 
+    public func getBlockImages() -> Bool {
+        settings.images?.blockImages ?? false
+    }
+
+    public func setBlockImages(_ blocked: Bool) {
+        if globalSettings.images == nil { globalSettings.images = ImageSettings() }
+        globalSettings.images?.blockImages = blocked
+        if settings.images == nil { settings.images = ImageSettings() }
+        settings.images?.blockImages = blocked
+        save()
+    }
+
     public func getThinkingBudgets() -> ThinkingBudgets? {
         guard let budgets = settings.thinkingBudgets else { return nil }
         var result: ThinkingBudgets = [:]
@@ -441,7 +454,10 @@ public final class SettingsManager: Sendable {
         }
 
         if let images = json["images"] as? [String: Any] {
-            settings.images = ImageSettings(autoResize: images["autoResize"] as? Bool)
+            settings.images = ImageSettings(
+                autoResize: images["autoResize"] as? Bool,
+                blockImages: images["blockImages"] as? Bool
+            )
         }
 
         if let budgets = json["thinkingBudgets"] as? [String: Any] {
@@ -512,7 +528,10 @@ public final class SettingsManager: Sendable {
         }
 
         if let images = globalSettings.images {
-            json["images"] = ["autoResize": images.autoResize as Any]
+            json["images"] = [
+                "autoResize": images.autoResize as Any,
+                "blockImages": images.blockImages as Any,
+            ]
         }
 
         if let budgets = globalSettings.thinkingBudgets {

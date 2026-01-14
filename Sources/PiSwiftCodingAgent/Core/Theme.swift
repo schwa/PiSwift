@@ -540,6 +540,7 @@ public func setTheme(_ name: String, enableWatcher: Bool = false) -> (success: B
         if enableWatcher {
             startThemeWatcher()
         }
+        withThemeState { $0.onThemeChangeCallback?() }
         return (true, nil)
     } catch {
         withThemeState { $0.currentThemeName = "dark" }
@@ -645,6 +646,47 @@ public func getAvailableThemes() -> [String] {
         }
     }
     return themes.sorted()
+}
+
+public func getAvailableThemesWithPaths() -> [HookThemeInfo] {
+    var results: [HookThemeInfo] = []
+    let builtins = getBuiltinThemeData()
+    let themesDir = getThemesDir()
+    for name in builtins.keys {
+        let fallbackPath = (themesDir as NSString).appendingPathComponent("\(name).json")
+        let path = FileManager.default.fileExists(atPath: fallbackPath) ? fallbackPath : nil
+        results.append(HookThemeInfo(name: name, path: path))
+    }
+
+    let customDir = getCustomThemesDir()
+    if let entries = try? FileManager.default.contentsOfDirectory(atPath: customDir) {
+        for entry in entries where entry.hasSuffix(".json") {
+            let name = (entry as NSString).deletingPathExtension
+            let path = (customDir as NSString).appendingPathComponent(entry)
+            if let idx = results.firstIndex(where: { $0.name == name }) {
+                results[idx] = HookThemeInfo(name: name, path: path)
+            } else {
+                results.append(HookThemeInfo(name: name, path: path))
+            }
+        }
+    }
+
+    return results.sorted { $0.name < $1.name }
+}
+
+public func getThemeByName(_ name: String) -> Theme? {
+    do {
+        return try loadTheme(name)
+    } catch {
+        return nil
+    }
+}
+
+public func setThemeInstance(_ newTheme: Theme) {
+    theme = newTheme
+    withThemeState { $0.currentThemeName = "<in-memory>" }
+    stopThemeWatcher()
+    withThemeState { $0.onThemeChangeCallback?() }
 }
 
 private func ansi256ToHex(_ index: Int) -> String {

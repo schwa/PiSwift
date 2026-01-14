@@ -65,7 +65,11 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         initTheme(themeName, enableWatcher: parsed.print != true && parsed.mode == nil)
         time("initTheme")
 
-        let initialMessageResult = try prepareInitialMessage(&parsed, autoResizeImages: settingsManager.getAutoResizeImages())
+        let initialMessageResult = try prepareInitialMessage(
+            &parsed,
+            autoResizeImages: settingsManager.getAutoResizeImages(),
+            blockImages: settingsManager.getBlockImages()
+        )
         time("prepareInitialMessage")
 
         var resumeSession: String? = nil
@@ -145,15 +149,25 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
         let allBuiltInToolsMap = createAllTools(
             cwd: cwd,
-            options: ToolsOptions(read: ReadToolOptions(autoResizeImages: settingsManager.getAutoResizeImages()))
+            options: ToolsOptions(read: ReadToolOptions(
+                autoResizeImages: settingsManager.getAutoResizeImages(),
+                blockImages: settingsManager.getBlockImages()
+            ))
         )
-        let selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
-        let selectedTools = selectedToolNames.compactMap { allBuiltInToolsMap[$0] }
+        let selectedToolNames: [ToolName]
+        if parsed.noTools == true {
+            selectedToolNames = parsed.tools ?? []
+        } else {
+            selectedToolNames = parsed.tools ?? [.read, .bash, .edit, .write]
+        }
         let eventBus = createEventBus()
 
         var hookRunner: HookRunner? = nil
-        let hookPaths = settingsManager.getHooks() + (parsed.hooks ?? [])
-        let hookLoadResult = discoverAndLoadHooks(hookPaths, cwd, getAgentDir(), eventBus)
+        let baseHookPaths = parsed.noExtensions == true ? [] : settingsManager.getHooks()
+        let hookPaths = baseHookPaths + (parsed.hooks ?? [])
+        let hookLoadResult = parsed.noExtensions == true
+            ? loadHooks(hookPaths, cwd: cwd, eventBus: eventBus)
+            : discoverAndLoadHooks(hookPaths, cwd, getAgentDir(), eventBus)
         time("discoverAndLoadHooks")
         for error in hookLoadResult.errors {
             fputs("Failed to load hook \"\(error.path)\": \(error.error)\n", stderr)
@@ -163,9 +177,12 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             hookRunner = runner
         }
 
-        let customToolPaths = settingsManager.getCustomTools() + (parsed.customTools ?? [])
+        let baseCustomToolPaths = parsed.noExtensions == true ? [] : settingsManager.getCustomTools()
+        let customToolPaths = baseCustomToolPaths + (parsed.customTools ?? [])
         let builtInToolNames = allBuiltInToolsMap.keys.map { $0.rawValue }
-        let customToolsResult = discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir(), eventBus)
+        let customToolsResult = parsed.noExtensions == true
+            ? loadCustomTools(customToolPaths, cwd, builtInToolNames, eventBus)
+            : discoverAndLoadCustomTools(customToolPaths, cwd, builtInToolNames, getAgentDir(), eventBus)
         time("discoverAndLoadCustomTools")
         for error in customToolsResult.errors {
             fputs("Failed to load custom tool \"\(error.path)\": \(error.error)\n", stderr)
@@ -198,6 +215,13 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             )
         }
 
+        let selectedToolNameSet = Set(selectedToolNames.map { $0.rawValue })
+        let customToolsByName = Dictionary(uniqueKeysWithValues: wrappedCustomTools.map { ($0.name, $0) })
+        let selectedTools = selectedToolNames.compactMap { name in
+            customToolsByName[name.rawValue] ?? allBuiltInToolsMap[name]
+        }
+        let extraCustomTools = wrappedCustomTools.filter { !selectedToolNameSet.contains($0.name) }
+
         var toolRegistry: [String: AgentTool] = [:]
         for (name, tool) in allBuiltInToolsMap {
             toolRegistry[name.rawValue] = tool
@@ -206,8 +230,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             toolRegistry[tool.name] = tool
         }
 
-        let initialActiveToolNames = selectedToolNames.map { $0.rawValue } + wrappedCustomTools.map { $0.name }
-        var allTools = selectedTools + wrappedCustomTools
+        let initialActiveToolNames = selectedToolNames.map { $0.rawValue } + extraCustomTools.map { $0.name }
+        var allTools = selectedTools + extraCustomTools
         if let hookRunner {
             allTools = wrapToolsWithHooks(allTools, hookRunner)
             let registryTools = Array(toolRegistry.values)
@@ -252,6 +276,18 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let fallbackModel = initialModel ?? getModel(provider: .openai, modelId: "gpt-4o-mini")
+        let blockImages = settingsManager.getBlockImages()
+        let convertToLlmWithBlockImages: @Sendable ([AgentMessage]) -> [Message] = { messages in
+            let converted = convertToLlm(messages)
+            guard blockImages else { return converted }
+            let filtered = filterImagesFromMessages(converted)
+            if filtered.filtered > 0 {
+                if let data = "[blockImages] Defense-in-depth: filtered \(filtered.filtered) image(s) at convertToLlm layer\n".data(using: .utf8) {
+                    FileHandle.standardError.write(data)
+                }
+            }
+            return filtered.messages
+        }
         let createdAgent = Agent(AgentOptions(
             initialState: AgentState(
                 systemPrompt: systemPrompt,
@@ -260,7 +296,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 tools: allTools
             ),
             convertToLlm: { messages in
-                convertToLlm(messages)
+                convertToLlmWithBlockImages(messages)
             },
             steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
             followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
@@ -478,12 +514,19 @@ private struct PreparedInitialMessage {
     var images: [ImageContent]?
 }
 
-private func prepareInitialMessage(_ parsed: inout Args, autoResizeImages: Bool) throws -> PreparedInitialMessage {
+private func prepareInitialMessage(
+    _ parsed: inout Args,
+    autoResizeImages: Bool,
+    blockImages: Bool
+) throws -> PreparedInitialMessage {
     guard !parsed.fileArgs.isEmpty else {
         return PreparedInitialMessage(message: nil, images: nil)
     }
 
-    let processed = try processFileArguments(parsed.fileArgs, options: ProcessFileOptions(autoResizeImages: autoResizeImages))
+    let processed = try processFileArguments(
+        parsed.fileArgs,
+        options: ProcessFileOptions(autoResizeImages: autoResizeImages, blockImages: blockImages)
+    )
     let textContent = processed.textContent
     if parsed.messages.isEmpty {
         return PreparedInitialMessage(message: textContent, images: processed.imageAttachments.isEmpty ? nil : processed.imageAttachments)

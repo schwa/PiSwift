@@ -24,14 +24,17 @@ public struct FileProcessingResult: Sendable {
 
 public struct ProcessFileOptions: Sendable {
     public var autoResizeImages: Bool?
+    public var blockImages: Bool?
 
-    public init(autoResizeImages: Bool? = nil) {
+    public init(autoResizeImages: Bool? = nil, blockImages: Bool? = nil) {
         self.autoResizeImages = autoResizeImages
+        self.blockImages = blockImages
     }
 }
 
 public func processFileArguments(_ fileArgs: [String], options: ProcessFileOptions? = nil) throws -> FileProcessingResult {
     let autoResizeImages = options?.autoResizeImages ?? true
+    let blockImages = options?.blockImages ?? false
     var textContent = ""
     var imageAttachments: [ImageContent] = []
 
@@ -49,6 +52,12 @@ public func processFileArguments(_ fileArgs: [String], options: ProcessFileOptio
         }
 
         if let mimeType = detectSupportedImageMimeType(fromFile: absolutePath) {
+            if blockImages {
+                if let data = "[blockImages] Skipping image file: \(absolutePath)\n".data(using: .utf8) {
+                    FileHandle.standardError.write(data)
+                }
+                continue
+            }
             let data = try Data(contentsOf: URL(fileURLWithPath: absolutePath))
             let base64 = data.base64EncodedString()
 

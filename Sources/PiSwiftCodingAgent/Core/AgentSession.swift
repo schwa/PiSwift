@@ -179,7 +179,7 @@ public enum AgentSessionError: LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .alreadyProcessingQueue:
-            return "Agent is already processing. Use steer() or followUp() to queue messages during streaming."
+            return "Agent is already processing. Specify streamingBehavior (\"steer\" or \"followUp\") to queue the message."
         case .noModelSelected(let authPath):
             return "No model selected.\n\n" +
                 "Use /login, set an API key environment variable, or create \(authPath)\n\n" +
@@ -694,6 +694,12 @@ public final class AgentSession: Sendable {
         defer { bashAbort = nil }
 
         let result = try await PiSwiftCodingAgent.executeBash(command, options: BashExecutorOptions(onChunk: onChunk, signal: abortToken))
+        recordBashResult(command, result, excludeFromContext: false)
+        return result
+    }
+
+    public func recordBashResult(_ command: String, _ result: BashResult, excludeFromContext: Bool) {
+        guard !excludeFromContext else { return }
         let message = BashExecutionMessage(
             command: command,
             output: result.output,
@@ -710,8 +716,6 @@ public final class AgentSession: Sendable {
             agent.appendMessage(agentMessage)
             _ = sessionManager.appendMessage(agentMessage)
         }
-
-        return result
     }
 
     public func abortBash() {
@@ -1228,7 +1232,13 @@ public final class AgentSession: Sendable {
     private func buildUserMessage(text: String, images: [ImageContent]?) -> AgentMessage {
         var blocks: [ContentBlock] = [.text(TextContent(text: text))]
         if let images {
-            blocks.append(contentsOf: images.map { .image($0) })
+            if settingsManager.getBlockImages() {
+                if let data = "[blockImages] Blocked \(images.count) image(s) from being sent to provider\n".data(using: .utf8) {
+                    FileHandle.standardError.write(data)
+                }
+            } else {
+                blocks.append(contentsOf: images.map { .image($0) })
+            }
         }
         return AgentMessage.user(UserMessage(content: .blocks(blocks)))
     }

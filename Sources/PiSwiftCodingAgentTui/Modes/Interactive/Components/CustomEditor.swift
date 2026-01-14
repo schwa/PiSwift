@@ -2,10 +2,10 @@ import Foundation
 import MiniTui
 import PiSwiftCodingAgent
 
-public final class CustomEditor: Component, SystemCursorAware {
+public final class CustomEditor: Component, SystemCursorAware, EditorComponent {
     private let editor: Editor
     private let keybindings: KeybindingsManager
-    private var actionHandlers: [AppAction: () -> Void] = [:]
+    public var actionHandlers: [AppAction: () -> Void] = [:]
 
     public var usesSystemCursor: Bool {
         get { editor.usesSystemCursor }

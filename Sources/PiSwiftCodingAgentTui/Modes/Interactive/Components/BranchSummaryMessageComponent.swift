@@ -17,6 +17,11 @@ public final class BranchSummaryMessageComponent: Box {
         updateDisplay()
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        updateDisplay()
+    }
+
     private func updateDisplay() {
         clear()
         let label = theme.fg(.customMessageLabel, "\u{001B}[1m[branch]\u{001B}[22m")

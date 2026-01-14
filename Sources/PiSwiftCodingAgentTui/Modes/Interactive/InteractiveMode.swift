@@ -37,11 +37,16 @@ private struct InteractiveHookUIContext: HookUIContext {
     private let notifyHandler: (String, HookNotificationType?) -> Void
     private let setStatusHandler: (String, String?) -> Void
     private let setWidgetHandler: (String, HookWidgetContent?) -> Void
+    private let setFooterHandler: (HookFooterFactory?) -> Void
     private let setTitleHandler: (String) -> Void
     private let customHandler: (@escaping HookCustomFactory) async -> HookCustomResult?
     private let setEditorTextHandler: (String) -> Void
     private let getEditorTextHandler: () -> String
     private let editorHandler: (String, String?) async -> String?
+    private let setEditorComponentHandler: (HookEditorComponentFactory?) -> Void
+    private let getAllThemesHandler: () -> [HookThemeInfo]
+    private let getThemeHandler: (String) -> Theme?
+    private let setThemeHandler: (HookThemeInput) -> HookThemeResult
     private let themeProvider: () -> Theme
 
     init(
@@ -51,11 +56,16 @@ private struct InteractiveHookUIContext: HookUIContext {
         notify: @escaping (String, HookNotificationType?) -> Void,
         setStatus: @escaping (String, String?) -> Void,
         setWidget: @escaping (String, HookWidgetContent?) -> Void,
+        setFooter: @escaping (HookFooterFactory?) -> Void,
         setTitle: @escaping (String) -> Void,
         custom: @escaping (@escaping HookCustomFactory) async -> HookCustomResult?,
         setEditorText: @escaping (String) -> Void,
         getEditorText: @escaping () -> String,
         editor: @escaping (String, String?) async -> String?,
+        setEditorComponent: @escaping (HookEditorComponentFactory?) -> Void,
+        getAllThemes: @escaping () -> [HookThemeInfo],
+        getTheme: @escaping (String) -> Theme?,
+        setTheme: @escaping (HookThemeInput) -> HookThemeResult,
         themeProvider: @escaping () -> Theme
     ) {
         self.selectHandler = select
@@ -64,11 +74,16 @@ private struct InteractiveHookUIContext: HookUIContext {
         self.notifyHandler = notify
         self.setStatusHandler = setStatus
         self.setWidgetHandler = setWidget
+        self.setFooterHandler = setFooter
         self.setTitleHandler = setTitle
         self.customHandler = custom
         self.setEditorTextHandler = setEditorText
         self.getEditorTextHandler = getEditorText
         self.editorHandler = editor
+        self.setEditorComponentHandler = setEditorComponent
+        self.getAllThemesHandler = getAllThemes
+        self.getThemeHandler = getTheme
+        self.setThemeHandler = setTheme
         self.themeProvider = themeProvider
     }
 
@@ -96,6 +111,10 @@ private struct InteractiveHookUIContext: HookUIContext {
         setWidgetHandler(key, content)
     }
 
+    func setFooter(_ factory: HookFooterFactory?) {
+        setFooterHandler(factory)
+    }
+
     func setTitle(_ title: String) {
         setTitleHandler(title)
     }
@@ -114,6 +133,22 @@ private struct InteractiveHookUIContext: HookUIContext {
 
     func editor(_ title: String, _ prefill: String?) async -> String? {
         await editorHandler(title, prefill)
+    }
+
+    func setEditorComponent(_ factory: HookEditorComponentFactory?) {
+        setEditorComponentHandler(factory)
+    }
+
+    func getAllThemes() -> [HookThemeInfo] {
+        getAllThemesHandler()
+    }
+
+    func getTheme(_ name: String) -> Theme? {
+        getThemeHandler(name)
+    }
+
+    func setTheme(_ theme: HookThemeInput) -> HookThemeResult {
+        setThemeHandler(theme)
     }
 
     var theme: Theme {
@@ -138,9 +173,13 @@ public final class InteractiveMode {
     private var pendingMessagesContainer: Container?
     private var statusContainer: Container?
     private var widgetContainer: Container?
-    private var editor: CustomEditor?
+    private var defaultEditor: CustomEditor?
+    private var editor: EditorComponentView?
+    private var autocompleteProvider: CombinedAutocompleteProvider?
     private var editorContainer: Container?
     private var footer: FooterComponent?
+    private var footerContainer: Container?
+    private var customFooter: Component?
     private var hookSelector: HookSelectorComponent?
     private var hookInput: HookInputComponent?
     private var hookEditor: HookEditorComponent?
@@ -264,18 +303,22 @@ public final class InteractiveMode {
         let pendingMessages = Container()
         let status = Container()
         let widgets = Container()
-        let editor = CustomEditor(theme: getEditorTheme(), keybindings: keybindings)
+        let defaultEditor = CustomEditor(theme: getEditorTheme(), keybindings: keybindings)
         let editorContainer = Container()
         let footer = FooterComponent(session: session)
+        let footerContainer = Container()
 
-        editorContainer.addChild(editor)
+        editorContainer.addChild(defaultEditor)
+        footerContainer.addChild(footer)
 
         pendingMessagesContainer = pendingMessages
         statusContainer = status
         widgetContainer = widgets
-        self.editor = editor
+        self.defaultEditor = defaultEditor
+        self.editor = defaultEditor
         self.editorContainer = editorContainer
         self.footer = footer
+        self.footerContainer = footerContainer
 
         let slashCommands: [SlashCommand] = [
             SlashCommand(name: "settings", description: "Open settings menu"),
@@ -329,8 +372,8 @@ public final class InteractiveMode {
         tui.addChild(widgets)
         tui.addChild(Spacer(1))
         tui.addChild(editorContainer)
-        tui.addChild(footer)
-        tui.setFocus(editor)
+        tui.addChild(footerContainer)
+        tui.setFocus(defaultEditor)
         tui.start()
 
         await initializeHooksAndCustomTools()
@@ -354,14 +397,15 @@ public final class InteractiveMode {
 
     @MainActor
     private func setAutocompleteCommands(_ commands: [SlashCommand]) {
-        guard let editor else { return }
-        let autocompleteProvider = CombinedAutocompleteProvider(
+        guard let defaultEditor else { return }
+        let provider = CombinedAutocompleteProvider(
             commands: commands,
             items: [],
             basePath: FileManager.default.currentDirectoryPath,
             fdPath: fdPath
         )
-        editor.setAutocompleteProvider(autocompleteProvider)
+        autocompleteProvider = provider
+        defaultEditor.setAutocompleteProvider(provider)
     }
 
     @MainActor
@@ -396,6 +440,11 @@ public final class InteractiveMode {
                     self?.setHookWidget(key, content)
                 }
             },
+            setFooter: { [weak self] factory in
+                Task { @MainActor in
+                    self?.setCustomFooter(factory)
+                }
+            },
             setTitle: { [weak self] title in
                 Task { @MainActor in
                     self?.tui?.terminal.setTitle(title)
@@ -417,6 +466,33 @@ public final class InteractiveMode {
             editor: { [weak self] title, prefill in
                 guard let self else { return nil }
                 return await self.showHookEditor(title, prefill)
+            },
+            setEditorComponent: { [weak self] factory in
+                Task { @MainActor in
+                    self?.setCustomEditorComponent(factory)
+                }
+            },
+            getAllThemes: {
+                getAvailableThemesWithPaths()
+            },
+            getTheme: { name in
+                getThemeByName(name)
+            },
+            setTheme: { [weak self] selection in
+                guard let self else { return HookThemeResult(success: false, error: "UI not available") }
+                switch selection {
+                case .name(let name):
+                    let result = setTheme(name, enableWatcher: true)
+                    if result.success {
+                        self.ui.requestRender()
+                        return HookThemeResult(success: true)
+                    }
+                    return HookThemeResult(success: false, error: result.error)
+                case .theme(let theme):
+                    setThemeInstance(theme)
+                    self.ui.requestRender()
+                    return HookThemeResult(success: true)
+                }
             },
             themeProvider: { theme }
         )
@@ -707,7 +783,7 @@ public final class InteractiveMode {
             }
 
             Task { @MainActor in
-                let created = await factory(tui, theme, close)
+                let created = await factory(tui, theme, keybindings, close)
                 if let createdComponent = created as? Component {
                     component = createdComponent
                     editorContainer.clear()
@@ -740,12 +816,12 @@ public final class InteractiveMode {
     @MainActor
     private func setupHookShortcuts(_ hookRunner: HookRunner) {
         hookShortcuts = hookRunner.getShortcuts()
-        guard let editor else { return }
+        guard let defaultEditor else { return }
         if hookShortcuts.isEmpty {
-            editor.onHookShortcut = nil
+            defaultEditor.onHookShortcut = nil
             return
         }
-        editor.onHookShortcut = { [weak self, weak hookRunner] data in
+        defaultEditor.onHookShortcut = { [weak self, weak hookRunner] data in
             guard let self, let hookRunner else { return false }
             for (key, shortcut) in self.hookShortcuts {
                 if matchesKey(data, key) {
@@ -804,6 +880,76 @@ public final class InteractiveMode {
     }
 
     @MainActor
+    private func setCustomFooter(_ factory: HookFooterFactory?) {
+        guard let tui, let footerContainer, let footer else { return }
+
+        if let customFooter, let disposable = customFooter as? HookDisposableComponent {
+            disposable.dispose()
+        }
+
+        footerContainer.clear()
+
+        if let factory {
+            if let component = factory(tui, theme) as? Component {
+                customFooter = component
+                footerContainer.addChild(component)
+            } else {
+                customFooter = nil
+                footerContainer.addChild(footer)
+            }
+        } else {
+            customFooter = nil
+            footerContainer.addChild(footer)
+        }
+
+        tui.requestRender()
+    }
+
+    @MainActor
+    private func setCustomEditorComponent(_ factory: HookEditorComponentFactory?) {
+        guard let tui, let editorContainer, let defaultEditor else { return }
+        let currentText = editor?.getText() ?? ""
+
+        editorContainer.clear()
+
+        if let factory {
+            let created = factory(tui, getEditorTheme(), keybindings)
+            if let newEditor = created as? EditorComponentView {
+                newEditor.onSubmit = defaultEditor.onSubmit
+                newEditor.onChange = defaultEditor.onChange
+                newEditor.setText(currentText)
+                newEditor.borderColor = defaultEditor.borderColor
+
+                if let autocompleteProvider {
+                    newEditor.setAutocompleteProvider(autocompleteProvider)
+                }
+
+                if let customEditor = newEditor as? CustomEditor {
+                    customEditor.onEscape = defaultEditor.onEscape
+                    customEditor.onCtrlD = defaultEditor.onCtrlD
+                    customEditor.onPasteImage = defaultEditor.onPasteImage
+                    customEditor.onHookShortcut = defaultEditor.onHookShortcut
+                    customEditor.actionHandlers = defaultEditor.actionHandlers
+                }
+
+                editor = newEditor
+            } else {
+                defaultEditor.setText(currentText)
+                editor = defaultEditor
+            }
+        } else {
+            defaultEditor.setText(currentText)
+            editor = defaultEditor
+        }
+
+        if let editor {
+            editorContainer.addChild(editor)
+            tui.setFocus(editor)
+            tui.requestRender()
+        }
+    }
+
+    @MainActor
     private func renderWidgets() {
         guard let widgetContainer else { return }
         widgetContainer.clear()
@@ -833,63 +979,63 @@ public final class InteractiveMode {
 
     @MainActor
     private func configureKeyHandlers() {
-        guard let editor else { return }
+        guard let defaultEditor else { return }
 
-        editor.onEscape = { [weak self] in
+        defaultEditor.onEscape = { [weak self] in
             self?.handleEscape()
         }
-        editor.onCtrlD = { [weak self] in
+        defaultEditor.onCtrlD = { [weak self] in
             self?.handleCtrlD()
         }
-        editor.onAction(.clear) { [weak self] in
+        defaultEditor.onAction(.clear) { [weak self] in
             self?.handleCtrlC()
         }
-        editor.onAction(.suspend) { [weak self] in
+        defaultEditor.onAction(.suspend) { [weak self] in
             self?.handleCtrlZ()
         }
-        editor.onAction(.cycleThinkingLevel) { [weak self] in
+        defaultEditor.onAction(.cycleThinkingLevel) { [weak self] in
             self?.cycleThinkingLevel()
         }
-        editor.onAction(.cycleModelForward) { [weak self] in
+        defaultEditor.onAction(.cycleModelForward) { [weak self] in
             Task { @MainActor in
                 await self?.cycleModel(direction: .forward)
             }
         }
-        editor.onAction(.cycleModelBackward) { [weak self] in
+        defaultEditor.onAction(.cycleModelBackward) { [weak self] in
             Task { @MainActor in
                 await self?.cycleModel(direction: .backward)
             }
         }
-        editor.onAction(.selectModel) { [weak self] in
+        defaultEditor.onAction(.selectModel) { [weak self] in
             Task { @MainActor in
                 self?.showModelSelector()
             }
         }
-        editor.onAction(.expandTools) { [weak self] in
+        defaultEditor.onAction(.expandTools) { [weak self] in
             Task { @MainActor in
                 self?.toggleToolOutputExpansion()
             }
         }
-        editor.onAction(.toggleThinking) { [weak self] in
+        defaultEditor.onAction(.toggleThinking) { [weak self] in
             Task { @MainActor in
                 self?.toggleThinkingBlockVisibility()
             }
         }
-        editor.onAction(.externalEditor) { [weak self] in
+        defaultEditor.onAction(.externalEditor) { [weak self] in
             Task { await self?.openExternalEditor() }
         }
-        editor.onAction(.followUp) { [weak self] in
+        defaultEditor.onAction(.followUp) { [weak self] in
             Task { @MainActor in
                 await self?.handleAltEnter()
             }
         }
-        editor.onAction(.dequeue) { [weak self] in
+        defaultEditor.onAction(.dequeue) { [weak self] in
             Task { @MainActor in
                 self?.handleDequeue()
             }
         }
 
-        editor.onChange = { [weak self] text in
+        defaultEditor.onChange = { [weak self] text in
             guard let self else { return }
             let wasBash = self.isBashMode
             self.isBashMode = text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("!")
@@ -900,13 +1046,13 @@ public final class InteractiveMode {
             }
         }
 
-        editor.onPasteImage = { [weak self] in
+        defaultEditor.onPasteImage = { [weak self] in
             Task { @MainActor in
                 self?.handleClipboardImagePaste()
             }
         }
 
-        editor.onSubmit = { [weak self] text in
+        defaultEditor.onSubmit = { [weak self] text in
             Task { @MainActor in
                 await self?.handleEditorSubmit(text)
             }
@@ -1750,8 +1896,10 @@ public final class InteractiveMode {
             return
         }
 
-        if trimmed.hasPrefix("!") {
-            let command = trimmed.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("!!") || trimmed.hasPrefix("!") {
+            let excludeFromContext = trimmed.hasPrefix("!!")
+            let commandPrefixLength = excludeFromContext ? 2 : 1
+            let command = trimmed.dropFirst(commandPrefixLength).trimmingCharacters(in: .whitespacesAndNewlines)
             if command.isEmpty {
                 return
             }
@@ -1760,7 +1908,7 @@ public final class InteractiveMode {
                 return
             }
             editor.addToHistory(trimmed)
-            await handleBashCommand(command)
+            await handleBashCommand(command, excludeFromContext: excludeFromContext)
             isBashMode = false
             updateEditorBorderColor()
             return
@@ -1822,8 +1970,58 @@ public final class InteractiveMode {
     }
 
     @MainActor
-    private func handleBashCommand(_ command: String) async {
+    private func handleBashCommand(_ command: String, excludeFromContext: Bool = false) async {
         guard let tui, let session else { return }
+
+        let eventResult = await session.hookRunner?.emitUserBash(UserBashEvent(
+            command: command,
+            excludeFromContext: excludeFromContext,
+            cwd: FileManager.default.currentDirectoryPath
+        ))
+
+        if let result = eventResult?.result {
+            let component = BashExecutionComponent(command: command, ui: tui)
+            bashComponent = component
+
+            let deferDisplay = session.isStreaming
+            if deferDisplay {
+                pendingBashComponents.append(component)
+            } else {
+                chatContainer.addChild(component)
+            }
+            updatePendingMessagesDisplay()
+
+            if !result.output.isEmpty {
+                component.appendOutput(result.output)
+            }
+            let truncation = result.truncated ? truncateTail(result.output) : nil
+            component.setComplete(exitCode: result.exitCode, cancelled: result.cancelled, truncationResult: truncation, fullOutputPath: result.fullOutputPath)
+
+            if !excludeFromContext {
+                let message = BashExecutionMessage(
+                    command: command,
+                    output: result.output,
+                    exitCode: result.exitCode,
+                    cancelled: result.cancelled,
+                    truncated: result.truncated,
+                    fullOutputPath: result.fullOutputPath
+                )
+                if deferDisplay {
+                    pendingBashMessages.append(message)
+                } else {
+                    let agentMessage = makeBashExecutionAgentMessage(message)
+                    session.agent.appendMessage(agentMessage)
+                    _ = session.sessionManager.appendMessage(agentMessage)
+                }
+            }
+
+            bashComponent = nil
+            bashAbort = nil
+            scheduleRender()
+            return
+        }
+
+        let operations = eventResult?.operations ?? DefaultBashOperations()
         let component = BashExecutionComponent(command: command, ui: tui)
         bashComponent = component
 
@@ -1840,32 +2038,38 @@ public final class InteractiveMode {
         bashAbort = abortToken
 
         do {
-            let result = try await executeBash(command, options: BashExecutorOptions(onChunk: { [weak self] chunk in
-                Task { @MainActor in
-                    guard let self, let bashComponent = self.bashComponent else { return }
-                    bashComponent.appendOutput(chunk)
-                    self.scheduleRender()
-                }
-            }, signal: abortToken))
+            let result = try await executeBashWithOperations(
+                command,
+                operations: operations,
+                options: BashExecutorOptions(onChunk: { [weak self] chunk in
+                    Task { @MainActor in
+                        guard let self, let bashComponent = self.bashComponent else { return }
+                        bashComponent.appendOutput(chunk)
+                        self.scheduleRender()
+                    }
+                }, signal: abortToken)
+            )
 
             let truncation = result.truncated ? truncateTail(result.output) : nil
             component.setComplete(exitCode: result.exitCode, cancelled: result.cancelled, truncationResult: truncation, fullOutputPath: result.fullOutputPath)
 
-            let message = BashExecutionMessage(
-                command: command,
-                output: result.output,
-                exitCode: result.exitCode,
-                cancelled: result.cancelled,
-                truncated: result.truncated,
-                fullOutputPath: result.fullOutputPath
-            )
+            if !excludeFromContext {
+                let message = BashExecutionMessage(
+                    command: command,
+                    output: result.output,
+                    exitCode: result.exitCode,
+                    cancelled: result.cancelled,
+                    truncated: result.truncated,
+                    fullOutputPath: result.fullOutputPath
+                )
 
-            if deferDisplay {
-                pendingBashMessages.append(message)
-            } else {
-                let agentMessage = makeBashExecutionAgentMessage(message)
-                session.agent.appendMessage(agentMessage)
-                _ = session.sessionManager.appendMessage(agentMessage)
+                if deferDisplay {
+                    pendingBashMessages.append(message)
+                } else {
+                    let agentMessage = makeBashExecutionAgentMessage(message)
+                    session.agent.appendMessage(agentMessage)
+                    _ = session.sessionManager.appendMessage(agentMessage)
+                }
             }
         } catch {
             component.setComplete(exitCode: nil, cancelled: false)
@@ -1918,6 +2122,7 @@ public final class InteractiveMode {
             autoCompact: settingsManager.getCompactionEnabled(),
             showImages: settingsManager.getShowImages(),
             autoResizeImages: settingsManager.getAutoResizeImages(),
+            blockImages: settingsManager.getBlockImages(),
             steeringMode: settingsManager.getSteeringMode(),
             followUpMode: settingsManager.getFollowUpMode(),
             thinkingLevel: session.agent.state.thinkingLevel,
@@ -1940,6 +2145,9 @@ public final class InteractiveMode {
                 },
                 onAutoResizeImagesChange: { enabled in
                     settingsManager.setAutoResizeImages(enabled)
+                },
+                onBlockImagesChange: { enabled in
+                    settingsManager.setBlockImages(enabled)
                 },
                 onSteeringModeChange: { mode in
                     settingsManager.setSteeringMode(mode)

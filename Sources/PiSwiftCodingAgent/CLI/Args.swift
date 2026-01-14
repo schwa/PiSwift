@@ -30,6 +30,8 @@ public struct Args: Sendable {
     public var tools: [ToolName]?
     public var hooks: [String]?
     public var customTools: [String]?
+    public var noTools: Bool?
+    public var noExtensions: Bool?
     public var print: Bool?
     public var export: String?
     public var noSkills: Bool?

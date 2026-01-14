@@ -86,7 +86,8 @@ public func loadCustomTools(
 ) -> CustomToolsLoadResult {
     var tools: [LoadedCustomTool] = []
     var errors: [CustomToolLoadError] = []
-    var seenNames = Set(builtInToolNames)
+    var seenNames = Set<String>()
+    _ = builtInToolNames
 
     let resolvedEventBus = eventBus ?? createEventBus()
     let sharedApi = CustomToolAPI(cwd: cwd, events: resolvedEventBus)

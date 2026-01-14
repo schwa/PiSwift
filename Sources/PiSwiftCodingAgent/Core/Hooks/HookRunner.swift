@@ -361,6 +361,25 @@ public final class HookRunner: Sendable {
         return lastResult
     }
 
+    public func emitUserBash(_ event: UserBashEvent) async -> UserBashEventResult? {
+        let context = createContext()
+
+        for hook in hooks {
+            guard let handlers = hook.handlers[event.type] else { continue }
+            for handler in handlers {
+                do {
+                    if let result = try await handler(event, context) as? UserBashEventResult {
+                        return result
+                    }
+                } catch {
+                    emitError(HookError(hookPath: hook.path, event: event.type, error: error.localizedDescription, stack: captureStack()))
+                }
+            }
+        }
+
+        return nil
+    }
+
     public func emitContext(_ messages: [AgentMessage], signal: CancellationToken? = nil) async -> [AgentMessage] {
         _ = signal
         let context = createContext()

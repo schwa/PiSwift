@@ -40,6 +40,11 @@ public final class BashExecutionComponent: Container {
         updateDisplay()
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        updateDisplay()
+    }
+
     public func setExpanded(_ expanded: Bool) {
         self.expanded = expanded
         updateDisplay()

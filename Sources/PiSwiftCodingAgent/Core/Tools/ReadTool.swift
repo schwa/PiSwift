@@ -28,14 +28,17 @@ public struct ReadToolDetails: Sendable {
 
 public struct ReadToolOptions: Sendable {
     public var autoResizeImages: Bool?
+    public var blockImages: Bool?
 
-    public init(autoResizeImages: Bool? = nil) {
+    public init(autoResizeImages: Bool? = nil, blockImages: Bool? = nil) {
         self.autoResizeImages = autoResizeImages
+        self.blockImages = blockImages
     }
 }
 
 public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> AgentTool {
     let autoResizeImages = options?.autoResizeImages ?? true
+    let blockImages = options?.blockImages ?? false
     return AgentTool(
         label: "read",
         name: "read",
@@ -65,6 +68,10 @@ public func createReadTool(cwd: String, options: ReadToolOptions? = nil) -> Agen
         }
 
         if let mimeType = detectSupportedImageMimeType(fromFile: absolutePath) {
+            if blockImages {
+                let warning = "[Image file detected: \(absolutePath)]\nImage reading is disabled. The 'blockImages' setting is enabled."
+                return AgentToolResult(content: [.text(TextContent(text: warning))])
+            }
             let data = try Data(contentsOf: URL(fileURLWithPath: absolutePath))
             let base64 = data.base64EncodedString()
 

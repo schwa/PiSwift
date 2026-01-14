@@ -182,6 +182,44 @@ public func convertToLlm(_ messages: [AgentMessage]) -> [Message] {
     return output
 }
 
+public func filterImagesFromMessages(_ messages: [Message]) -> (messages: [Message], filtered: Int) {
+    var filteredCount = 0
+    let filteredMessages = messages.map { message -> Message in
+        switch message {
+        case .user(var user):
+            switch user.content {
+            case .blocks(let blocks):
+                let (filteredBlocks, removed) = filterImageBlocks(blocks)
+                filteredCount += removed
+                user.content = .blocks(filteredBlocks)
+                return .user(user)
+            default:
+                return message
+            }
+        case .toolResult(var toolResult):
+            let (filteredBlocks, removed) = filterImageBlocks(toolResult.content)
+            filteredCount += removed
+            toolResult.content = filteredBlocks
+            return .toolResult(toolResult)
+        default:
+            return message
+        }
+    }
+    return (filteredMessages, filteredCount)
+}
+
+private func filterImageBlocks(_ blocks: [ContentBlock]) -> (blocks: [ContentBlock], removed: Int) {
+    var removed = 0
+    let filtered = blocks.filter { block in
+        if case .image = block {
+            removed += 1
+            return false
+        }
+        return true
+    }
+    return (filtered, removed)
+}
+
 public func makeBashExecutionAgentMessage(_ message: BashExecutionMessage) -> AgentMessage {
     let payload: [String: Any] = [
         "command": message.command,

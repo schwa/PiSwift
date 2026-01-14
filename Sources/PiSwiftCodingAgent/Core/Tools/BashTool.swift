@@ -31,7 +31,27 @@ public struct BashToolDetails: Sendable {
     public var fullOutputPath: String?
 }
 
-public func createBashTool(cwd: String) -> AgentTool {
+public protocol BashOperations: Sendable {
+    func execute(_ command: String, options: BashExecutorOptions?) async throws -> BashResult
+}
+
+public struct DefaultBashOperations: BashOperations {
+    public init() {}
+
+    public func execute(_ command: String, options: BashExecutorOptions?) async throws -> BashResult {
+        try await executeBash(command, options: options)
+    }
+}
+
+public struct BashToolOptions: Sendable {
+    public var operations: BashOperations?
+
+    public init(operations: BashOperations? = nil) {
+        self.operations = operations
+    }
+}
+
+public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> AgentTool {
     AgentTool(
         label: "bash",
         name: "bash",
@@ -52,7 +72,8 @@ public func createBashTool(cwd: String) -> AgentTool {
         }
         let timeoutValue = doubleValue(params["timeout"])
 
-        let result = try await executeBash(command, options: BashExecutorOptions(onChunk: nil, signal: signal, timeoutSeconds: timeoutValue))
+        let operations = options?.operations ?? DefaultBashOperations()
+        let result = try await operations.execute(command, options: BashExecutorOptions(onChunk: nil, signal: signal, timeoutSeconds: timeoutValue))
 
         if result.cancelled {
             if let timeoutValue {

@@ -115,6 +115,7 @@ public struct SettingsSnapshot: Sendable {
     public var customTools: [String]
     public var skills: SkillsSettings
     public var terminal: TerminalSettings
+    public var images: ImageSettings
     public var enabledModels: [String]?
     public var thinkingBudgets: ThinkingBudgets?
 
@@ -134,6 +135,7 @@ public struct SettingsSnapshot: Sendable {
         customTools: [String],
         skills: SkillsSettings,
         terminal: TerminalSettings,
+        images: ImageSettings,
         enabledModels: [String]?,
         thinkingBudgets: ThinkingBudgets?
     ) {
@@ -152,6 +154,7 @@ public struct SettingsSnapshot: Sendable {
         self.customTools = customTools
         self.skills = skills
         self.terminal = terminal
+        self.images = images
         self.enabledModels = enabledModels
         self.thinkingBudgets = thinkingBudgets
     }
@@ -291,6 +294,7 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
         customTools: manager.getCustomTools(),
         skills: manager.getSkillsSettings(),
         terminal: manager.getTerminalSettings(),
+        images: ImageSettings(autoResize: manager.getAutoResizeImages(), blockImages: manager.getBlockImages()),
         enabledModels: manager.getEnabledModels(),
         thinkingBudgets: manager.getThinkingBudgets()
     )
@@ -440,7 +444,11 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let contextFiles = options.contextFiles ?? discoverContextFiles(cwd: cwd, agentDir: agentDir)
     time("discoverContextFiles")
 
-    let toolsOptions = ToolsOptions(read: ReadToolOptions(autoResizeImages: settingsManager.getAutoResizeImages()))
+    let blockImages = settingsManager.getBlockImages()
+    let toolsOptions = ToolsOptions(read: ReadToolOptions(
+        autoResizeImages: settingsManager.getAutoResizeImages(),
+        blockImages: blockImages
+    ))
     let builtInTools = options.tools ?? createCodingTools(cwd: cwd, options: toolsOptions, subagentContext: subagentContext)
     time("createCodingTools")
 
@@ -562,6 +570,18 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         transformContext = nil
     }
 
+    let convertToLlmWithBlockImages: @Sendable ([AgentMessage]) -> [Message] = { messages in
+        let converted = convertToLlm(messages)
+        guard blockImages else { return converted }
+        let filtered = filterImagesFromMessages(converted)
+        if filtered.filtered > 0 {
+            if let data = "[blockImages] Defense-in-depth: filtered \(filtered.filtered) image(s) at convertToLlm layer\n".data(using: .utf8) {
+                FileHandle.standardError.write(data)
+            }
+        }
+        return filtered.messages
+    }
+
     let createdAgent = Agent(AgentOptions(
         initialState: AgentState(
             systemPrompt: systemPrompt,
@@ -570,7 +590,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
             tools: allTools
         ),
         convertToLlm: { messages in
-            convertToLlm(messages)
+            convertToLlmWithBlockImages(messages)
         },
         transformContext: transformContext,
         steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),

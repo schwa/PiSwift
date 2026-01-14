@@ -27,6 +27,11 @@ public final class HookMessageComponent: Container {
         }
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        rebuild()
+    }
+
     private func rebuild() {
         if let customComponent {
             removeChild(customComponent)

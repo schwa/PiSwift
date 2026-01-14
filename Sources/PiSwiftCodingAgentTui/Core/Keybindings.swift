@@ -2,22 +2,6 @@ import Foundation
 import MiniTui
 import PiSwiftCodingAgent
 
-public enum AppAction: String, CaseIterable, Sendable {
-    case interrupt
-    case clear
-    case exit
-    case suspend
-    case cycleThinkingLevel
-    case cycleModelForward
-    case cycleModelBackward
-    case selectModel
-    case expandTools
-    case toggleThinking
-    case externalEditor
-    case followUp
-    case dequeue
-}
-
 public typealias KeybindingsConfig = [String: [KeyId]]
 
 public let DEFAULT_APP_KEYBINDINGS: [AppAction: [KeyId]] = [
@@ -38,11 +22,11 @@ public let DEFAULT_APP_KEYBINDINGS: [AppAction: [KeyId]] = [
 
 public final class KeybindingsManager {
     private let config: KeybindingsConfig
-    private var appActionToKeys: [AppAction: [KeyId]] = [:]
+    private let appActionToKeys: [AppAction: [KeyId]]
 
     private init(config: KeybindingsConfig) {
         self.config = config
-        buildMaps()
+        self.appActionToKeys = KeybindingsManager.buildMaps(config: config)
     }
 
     public static func create(agentDir: String = getAgentDir()) -> KeybindingsManager {
@@ -88,13 +72,14 @@ public final class KeybindingsManager {
         return result
     }
 
-    private func buildMaps() {
-        appActionToKeys = DEFAULT_APP_KEYBINDINGS
+    private static func buildMaps(config: KeybindingsConfig) -> [AppAction: [KeyId]] {
+        var map = DEFAULT_APP_KEYBINDINGS
         for (action, keys) in config {
             if let appAction = AppAction(rawValue: action) {
-                appActionToKeys[appAction] = keys
+                map[appAction] = keys
             }
         }
+        return map
     }
 
     public func matches(_ data: String, _ action: AppAction) -> Bool {
@@ -130,3 +115,5 @@ public final class KeybindingsManager {
         return result
     }
 }
+
+extension KeybindingsManager: HookKeybindings {}

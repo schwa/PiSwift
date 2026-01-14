@@ -70,7 +70,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         try await session.prompt("Second message")
         #expect(Bool(false), "Expected prompt to throw while streaming")
     } catch {
-        #expect(error.localizedDescription.contains("Agent is already processing. Use steer() or followUp()"))
+        #expect(error.localizedDescription.contains("Agent is already processing. Specify streamingBehavior"))
     }
 
     await session.abort()

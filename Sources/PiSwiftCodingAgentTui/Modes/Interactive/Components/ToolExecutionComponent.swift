@@ -90,6 +90,11 @@ public final class ToolExecutionComponent: Container {
         updateDisplay()
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        updateDisplay()
+    }
+
     private func updateDisplay() {
         let bgFn: (String) -> String
         if isPartial {

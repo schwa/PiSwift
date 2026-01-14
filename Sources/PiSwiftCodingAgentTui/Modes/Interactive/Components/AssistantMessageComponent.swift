@@ -6,6 +6,7 @@ import PiSwiftCodingAgent
 public final class AssistantMessageComponent: Container {
     private let contentContainer: Container
     private var hideThinkingBlock: Bool
+    private var lastMessage: AssistantMessage?
 
     public init(message: AssistantMessage? = nil, hideThinkingBlock: Bool = false) {
         self.contentContainer = Container()
@@ -17,11 +18,19 @@ public final class AssistantMessageComponent: Container {
         }
     }
 
+    public override func invalidate() {
+        super.invalidate()
+        if let lastMessage {
+            updateContent(lastMessage)
+        }
+    }
+
     public func setHideThinkingBlock(_ hide: Bool) {
         hideThinkingBlock = hide
     }
 
     public func updateContent(_ message: AssistantMessage) {
+        lastMessage = message
         contentContainer.clear()
 
         let hasContent = message.content.contains { block in
