@@ -318,6 +318,8 @@ private func sessionEntryToDict(_ entry: SessionEntry) -> [String: Any] {
     case .label(let entry):
         dict["targetId"] = entry.targetId
         dict["label"] = entry.label as Any
+    case .sessionInfo(let entry):
+        dict["name"] = entry.name as Any
     }
 
     return dict

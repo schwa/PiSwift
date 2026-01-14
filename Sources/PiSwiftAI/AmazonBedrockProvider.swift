@@ -30,7 +30,7 @@ private struct BedrockRequest: Encodable {
 
 private struct BedrockMessage: Encodable {
     let role: String
-    let content: [BedrockContentBlock]
+    var content: [BedrockContentBlock]
 }
 
 private struct BedrockContentBlock: Encodable {

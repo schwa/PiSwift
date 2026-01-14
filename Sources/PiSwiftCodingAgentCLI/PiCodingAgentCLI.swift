@@ -75,9 +75,11 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         var resumeSession: String? = nil
         if parsed.resume == true {
             _ = KeybindingsManager.create()
+            let sessionDir = parsed.sessionDir
+            let cwdValue = cwd
             resumeSession = await selectSession(
                 currentSessionsLoader: { onProgress in
-                    await SessionManager.list(cwd, parsed.sessionDir, onProgress)
+                    await SessionManager.list(cwdValue, sessionDir, onProgress)
                 },
                 allSessionsLoader: { onProgress in
                     await SessionManager.listAll(onProgress)

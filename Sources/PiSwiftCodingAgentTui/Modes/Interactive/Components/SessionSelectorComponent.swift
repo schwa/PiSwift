@@ -7,7 +7,7 @@ private enum SessionScope: String {
     case all
 }
 
-public typealias SessionsLoader = (_ onProgress: SessionListProgress?) async -> [SessionInfo]
+public typealias SessionsLoader = @Sendable (_ onProgress: SessionListProgress?) async -> [SessionInfo]
 
 private func shortenPath(_ path: String) -> String {
     let home = NSHomeDirectory()
@@ -279,8 +279,10 @@ public final class SessionSelectorComponent: Container {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let sessions = await currentSessionsLoader { [weak self] loaded, total in
-                self?.header.setProgress(loaded: loaded, total: total)
-                self?.requestRender()
+                Task { @MainActor [weak self] in
+                    self?.header.setProgress(loaded: loaded, total: total)
+                    self?.requestRender()
+                }
             }
             self.currentSessions = sessions
             self.header.setLoading(false)
@@ -299,8 +301,10 @@ public final class SessionSelectorComponent: Container {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let sessions = await allSessionsLoader { [weak self] loaded, total in
-                        self?.header.setProgress(loaded: loaded, total: total)
-                        self?.requestRender()
+                        Task { @MainActor [weak self] in
+                            self?.header.setProgress(loaded: loaded, total: total)
+                            self?.requestRender()
+                        }
                     }
                     self.allSessions = sessions
                     self.header.setLoading(false)
@@ -323,7 +327,7 @@ public final class SessionSelectorComponent: Container {
         }
     }
 
-    public func getSessionList() -> SessionList {
+    public func getSessionList() -> Component {
         sessionList
     }
 }

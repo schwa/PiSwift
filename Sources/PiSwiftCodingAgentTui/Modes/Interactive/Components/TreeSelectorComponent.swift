@@ -301,6 +301,8 @@ private func describeEntry(_ entry: SessionEntry) -> String {
         return theme.fg(.customMessageLabel, "[\(entry.customType)]: ") + normalizeMessageText(extractHookMessageText(entry.content))
     case .label(let entry):
         return theme.fg(.dim, "[label: \(entry.label ?? "(cleared)")] ")
+    case .sessionInfo(let entry):
+        return theme.fg(.dim, "[session name: \(entry.name ?? "(cleared)")]")
     }
 }
 

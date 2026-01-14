@@ -374,14 +374,14 @@ public final class AgentSession: Sendable {
 
         self._hookRunner?.initialize(
             getModel: { [weak agent] in agent?.state.model },
-            getActiveToolsHandler: { [weak self] in self?.getActiveToolNames() ?? [] },
-            getAllToolsHandler: { [weak self] in self?.getAllTools() ?? [] },
             setSessionNameHandler: { [weak self] name in
                 self?.sessionManager.appendSessionInfo(name)
             },
             getSessionNameHandler: { [weak self] in
                 self?.sessionManager.getSessionName()
             },
+            getActiveToolsHandler: { [weak self] in self?.getActiveToolNames() ?? [] },
+            getAllToolsHandler: { [weak self] in self?.getAllTools() ?? [] },
             setActiveToolsHandler: { [weak self] names in self?.setActiveToolsByName(names) },
             hasUI: false
         )

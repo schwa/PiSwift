@@ -149,6 +149,7 @@ public struct HookOverlayOptions: Sendable {
     }
 }
 
+@MainActor
 public protocol HookOverlayHandle: Sendable {
     func hide()
     func setHidden(_ hidden: Bool)

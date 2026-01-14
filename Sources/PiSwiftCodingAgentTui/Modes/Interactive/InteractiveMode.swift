@@ -341,7 +341,9 @@ public final class InteractiveMode {
         let editorContainer = Container()
         let footerDataProvider = FooterDataProvider()
         footerBranchUnsubscribe = footerDataProvider.onBranchChange { [weak tui] in
-            tui?.requestRender()
+            Task { @MainActor in
+                tui?.requestRender()
+            }
         }
         let footer = FooterComponent(session: session, footerData: footerDataProvider)
         let footerContainer = Container()

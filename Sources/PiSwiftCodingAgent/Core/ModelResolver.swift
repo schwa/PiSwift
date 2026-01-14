@@ -5,6 +5,11 @@ import PiSwiftAgent
 public struct ScopedModel: Sendable {
     public var model: Model
     public var thinkingLevel: ThinkingLevel
+
+    public init(model: Model, thinkingLevel: ThinkingLevel) {
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+    }
 }
 
 public struct ParsedModelResult: Sendable {

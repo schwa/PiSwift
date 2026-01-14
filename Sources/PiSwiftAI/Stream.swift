@@ -103,6 +103,13 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
     logApiKeyDebug("provider=\(model.provider) source=\(source) \(apiKeyInfo(apiKey))")
 
     switch model.api {
+    case .bedrockConverseStream:
+        let providerOptions = BedrockOptions(
+            temperature: options?.temperature,
+            maxTokens: options?.maxTokens,
+            signal: options?.signal
+        )
+        return streamBedrock(model: model, context: context, options: providerOptions)
     case .openAICompletions:
         let providerOptions = OpenAICompletionsOptions(
             temperature: options?.temperature,
@@ -150,6 +157,9 @@ public func streamSimple(model: Model, context: Context, options: SimpleStreamOp
     logApiKeyDebug("provider=\(model.provider) source=\(source) \(apiKeyInfo(apiKey))")
 
     switch model.api {
+    case .bedrockConverseStream:
+        let providerOptions = mapBedrockOptions(model: model, options: options)
+        return streamBedrock(model: model, context: context, options: providerOptions)
     case .anthropicMessages:
         let providerOptions = mapAnthropicOptions(model: model, options: options, apiKey: apiKey)
         return streamAnthropic(model: model, context: context, options: providerOptions)
