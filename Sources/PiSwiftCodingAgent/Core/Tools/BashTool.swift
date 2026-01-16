@@ -63,7 +63,7 @@ public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> Agen
                 "timeout": ["type": "number", "description": "Timeout in seconds (optional)"],
             ]),
         ]
-    ) { _, params, signal, _ in
+    ) { _, params, signal, onUpdate in
         if signal?.isCancelled == true {
             throw BashToolError.operationAborted
         }
@@ -73,7 +73,19 @@ public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> Agen
         let timeoutValue = doubleValue(params["timeout"])
 
         let operations = options?.operations ?? DefaultBashOperations()
-        let result = try await operations.execute(command, options: BashExecutorOptions(onChunk: nil, signal: signal, timeoutSeconds: timeoutValue))
+        let outputState = LockedState("")
+        let onChunk: (@Sendable (String) -> Void)? = onUpdate == nil ? nil : { chunk in
+            let current = outputState.withLock { state in
+                state += chunk
+                return state
+            }
+            let text = current.isEmpty ? "(no output)" : current
+            onUpdate?(AgentToolResult(content: [.text(TextContent(text: text))]))
+        }
+        let result = try await operations.execute(
+            command,
+            options: BashExecutorOptions(onChunk: onChunk, signal: signal, timeoutSeconds: timeoutValue)
+        )
 
         if result.cancelled {
             if let timeoutValue {
