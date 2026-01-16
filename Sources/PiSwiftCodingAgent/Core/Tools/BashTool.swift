@@ -51,55 +51,66 @@ public struct BashToolOptions: Sendable {
     }
 }
 
-public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> AgentTool {
-    AgentTool(
-        label: "bash",
-        name: "bash",
-        description: "Execute a bash command in the current working directory. Returns stdout and stderr.",
-        parameters: [
-            "type": AnyCodable("object"),
-            "properties": AnyCodable([
-                "command": ["type": "string", "description": "Bash command to execute"],
-                "timeout": ["type": "number", "description": "Timeout in seconds (optional)"],
-            ]),
-        ]
-    ) { _, params, signal, onUpdate in
+public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> PiSwiftAgent.AgentTool {
+    let parameters: [String: AnyCodable] = [
+        "type": AnyCodable("object"),
+        "properties": AnyCodable([
+            "command": ["type": "string", "description": "Bash command to execute"],
+            "timeout": ["type": "number", "description": "Timeout in seconds (optional)"],
+        ]),
+    ]
+    @Sendable func execute(
+        _ toolCallId: String,
+        _ params: [String: AnyCodable],
+        _ signal: CancellationToken?,
+        _ onUpdate: AgentToolUpdateCallback?
+    ) async throws -> AgentToolResult {
+        _ = toolCallId
         if signal?.isCancelled == true {
             throw BashToolError.operationAborted
         }
         guard let command = params["command"]?.value as? String else {
             throw BashToolError.missingCommand
         }
-        let timeoutValue = doubleValue(params["timeout"])
-
-        let operations = options?.operations ?? DefaultBashOperations()
-        let outputState = LockedState("")
-        let onChunk: (@Sendable (String) -> Void)? = onUpdate == nil ? nil : { chunk in
-            let current = outputState.withLock { state in
-                state += chunk
-                return state
+        let timeoutValue: Double? = doubleValue(params["timeout"])
+        let operations: BashOperations = options?.operations ?? DefaultBashOperations()
+        let outputState: LockedState<String> = LockedState("")
+        let onChunk: (@Sendable (String) -> Void)?
+        if let onUpdate {
+            onChunk = { chunk in
+                let current: String = outputState.withLock { state in
+                    state += chunk
+                    return state
+                }
+                let text = current.isEmpty ? "(no output)" : current
+                onUpdate(AgentToolResult(content: [.text(TextContent(text: text))]))
             }
-            let text = current.isEmpty ? "(no output)" : current
-            onUpdate?(AgentToolResult(content: [.text(TextContent(text: text))]))
+        } else {
+            onChunk = nil
         }
-        let result = try await operations.execute(
+        let result: BashResult = try await operations.execute(
             command,
             options: BashExecutorOptions(onChunk: onChunk, signal: signal, timeoutSeconds: timeoutValue)
         )
-
         if result.cancelled {
             if let timeoutValue {
                 throw BashToolError.commandTimedOut(seconds: Int(timeoutValue))
             }
             throw BashToolError.commandAborted
         }
-
         if let exitCode = result.exitCode, exitCode != 0 {
             throw BashToolError.commandFailed(exitCode: exitCode)
         }
-
-        return AgentToolResult(content: [.text(TextContent(text: result.output.isEmpty ? "(no output)" : result.output))])
+        let output = result.output.isEmpty ? "(no output)" : result.output
+        return AgentToolResult(content: [.text(TextContent(text: output))])
     }
+    return PiSwiftAgent.AgentTool(
+        label: "bash",
+        name: "bash",
+        description: "Execute a bash command in the current working directory. Returns stdout and stderr.",
+        parameters: parameters,
+        execute: execute
+    )
 }
 
 public let bashTool = createBashTool(cwd: FileManager.default.currentDirectoryPath)
