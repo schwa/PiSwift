@@ -37,7 +37,7 @@ public func copyToClipboard(_ text: String) throws {
         }
     }
 #elseif os(macOS)
-    if NSApp != nil || NSClassFromString("NSApplication") != nil {
+    if NSClassFromString("NSApplication") != nil {
         NSPasteboard.general.setString(text, forType: .string)
     } else {
         try runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
