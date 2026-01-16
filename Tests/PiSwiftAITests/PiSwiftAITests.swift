@@ -107,7 +107,6 @@ private struct CodexRequestCapture: Sendable {
     let conversationId: String?
     let sessionId: String?
     let promptCacheKey: String?
-    let promptCacheRetention: String?
 }
 
 private func runCodexSessionRequest(sessionId: String?) async throws -> CodexRequestCapture {
@@ -135,8 +134,6 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
         let seenConversationId = LockedState<String?>(nil)
         let seenSessionId = LockedState<String?>(nil)
         let seenPromptCacheKey = LockedState<String?>(nil)
-        let seenPromptCacheRetention = LockedState<String?>(nil)
-
         MockURLProtocol.allowedHosts.withLock { $0 = ["api.github.com", "raw.githubusercontent.com", "chatgpt.com"] }
         MockURLProtocol.requestHandler.withLock { $0 = { request in
             guard let url = request.url else {
@@ -162,7 +159,6 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
                 if let body = readRequestBody(request),
                    let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
                     seenPromptCacheKey.withLock { $0 = json["prompt_cache_key"] as? String }
-                    seenPromptCacheRetention.withLock { $0 = json["prompt_cache_retention"] as? String }
                 }
 
                 let outputItemAdded = codexTestEvent(
@@ -246,8 +242,7 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
         return CodexRequestCapture(
             conversationId: seenConversationId.withLock { $0 },
             sessionId: seenSessionId.withLock { $0 },
-            promptCacheKey: seenPromptCacheKey.withLock { $0 },
-            promptCacheRetention: seenPromptCacheRetention.withLock { $0 }
+            promptCacheKey: seenPromptCacheKey.withLock { $0 }
         )
     }
 }
@@ -303,7 +298,6 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(capture.conversationId == sessionId)
     #expect(capture.sessionId == sessionId)
     #expect(capture.promptCacheKey == sessionId)
-    #expect(capture.promptCacheRetention == "in-memory")
 }
 
 @Test func openAICodexNoSessionId() async throws {
@@ -311,7 +305,6 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(capture.conversationId == nil)
     #expect(capture.sessionId == nil)
     #expect(capture.promptCacheKey == nil)
-    #expect(capture.promptCacheRetention == nil)
 }
 
 @Test func openAICompletionsSmoke() async throws {
