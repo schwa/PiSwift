@@ -253,6 +253,43 @@ public func makeHookAgentMessage(_ message: HookMessage) -> AgentMessage {
     return .custom(AgentCustomMessage(role: "hookMessage", payload: AnyCodable(payload), timestamp: message.timestamp))
 }
 
+public enum AgentCustomDecoded: Sendable {
+    case bashExecution(BashExecutionMessage)
+    case hookMessage(HookMessage)
+    case branchSummary(BranchSummaryMessage)
+    case compactionSummary(CompactionSummaryMessage)
+    case unknown(role: String, payload: AnyCodable?)
+}
+
+public extension AgentCustomMessage {
+    func decode() -> AgentCustomDecoded {
+        switch role {
+        case "bashExecution":
+            if let message = decodeBashExecutionMessage(self) {
+                return .bashExecution(message)
+            }
+            return .unknown(role: role, payload: payload)
+        case "hookMessage":
+            if let message = decodeHookMessage(self) {
+                return .hookMessage(message)
+            }
+            return .unknown(role: role, payload: payload)
+        case "branchSummary":
+            if let message = decodeBranchSummaryMessage(self) {
+                return .branchSummary(message)
+            }
+            return .unknown(role: role, payload: payload)
+        case "compactionSummary":
+            if let message = decodeCompactionSummaryMessage(self) {
+                return .compactionSummary(message)
+            }
+            return .unknown(role: role, payload: payload)
+        default:
+            return .unknown(role: role, payload: payload)
+        }
+    }
+}
+
 private func hookMessagePayload(_ message: HookMessage) -> [String: Any] {
     var payload: [String: Any] = [
         "customType": message.customType,
