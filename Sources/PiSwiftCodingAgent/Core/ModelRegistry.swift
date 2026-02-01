@@ -185,7 +185,8 @@ public final class ModelRegistry: Sendable {
     }
 
     public func getAvailable() async -> [Model] {
-        state.withLock { $0.models }
+        let models = state.withLock { $0.models }
+        return models.filter { authStorage.hasAuth($0.provider) }
     }
 
     public func getApiKey(_ provider: String) async -> String? {

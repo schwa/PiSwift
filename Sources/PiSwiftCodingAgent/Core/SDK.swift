@@ -172,15 +172,33 @@ private func writeStderr(_ message: String) {
     }
 }
 
-private let defaultModelPriority: [(KnownProvider, String)] = [
-    (.anthropic, "claude-sonnet-4-5"),
-    (.openai, "gpt-5.2"),
+package let defaultModelPerProvider: [(KnownProvider, String)] = [
+    (.amazonBedrock, "us.anthropic.claude-opus-4-20250514-v1:0"),
+    (.anthropic, "claude-opus-4-5"),
+    (.openai, "gpt-5.1-codex"),
+    (.azureOpenAIResponses, "gpt-5.2"),
     (.openaiCodex, "gpt-5.2-codex"),
+    (.google, "gemini-2.5-pro"),
+    (.googleGeminiCli, "gemini-2.5-pro"),
+    (.googleAntigravity, "gemini-3-pro-high"),
+    (.googleVertex, "gemini-3-pro-preview"),
+    (.githubCopilot, "gpt-4o"),
+    (.openrouter, "openai/gpt-5.1-codex"),
+    (.vercelAiGateway, "anthropic/claude-opus-4.5"),
+    (.xai, "grok-4-fast-non-reasoning"),
+    (.groq, "openai/gpt-oss-120b"),
+    (.cerebras, "zai-glm-4.6"),
+    (.zai, "glm-4.6"),
+    (.mistral, "devstral-medium-latest"),
+    (.minimax, "MiniMax-M2.1"),
+    (.minimaxCn, "MiniMax-M2.1"),
+    (.huggingface, "moonshotai/Kimi-K2.5"),
     (.opencode, "claude-opus-4-5"),
+    (.kimiCoding, "kimi-k2-thinking"),
 ]
 
-private func selectDefaultModel(available: [Model], registry: ModelRegistry) async -> Model? {
-    for (provider, modelId) in defaultModelPriority {
+package func selectDefaultModel(available: [Model], registry: ModelRegistry) async -> Model? {
+    for (provider, modelId) in defaultModelPerProvider {
         if let match = available.first(where: { $0.provider == provider.rawValue && $0.id == modelId }),
            await registry.getApiKey(match.provider) != nil {
             return match

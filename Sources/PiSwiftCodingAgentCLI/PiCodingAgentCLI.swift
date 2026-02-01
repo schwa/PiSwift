@@ -657,6 +657,9 @@ private func findInitialModelForSession(
     }
 
     let available = await modelRegistry.getAvailable()
+    if let preferred = await selectDefaultModel(available: available, registry: modelRegistry) {
+        return preferred
+    }
     return available.first
 }
 
