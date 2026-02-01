@@ -55,6 +55,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         agent: agent,
         sessionManager: sessionManager,
         settingsManager: settingsManager,
+        resourceLoader: TestResourceLoader(),
         modelRegistry: modelRegistry
     ))
     defer { session.dispose() }
@@ -99,6 +100,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         agent: agent,
         sessionManager: SessionManager.inMemory(),
         settingsManager: SettingsManager.inMemory(),
+        resourceLoader: TestResourceLoader(),
         modelRegistry: ModelRegistry(AuthStorage(":memory:"))
     ))
     defer { session.dispose() }
@@ -135,6 +137,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         agent: agent,
         sessionManager: SessionManager.inMemory(),
         settingsManager: SettingsManager.inMemory(),
+        resourceLoader: TestResourceLoader(),
         modelRegistry: ModelRegistry(AuthStorage(":memory:"))
     ))
     defer { session.dispose() }
@@ -169,6 +172,7 @@ private func createAssistantMessage(_ text: String, stopReason: StopReason = .st
         agent: agent,
         sessionManager: SessionManager.inMemory(),
         settingsManager: SettingsManager.inMemory(),
+        resourceLoader: TestResourceLoader(),
         modelRegistry: {
             let authStorage = AuthStorage(":memory:")
             authStorage.setRuntimeApiKey("anthropic", apiKey)

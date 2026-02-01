@@ -32,6 +32,7 @@ public struct CreateAgentSessionOptions: Sendable {
     public var tools: [Tool]?
     public var customTools: [CustomToolDefinition]?
     public var additionalCustomToolPaths: [String]?
+    public var resourceLoader: ResourceLoader?
     public var hooks: [HookDefinition]?
     public var additionalHookPaths: [String]?
     public var eventBus: EventBus?
@@ -54,6 +55,7 @@ public struct CreateAgentSessionOptions: Sendable {
         tools: [Tool]? = nil,
         customTools: [CustomToolDefinition]? = nil,
         additionalCustomToolPaths: [String]? = nil,
+        resourceLoader: ResourceLoader? = nil,
         hooks: [HookDefinition]? = nil,
         additionalHookPaths: [String]? = nil,
         eventBus: EventBus? = nil,
@@ -75,6 +77,7 @@ public struct CreateAgentSessionOptions: Sendable {
         self.tools = tools
         self.customTools = customTools
         self.additionalCustomToolPaths = additionalCustomToolPaths
+        self.resourceLoader = resourceLoader
         self.hooks = hooks
         self.additionalHookPaths = additionalHookPaths
         self.eventBus = eventBus
@@ -358,6 +361,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     let cwd = options.cwd ?? FileManager.default.currentDirectoryPath
     let agentDir = options.agentDir ?? getAgentDir()
     let eventBus = options.eventBus ?? createEventBus()
+    var resourceLoader = options.resourceLoader
 
     let authStorage = options.authStorage ?? discoverAuthStorage(agentDir: agentDir)
     let modelRegistry = options.modelRegistry ?? discoverModels(authStorage: authStorage, agentDir: agentDir)
@@ -367,6 +371,19 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     time("settingsManager")
     let sessionManager = options.sessionManager ?? SessionManager.create(cwd, nil)
     time("sessionManager")
+
+    if resourceLoader == nil {
+        let loader = DefaultResourceLoader(DefaultResourceLoaderOptions(
+            cwd: cwd,
+            agentDir: agentDir,
+            settingsManager: settingsManager
+        ))
+        await loader.reload()
+        time("resourceLoader.reload")
+        resourceLoader = loader
+    }
+
+    let resolvedResourceLoader = resourceLoader!
 
     let existingSession = sessionManager.buildSessionContext()
     time("loadSession")
@@ -442,10 +459,12 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         defaultThinkingLevel: resolvedThinkingLevel
     ))
 
-    let skills = options.skills ?? discoverSkills(cwd: cwd, agentDir: agentDir, settings: settingsManager.getSkillsSettings())
+    let loaderSkills = resolvedResourceLoader.getSkills().skills
+    _ = options.skills ?? loaderSkills
     time("discoverSkills")
 
-    let contextFiles = options.contextFiles ?? discoverContextFiles(cwd: cwd, agentDir: agentDir)
+    let loaderContextFiles = resolvedResourceLoader.getAgentsFiles()
+    _ = options.contextFiles ?? loaderContextFiles
     time("discoverContextFiles")
 
     let blockImages = settingsManager.getBlockImages()
@@ -531,12 +550,20 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
 
     let rebuildSystemPrompt: @Sendable ([String]) -> String = { toolNames in
         let validToolNames = toolNames.compactMap { ToolName(rawValue: $0) }
+        let loaderSystemPrompt = resolvedResourceLoader.getSystemPrompt()
+        let loaderAppend = resolvedResourceLoader.getAppendSystemPrompt()
+        let appendSystemPrompt = loaderAppend.isEmpty ? nil : loaderAppend.joined(separator: "\n\n")
+        let activeSkills = options.skills ?? resolvedResourceLoader.getSkills().skills
+        let activeContextFiles = options.contextFiles ?? resolvedResourceLoader.getAgentsFiles()
+
         let defaultPrompt = buildSystemPrompt(BuildSystemPromptOptions(
+            customPrompt: loaderSystemPrompt,
             selectedTools: validToolNames,
+            appendSystemPrompt: appendSystemPrompt,
             cwd: cwd,
             agentDir: agentDir,
-            contextFiles: contextFiles,
-            skills: skills
+            contextFiles: activeContextFiles,
+            skills: activeSkills
         ))
         if let systemPromptInput = options.systemPrompt {
             switch systemPromptInput {
@@ -544,10 +571,11 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
                 return buildSystemPrompt(BuildSystemPromptOptions(
                     customPrompt: text,
                     selectedTools: validToolNames,
+                    appendSystemPrompt: appendSystemPrompt,
                     cwd: cwd,
                     agentDir: agentDir,
-                    contextFiles: contextFiles,
-                    skills: skills
+                    contextFiles: activeContextFiles,
+                    skills: activeSkills
                 ))
             case .builder(let builder):
                 return builder(defaultPrompt)
@@ -562,7 +590,8 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
 
     let slashCommands = options.slashCommands ?? discoverSlashCommands(cwd: cwd, agentDir: agentDir)
     time("discoverSlashCommands")
-    let promptTemplates = options.promptTemplates ?? discoverPromptTemplates(cwd: cwd, agentDir: agentDir)
+    let loaderPrompts = resolvedResourceLoader.getPrompts().prompts
+    let promptTemplates = options.promptTemplates ?? loaderPrompts
     time("discoverPromptTemplates")
 
     let transformContext: (@Sendable ([AgentMessage], CancellationToken?) async throws -> [AgentMessage])?
@@ -619,6 +648,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         agent: createdAgent,
         sessionManager: sessionManager,
         settingsManager: settingsManager,
+        resourceLoader: resolvedResourceLoader,
         scopedModels: options.scopedModels,
         fileCommands: slashCommands,
         promptTemplates: promptTemplates,

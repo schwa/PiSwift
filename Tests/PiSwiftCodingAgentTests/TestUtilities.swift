@@ -24,6 +24,42 @@ let PI_AGENT_DIR = FileManager.default.homeDirectoryForCurrentUser
 
 private let AUTH_PATH = URL(fileURLWithPath: PI_AGENT_DIR).appendingPathComponent("auth.json").path
 
+final class TestResourceLoader: ResourceLoader {
+    func getExtensions() -> ExtensionsResult {
+        ExtensionsResult(paths: [], diagnostics: [])
+    }
+
+    func getSkills() -> (skills: [Skill], diagnostics: [ResourceDiagnostic]) {
+        ([], [])
+    }
+
+    func getPrompts() -> (prompts: [PromptTemplate], diagnostics: [ResourceDiagnostic]) {
+        ([], [])
+    }
+
+    func getThemes() -> (themes: [HookThemeInfo], diagnostics: [ResourceDiagnostic]) {
+        ([], [])
+    }
+
+    func getAgentsFiles() -> [ContextFile] {
+        []
+    }
+
+    func getSystemPrompt() -> String? {
+        nil
+    }
+
+    func getAppendSystemPrompt() -> [String] {
+        []
+    }
+
+    func getPathMetadata() -> [String: PathMetadata] {
+        [:]
+    }
+
+    func reload() async {}
+}
+
 func getRealAuthStorage() -> AuthStorage {
     AuthStorage(AUTH_PATH)
 }
@@ -107,6 +143,7 @@ func createTestSession(options: TestSessionOptions = TestSessionOptions()) -> Te
         agent: agent,
         sessionManager: sessionManager,
         settingsManager: settingsManager,
+        resourceLoader: TestResourceLoader(),
         modelRegistry: modelRegistry
     ))
 

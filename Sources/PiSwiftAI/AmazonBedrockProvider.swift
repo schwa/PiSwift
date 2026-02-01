@@ -641,8 +641,17 @@ private func supportsPromptCaching(model: Model) -> Bool {
     return false
 }
 
+private func supportsThinkingSignature(model: Model) -> Bool {
+    let id = model.id.lowercased()
+    return id.contains("anthropic.claude") || id.contains("anthropic/claude")
+}
+
 private func convertMessages(context: Context, model: Model) -> [BedrockMessage] {
-    let transformed = transformMessages(context.messages, model: model)
+    let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, _, _ in
+        let sanitized = id.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        return sanitized.count > 64 ? String(sanitized.prefix(64)) : sanitized
+    }
+    let transformed = transformMessages(context.messages, model: model, normalizeToolCallId: normalizeToolCallId)
     var result: [BedrockMessage] = []
     var index = 0
 
@@ -653,7 +662,7 @@ private func convertMessages(context: Context, model: Model) -> [BedrockMessage]
             let contentBlocks = convertUserContent(user.content)
             result.append(BedrockMessage(role: "user", content: contentBlocks))
         case .assistant(let assistant):
-            let blocks = convertAssistantContent(assistant.content)
+            let blocks = convertAssistantContent(assistant.content, model: model)
             if !blocks.isEmpty {
                 result.append(BedrockMessage(role: "assistant", content: blocks))
             }
@@ -709,7 +718,7 @@ private func convertUserContent(_ content: UserContent) -> [BedrockContentBlock]
     }
 }
 
-private func convertAssistantContent(_ blocks: [ContentBlock]) -> [BedrockContentBlock] {
+private func convertAssistantContent(_ blocks: [ContentBlock], model: Model) -> [BedrockContentBlock] {
     var converted: [BedrockContentBlock] = []
     for block in blocks {
         switch block {
@@ -731,7 +740,7 @@ private func convertAssistantContent(_ blocks: [ContentBlock]) -> [BedrockConten
             let trimmed = thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
             var reasoningText: [String: Any] = ["text": sanitizeSurrogates(thinking.thinking)]
-            if let signature = thinking.thinkingSignature {
+            if supportsThinkingSignature(model: model), let signature = thinking.thinkingSignature {
                 reasoningText["signature"] = signature
             }
             let payload: [String: Any] = [

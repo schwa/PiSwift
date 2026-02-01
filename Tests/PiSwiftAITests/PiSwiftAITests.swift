@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import PiSwiftAI
+@testable import PiSwiftAI
 
 private let RUN_ANTHROPIC_TESTS: Bool = {
     let env = ProcessInfo.processInfo.environment
@@ -278,6 +278,119 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(toolResult.isError)
 }
 
+@Test func transformMessagesNormalizesToolCallIds() {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let toolCall = ToolCall(id: "call|abc", name: "do_thing", arguments: [:])
+    let assistant = AssistantMessage(
+        content: [.toolCall(toolCall)],
+        api: .anthropicMessages,
+        provider: "anthropic",
+        model: "claude-3-5-haiku-20241022",
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .toolUse
+    )
+    let toolResult = ToolResultMessage(
+        toolCallId: "call|abc",
+        toolName: "do_thing",
+        content: [.text(TextContent(text: "ok"))],
+        isError: false,
+        timestamp: 0
+    )
+
+    let transformed = transformMessages([.assistant(assistant), .toolResult(toolResult)], model: model) { id, _, _ in
+        "normalized-\(id)"
+    }
+
+    guard case .assistant(let transformedAssistant) = transformed.first else {
+        #expect(Bool(false), "Expected assistant message")
+        return
+    }
+    guard case .toolCall(let transformedCall) = transformedAssistant.content.first else {
+        #expect(Bool(false), "Expected tool call content")
+        return
+    }
+    #expect(transformedCall.id == "normalized-call|abc")
+
+    guard transformed.count == 2, case .toolResult(let transformedResult) = transformed[1] else {
+        #expect(Bool(false), "Expected tool result message")
+        return
+    }
+    #expect(transformedResult.toolCallId == "normalized-call|abc")
+}
+
+@Test func transformMessagesPreservesThinkingSignatureForSameModel() {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let thinking = ThinkingContent(thinking: "   ", thinkingSignature: "sig")
+    let assistant = AssistantMessage(
+        content: [.thinking(thinking)],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .stop
+    )
+
+    let transformed = transformMessages([.assistant(assistant)], model: model)
+    guard case .assistant(let transformedAssistant) = transformed.first else {
+        #expect(Bool(false), "Expected assistant message")
+        return
+    }
+    guard case .thinking(let transformedThinking) = transformedAssistant.content.first else {
+        #expect(Bool(false), "Expected thinking content")
+        return
+    }
+    #expect(transformedThinking.thinkingSignature == "sig")
+}
+
+@Test func transformMessagesConvertsThinkingAcrossProviders() {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let thinking = ThinkingContent(thinking: "Reasoning detail", thinkingSignature: "sig")
+    let assistant = AssistantMessage(
+        content: [.thinking(thinking)],
+        api: .anthropicMessages,
+        provider: "anthropic",
+        model: "claude-3-5-haiku-20241022",
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .stop
+    )
+
+    let transformed = transformMessages([.assistant(assistant)], model: model)
+    guard case .assistant(let transformedAssistant) = transformed.first else {
+        #expect(Bool(false), "Expected assistant message")
+        return
+    }
+    guard case .text(let text) = transformedAssistant.content.first else {
+        #expect(Bool(false), "Expected text content")
+        return
+    }
+    #expect(text.text == "Reasoning detail")
+}
+
+@Test func transformMessagesSkipsAbortedAssistants() {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let assistant = AssistantMessage(
+        content: [.text(TextContent(text: "ignored"))],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .aborted
+    )
+    let user = UserMessage(content: .text("continue"))
+    let transformed = transformMessages([.assistant(assistant), .user(user)], model: model)
+
+    #expect(transformed.count == 1)
+    guard case .user(let transformedUser) = transformed.first else {
+        #expect(Bool(false), "Expected user message")
+        return
+    }
+    guard case .text(let text) = transformedUser.content else {
+        #expect(Bool(false), "Expected user text content")
+        return
+    }
+    #expect(text == "continue")
+}
+
 @Test func contextOverflowDetection() {
     let usage = Usage(input: 10, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 10)
     let message = AssistantMessage(
@@ -371,4 +484,85 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     let response = try await complete(model: model, context: context)
     #expect(!response.content.isEmpty)
     #expect(response.stopReason != .error)
+}
+
+private actor EnvLock {
+    func withEnv(_ key: String, value: String?, work: @Sendable () async -> Void) async {
+        let previous = ProcessInfo.processInfo.environment[key]
+        if let value {
+            setenv(key, value, 1)
+        } else {
+            unsetenv(key)
+        }
+        defer {
+            if let previous {
+                setenv(key, previous, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+        await work()
+    }
+}
+
+private let envLock = EnvLock()
+
+private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -> Void) async {
+    await envLock.withEnv(key, value: value, work: work)
+}
+
+@Test func openAIPromptCacheRetentionHelper() async throws {
+    await withEnv("PI_CACHE_RETENTION", value: nil) {
+        #expect(promptCacheRetention(baseUrl: "https://api.openai.com/v1") == nil)
+    }
+    await withEnv("PI_CACHE_RETENTION", value: "long") {
+        #expect(promptCacheRetention(baseUrl: "https://api.openai.com/v1") == "24h")
+        #expect(promptCacheRetention(baseUrl: "https://proxy.example.com/v1") == nil)
+    }
+}
+
+@Test func openAIResponsesCacheMiddlewareInjection() async throws {
+    let payload: [String: Any] = [
+        "model": "gpt-4o-mini",
+        "input": [],
+    ]
+    let body = try JSONSerialization.data(withJSONObject: payload)
+    var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+    request.httpMethod = "POST"
+    request.httpBody = body
+
+    let middleware = OpenAIResponsesCacheMiddleware(sessionId: "session-123", promptCacheRetention: "24h")
+    let updated = middleware.intercept(request: request)
+    let updatedBody = updated.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+    #expect(updatedBody?.contains("\"prompt_cache_key\":\"session-123\"") == true)
+    #expect(updatedBody?.contains("\"prompt_cache_retention\":\"24h\"") == true)
+}
+
+@Test func anthropicCacheRetentionHelper() async throws {
+    await withEnv("PI_CACHE_RETENTION", value: nil) {
+        #expect(anthropicCacheTtl(baseUrl: "https://api.anthropic.com") == nil)
+    }
+    await withEnv("PI_CACHE_RETENTION", value: "long") {
+        #expect(anthropicCacheTtl(baseUrl: "https://api.anthropic.com") == "1h")
+        #expect(anthropicCacheTtl(baseUrl: "https://proxy.example.com") == nil)
+    }
+}
+
+@Test func anthropicCacheControlInjection() async throws {
+    let payload: [String: Any] = [
+        "model": "claude-3-5-haiku-20241022",
+        "messages": [
+            ["role": "user", "content": "Hello"],
+        ],
+        "system": "You are a helpful assistant.",
+    ]
+    let body = try JSONSerialization.data(withJSONObject: payload)
+    let updatedDefault = injectCacheControl(body: body, ttl: nil)
+    let updatedDefaultString = updatedDefault.flatMap { String(data: $0, encoding: .utf8) }
+    #expect(updatedDefaultString?.contains("\"cache_control\"") == true)
+    #expect(updatedDefaultString?.contains("\"ttl\"") == false)
+
+    let updatedLong = injectCacheControl(body: body, ttl: "1h")
+    let updatedLongString = updatedLong.flatMap { String(data: $0, encoding: .utf8) }
+    #expect(updatedLongString?.contains("\"ttl\":\"1h\"") == true)
 }

@@ -408,11 +408,19 @@ private func handleRpcCommand(
             "followUpMode": session.followUpMode,
             "sessionFile": session.sessionFile as Any,
             "sessionId": session.sessionId,
+            "sessionName": session.sessionManager.getSessionName() as Any,
             "autoCompactionEnabled": session.autoCompactionEnabled,
             "messageCount": session.messages.count,
             "pendingMessageCount": session.pendingMessageCount,
         ]
         return makeSuccessResponse(idValue, "get_state", state)
+
+    case "set_session_name":
+        guard let name = dict["name"] as? String else {
+            return makeErrorResponse(idValue, "set_session_name", "Missing name")
+        }
+        session.sessionManager.appendSessionInfo(name)
+        return makeSuccessResponse(idValue, "set_session_name", nil)
 
     case "set_model":
         guard let provider = dict["provider"] as? String,
@@ -541,6 +549,37 @@ private func handleRpcCommand(
     case "get_messages":
         let messages = session.messages.map { encodeAgentMessageDict($0) }
         return makeSuccessResponse(idValue, "get_messages", ["messages": messages])
+
+    case "get_commands":
+        var commands: [[String: Any]] = []
+        if let hookRunner = session.hookRunner {
+            for command in hookRunner.getRegisteredCommands() {
+                commands.append([
+                    "name": command.name,
+                    "description": command.description as Any,
+                    "source": "extension",
+                ])
+            }
+        }
+        for template in session.promptTemplates {
+            commands.append([
+                "name": template.name,
+                "description": template.description,
+                "source": "template",
+                "location": template.source,
+                "path": template.filePath,
+            ])
+        }
+        for skill in session.resourceLoader.getSkills().skills {
+            commands.append([
+                "name": "skill:\(skill.name)",
+                "description": skill.description,
+                "source": "skill",
+                "location": skill.source,
+                "path": skill.filePath,
+            ])
+        }
+        return makeSuccessResponse(idValue, "get_commands", ["commands": commands])
 
     default:
         return makeErrorResponse(idValue, commandType, "Unknown command: \(commandType)")

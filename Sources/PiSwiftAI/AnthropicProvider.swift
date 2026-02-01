@@ -3,23 +3,40 @@ import SwiftAnthropic
 
 private let claudeCodeVersion = "2.1.2"
 
-private let claudeCodeToolNames: [String: String] = [
-    "read": "Read",
-    "write": "Write",
-    "edit": "Edit",
-    "bash": "Bash",
-    "grep": "Grep",
-    "find": "Glob",
-    "ls": "Glob",
+private let claudeCodeTools: [String] = [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Grep",
+    "Glob",
+    "AskUserQuestion",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "KillShell",
+    "NotebookEdit",
+    "Skill",
+    "Task",
+    "TaskOutput",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
 ]
 
+private let claudeCodeToolLookup: [String: String] = Dictionary(
+    uniqueKeysWithValues: claudeCodeTools.map { ($0.lowercased(), $0) }
+)
+
 private func toClaudeCodeName(_ name: String) -> String {
-    claudeCodeToolNames[name] ?? name
+    claudeCodeToolLookup[name.lowercased()] ?? name
 }
 
-private func fromClaudeCodeName(_ name: String) -> String {
-    for (piName, claudeName) in claudeCodeToolNames where claudeName == name {
-        return piName
+private func fromClaudeCodeName(_ name: String, tools: [AITool]?) -> String {
+    if let tools, !tools.isEmpty {
+        let lowerName = name.lowercased()
+        if let match = tools.first(where: { $0.name.lowercased() == lowerName }) {
+            return match.name
+        }
     }
     return name
 }
@@ -88,7 +105,12 @@ public func streamAnthropic(
             } else {
                 logAnthropicDebug("anthropic betaHeaders=none")
             }
-            let httpClient = buildAnthropicHttpClient(isOAuthToken: isOAuthToken)
+            let mergedHeaders = mergeHeaders(model.headers, options.headers)
+            let httpClient = buildAnthropicHttpClient(
+                isOAuthToken: isOAuthToken,
+                extraHeaders: mergedHeaders,
+                baseUrl: model.baseUrl
+            )
             let service = AnthropicServiceFactory.service(
                 apiKey: apiKey,
                 basePath: model.baseUrl,
@@ -144,7 +166,7 @@ public func streamAnthropic(
                         indexMap[index] = output.content.count - 1
                         stream.push(.thinkingStart(contentIndex: output.content.count - 1, partial: output))
                     case "tool_use":
-                        let toolName = isOAuthToken ? fromClaudeCodeName(block.name ?? "") : (block.name ?? "")
+                        let toolName = isOAuthToken ? fromClaudeCodeName(block.name ?? "", tools: context.tools) : (block.name ?? "")
                         let tool = ToolCall(id: block.id ?? "", name: toolName, arguments: [:])
                         output.content.append(.toolCall(tool))
                         indexMap[index] = output.content.count - 1
@@ -210,10 +232,10 @@ public func streamAnthropic(
                         output.stopReason = mapAnthropicStopReason(stopReason)
                     }
                     if let usage = event.usage {
-                        let input = usage.inputTokens ?? 0
+                        let input = usage.inputTokens ?? output.usage.input
                         let outputTokens = usage.outputTokens
-                        let cacheRead = usage.cacheReadInputTokens ?? 0
-                        let cacheWrite = usage.cacheCreationInputTokens ?? 0
+                        let cacheRead = usage.cacheReadInputTokens ?? output.usage.cacheRead
+                        let cacheWrite = usage.cacheCreationInputTokens ?? output.usage.cacheWrite
                         output.usage = Usage(
                             input: input,
                             output: outputTokens,
@@ -328,7 +350,11 @@ private func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool
 }
 
 private func convertAnthropicMessages(model: Model, messages: [Message], isOAuthToken: Bool) -> [MessageParameter.Message] {
-    let transformed = transformMessages(messages, model: model)
+    let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, _, _ in
+        let sanitized = id.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        return String(sanitized.prefix(64))
+    }
+    let transformed = transformMessages(messages, model: model, normalizeToolCallId: normalizeToolCallId)
     var params: [MessageParameter.Message] = []
 
     var index = 0
@@ -489,18 +515,45 @@ private func convertAnthropicToolChoice(_ choice: AnthropicToolChoice, isOAuthTo
     }
 }
 
-private func buildAnthropicHttpClient(isOAuthToken: Bool) -> HTTPClient? {
-    guard isOAuthToken else { return nil }
-    let extraHeaders = [
-        "user-agent": "claude-cli/\(claudeCodeVersion) (external, cli)",
-        "x-app": "cli",
-    ]
-    return AnthropicHeaderInjectingHTTPClient(base: HTTPClientFactory.createDefault(), extraHeaders: extraHeaders)
+func anthropicCacheTtl(baseUrl: String) -> String? {
+    let flag = getenv("PI_CACHE_RETENTION").map { String(cString: $0) }?.lowercased()
+    guard flag == "long" else { return nil }
+    guard baseUrl.contains("api.anthropic.com") else { return nil }
+    return "1h"
+}
+
+private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String: String], baseUrl: String) -> HTTPClient {
+    var merged = extraHeaders
+    if isOAuthToken {
+        if merged["user-agent"] == nil {
+            merged["user-agent"] = "claude-cli/\(claudeCodeVersion) (external, cli)"
+        }
+        if merged["x-app"] == nil {
+            merged["x-app"] = "cli"
+        }
+    }
+    let cacheTtl = anthropicCacheTtl(baseUrl: baseUrl)
+    return AnthropicHeaderInjectingHTTPClient(
+        base: HTTPClientFactory.createDefault(),
+        extraHeaders: merged,
+        cacheTtl: cacheTtl
+    )
+}
+
+private func mergeHeaders(_ base: [String: String]?, _ extra: [String: String]?) -> [String: String] {
+    var merged = base ?? [:]
+    if let extra {
+        for (key, value) in extra {
+            merged[key] = value
+        }
+    }
+    return merged
 }
 
 private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
     let base: HTTPClient
     let extraHeaders: [String: String]
+    let cacheTtl: String?
 
     func data(for request: HTTPRequest) async throws -> (Data, HTTPResponse) {
         let updated = injectingHeaders(request)
@@ -513,7 +566,6 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
     }
 
     private func injectingHeaders(_ request: HTTPRequest) -> HTTPRequest {
-        guard !extraHeaders.isEmpty else { return request }
         // SwiftAnthropic doesn't expose HTTPRequest properties publicly; mirror to add headers when possible.
         let mirror = Mirror(reflecting: request)
         var url: URL?
@@ -530,7 +582,11 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
             case "headers":
                 headers = child.value as? [String: String]
             case "body":
-                body = child.value as? Data
+                if let data = child.value as? Data {
+                    body = data
+                } else if let data = child.value as? Data? {
+                    body = data
+                }
             default:
                 continue
             }
@@ -540,8 +596,78 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
         for (key, value) in extraHeaders where headers[key] == nil {
             headers[key] = value
         }
-        return HTTPRequest(url: url, method: method, headers: headers, body: body)
+        let updatedBody = injectCacheControl(body: body, ttl: cacheTtl)
+        return HTTPRequest(url: url, method: method, headers: headers, body: updatedBody ?? body)
     }
+}
+
+func injectCacheControl(body: Data?, ttl: String?) -> Data? {
+    guard let body,
+          var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+        return nil
+    }
+
+    if let system = payload["system"] {
+        if let text = system as? String {
+            payload["system"] = [cacheTextObject(text: text, ttl: ttl)]
+        } else if var list = system as? [[String: Any]] {
+            for index in list.indices {
+                list[index] = ensureCacheControl(in: list[index], ttl: ttl)
+            }
+            payload["system"] = list
+        }
+    }
+
+    if var messages = payload["messages"] as? [[String: Any]],
+       let lastIndex = messages.indices.last {
+        var last = messages[lastIndex]
+        if (last["role"] as? String) == "user" {
+            if let content = last["content"] as? String {
+                last["content"] = [cacheTextObject(text: content, ttl: ttl)]
+            } else if var list = last["content"] as? [[String: Any]] {
+                if let contentIndex = list.indices.last {
+                    let block = list[contentIndex]
+                    if shouldAddCacheControl(block) {
+                        list[contentIndex] = ensureCacheControl(in: block, ttl: ttl)
+                    }
+                }
+                last["content"] = list
+            }
+            messages[lastIndex] = last
+            payload["messages"] = messages
+        }
+    }
+
+    return try? JSONSerialization.data(withJSONObject: payload)
+}
+
+private func cacheTextObject(text: String, ttl: String?) -> [String: Any] {
+    var object: [String: Any] = [
+        "type": "text",
+        "text": text,
+    ]
+    object["cache_control"] = cacheControlPayload(ttl: ttl)
+    return object
+}
+
+private func cacheControlPayload(ttl: String?) -> [String: Any] {
+    var control: [String: Any] = ["type": "ephemeral"]
+    if let ttl {
+        control["ttl"] = ttl
+    }
+    return control
+}
+
+private func ensureCacheControl(in block: [String: Any], ttl: String?) -> [String: Any] {
+    guard block["cache_control"] == nil else { return block }
+    var updated = block
+    updated["cache_control"] = cacheControlPayload(ttl: ttl)
+    return updated
+}
+
+private func shouldAddCacheControl(_ block: [String: Any]) -> Bool {
+    guard let type = block["type"] as? String else { return false }
+    return type == "text" || type == "image" || type == "tool_result"
 }
 
 private func mapAnthropicStopReason(_ reason: String) -> StopReason {
@@ -558,6 +684,8 @@ private func mapAnthropicStopReason(_ reason: String) -> StopReason {
         return .stop
     case "stop_sequence":
         return .stop
+    case "sensitive":
+        return .error
     default:
         return .stop
     }

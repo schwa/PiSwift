@@ -361,11 +361,8 @@ public final class InteractiveMode {
         self.footerContainer = footerContainer
         self.footerDataProvider = footerDataProvider
 
-        skills = discoverSkills(
-            cwd: session.sessionManager.getCwd(),
-            agentDir: getAgentDir(),
-            settings: settingsManager.getSkillsSettings()
-        )
+        skills = session.resourceLoader.getSkills().skills
+        setRegisteredThemes(session.resourceLoader.getThemes().themes)
 
         let slashCommands: [SlashCommand] = [
             SlashCommand(name: "settings", description: "Open settings menu"),
@@ -375,6 +372,7 @@ public final class InteractiveMode {
             SlashCommand(name: "login", description: "Login with OAuth provider"),
             SlashCommand(name: "logout", description: "Logout from OAuth provider"),
             SlashCommand(name: "templates", description: "List prompt templates"),
+            SlashCommand(name: "reload", description: "Reload skills, prompts, themes"),
             SlashCommand(name: "export", description: "Export session to HTML"),
             SlashCommand(name: "copy", description: "Copy last assistant message"),
             SlashCommand(name: "name", description: "Set session display name"),
@@ -1981,6 +1979,11 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
+        if trimmed == "/reload" {
+            editor.setText("")
+            await handleReloadCommand()
+            return
+        }
         if trimmed.hasPrefix("/export") {
             handleExportCommand(trimmed)
             editor.setText("")
@@ -3123,6 +3126,44 @@ public final class InteractiveMode {
             .joined(separator: "\n")
         chatContainer.addChild(Markdown(list, paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
         scheduleRender()
+    }
+
+    @MainActor
+    private func handleReloadCommand() async {
+        guard let session, let tui, let editorContainer, let currentEditor = editor else { return }
+        if session.isStreaming {
+            showWarning("Wait for the current response to finish before reloading.")
+            return
+        }
+        if session.isCompacting {
+            showWarning("Wait for compaction to finish before reloading.")
+            return
+        }
+
+        let loader = BorderedLoader(tui: tui, theme: theme, message: "Reloading skills, prompts, themes...")
+        let previousEditor = currentEditor
+
+        editorContainer.clear()
+        editorContainer.addChild(loader)
+        tui.setFocus(loader)
+        ui.requestRender()
+
+        let restoreEditor: @MainActor (EditorComponentView) -> Void = { editor in
+            loader.dispose()
+            editorContainer.clear()
+            editorContainer.addChild(editor)
+            tui.setFocus(editor)
+            self.ui.requestRender()
+        }
+
+        await session.reload()
+        skills = session.resourceLoader.getSkills().skills
+        setRegisteredThemes(session.resourceLoader.getThemes().themes)
+        rebuildAutocomplete()
+        chatContainer.clear()
+        renderInitialMessages()
+        restoreEditor(previousEditor)
+        showStatus("Reloaded skills, prompts, themes")
     }
 
     private func formatKeyDisplay(_ keys: [KeyId]) -> String {

@@ -34,6 +34,7 @@ public struct AgentSessionConfig: Sendable {
     public var agent: Agent
     public var sessionManager: SessionManager
     public var settingsManager: SettingsManager
+    public var resourceLoader: ResourceLoader
     public var scopedModels: [ScopedModel]?
     public var fileCommands: [FileSlashCommand]?
     public var promptTemplates: [PromptTemplate]?
@@ -49,6 +50,7 @@ public struct AgentSessionConfig: Sendable {
         agent: Agent,
         sessionManager: SessionManager,
         settingsManager: SettingsManager,
+        resourceLoader: ResourceLoader,
         scopedModels: [ScopedModel]? = nil,
         fileCommands: [FileSlashCommand]? = nil,
         promptTemplates: [PromptTemplate]? = nil,
@@ -63,6 +65,7 @@ public struct AgentSessionConfig: Sendable {
         self.agent = agent
         self.sessionManager = sessionManager
         self.settingsManager = settingsManager
+        self.resourceLoader = resourceLoader
         self.scopedModels = scopedModels
         self.fileCommands = fileCommands
         self.promptTemplates = promptTemplates
@@ -217,6 +220,7 @@ public final class AgentSession: Sendable {
         var scopedModels: [ScopedModel]
         var fileCommands: [FileSlashCommand]
         var promptTemplates: [PromptTemplate]
+        var resourceLoader: ResourceLoader
         var unsubscribeAgent: (@Sendable () -> Void)?
         var eventListeners: [UUID: @Sendable (AgentSessionEvent) -> Void]
         var steeringMessages: [String]
@@ -260,6 +264,10 @@ public final class AgentSession: Sendable {
     private var promptTemplatesInternal: [PromptTemplate] {
         get { state.withLock { $0.promptTemplates } }
         set { state.withLock { $0.promptTemplates = newValue } }
+    }
+
+    public var resourceLoader: ResourceLoader {
+        state.withLock { $0.resourceLoader }
     }
 
     private var unsubscribeAgent: (@Sendable () -> Void)? {
@@ -356,6 +364,7 @@ public final class AgentSession: Sendable {
             scopedModels: config.scopedModels ?? [],
             fileCommands: config.fileCommands ?? [],
             promptTemplates: config.promptTemplates ?? [],
+            resourceLoader: config.resourceLoader,
             unsubscribeAgent: nil,
             eventListeners: [:],
             steeringMessages: [],
@@ -374,6 +383,7 @@ public final class AgentSession: Sendable {
 
         self._hookRunner?.initialize(
             getModel: { [weak agent] in agent?.state.model },
+            getSystemPrompt: { [weak agent] in agent?.state.systemPrompt },
             setSessionNameHandler: { [weak self] name in
                 self?.sessionManager.appendSessionInfo(name)
             },
@@ -567,6 +577,16 @@ public final class AgentSession: Sendable {
 
         if let rebuildSystemPrompt {
             baseSystemPrompt = rebuildSystemPrompt(validNames)
+            agent.setSystemPrompt(baseSystemPrompt)
+        }
+    }
+
+    public func reload() async {
+        await resourceLoader.reload()
+        promptTemplatesInternal = resourceLoader.getPrompts().prompts
+        if let rebuildSystemPrompt {
+            let activeToolNames = getActiveToolNames()
+            baseSystemPrompt = rebuildSystemPrompt(activeToolNames)
             agent.setSystemPrompt(baseSystemPrompt)
         }
     }

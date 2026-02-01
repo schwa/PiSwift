@@ -2,6 +2,60 @@ import CryptoKit
 import Foundation
 import OpenAI
 
+private let openAIToolCallProviders: Set<String> = ["openai", "openai-codex", "opencode"]
+
+func promptCacheRetention(baseUrl: String) -> String? {
+    let flag = getenv("PI_CACHE_RETENTION").map { String(cString: $0) }?.lowercased()
+    guard flag == "long" else { return nil }
+    guard baseUrl.contains("api.openai.com") else { return nil }
+    return "24h"
+}
+
+struct OpenAIResponsesCacheMiddleware: OpenAIMiddleware {
+    let sessionId: String?
+    let promptCacheRetention: String?
+
+    func intercept(request: URLRequest) -> URLRequest {
+        guard let body = readRequestBody(request) else { return request }
+        guard var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return request }
+
+        if let sessionId, !sessionId.isEmpty {
+            payload["prompt_cache_key"] = sessionId
+        }
+        if let promptCacheRetention {
+            payload["prompt_cache_retention"] = promptCacheRetention
+        }
+
+        guard let updatedBody = try? JSONSerialization.data(withJSONObject: payload) else { return request }
+        var updated = request
+        updated.httpBodyStream = nil
+        updated.httpBody = updatedBody
+        return updated
+    }
+
+    private func readRequestBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return nil
+        }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read > 0 {
+                data.append(buffer, count: read)
+            } else {
+                break
+            }
+        }
+        return data.isEmpty ? nil : data
+    }
+}
+
 public func streamOpenAIResponses(
     model: Model,
     context: Context,
@@ -15,7 +69,8 @@ public func streamOpenAIResponses(
             apiKey: options.apiKey,
             reasoningEffort: options.reasoningEffort,
             reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary),
-            sessionId: options.sessionId
+            sessionId: options.sessionId,
+            headers: options.headers
         )
         return streamOpenAICodexResponses(model: model, context: context, options: codexOptions)
     }
@@ -35,7 +90,17 @@ public func streamOpenAIResponses(
         var query: CreateModelResponseQuery? = nil
 
         do {
-            let builtClient = try makeOpenAIClient(model: model, apiKey: options.apiKey)
+            let cacheRetention = promptCacheRetention(baseUrl: model.baseUrl)
+            let middleware = OpenAIResponsesCacheMiddleware(
+                sessionId: options.sessionId,
+                promptCacheRetention: cacheRetention
+            )
+            let builtClient = try makeOpenAIClient(
+                model: model,
+                apiKey: options.apiKey,
+                headers: options.headers,
+                middlewares: [middleware]
+            )
             let builtQuery = try buildResponsesQuery(model: model, context: context, options: options)
             client = builtClient
             query = builtQuery
@@ -185,8 +250,12 @@ public func streamOpenAIResponses(
                             output.content[index] = .toolCall(tool)
                             stream.push(.toolCallDelta(contentIndex: index, delta: deltaEvent.delta, partial: output))
                         }
-                    case .done:
-                        break
+                    case .done(let doneEvent):
+                        if currentBlockKind == "toolCall", let index = currentBlockIndex, case .toolCall(var tool) = output.content[index] {
+                            currentToolCallArgs = doneEvent.arguments
+                            tool.arguments = parseStreamingJSON(currentToolCallArgs)
+                            output.content[index] = .toolCall(tool)
+                        }
                     }
                 case .completed(let completed):
                     if let usage = completed.response.usage {
@@ -245,7 +314,7 @@ private func buildResponsesQuery(
     context: Context,
     options: OpenAIResponsesOptions
 ) throws -> CreateModelResponseQuery {
-    var inputItems = convertResponsesMessages(model: model, context: context)
+    var inputItems = convertResponsesMessages(model: model, context: context, allowedToolCallProviders: openAIToolCallProviders)
 
     var reasoning: Components.Schemas.Reasoning? = nil
     var include: [Components.Schemas.Includable]? = nil
@@ -358,9 +427,29 @@ private func applyServiceTierPricing(_ usage: inout Usage, serviceTier: OpenAISe
     usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite
 }
 
-private func convertResponsesMessages(model: Model, context: Context) -> [InputItem] {
+private func convertResponsesMessages(model: Model, context: Context, allowedToolCallProviders: Set<String>) -> [InputItem] {
     var messages: [InputItem] = []
-    let transformed = transformMessages(context.messages, model: model)
+
+    let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, model, _ in
+        guard allowedToolCallProviders.contains(model.provider) else { return id }
+        guard id.contains("|") else { return id }
+        let parts = id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let callIdRaw = parts.first.map(String.init) ?? id
+        let itemIdRaw = parts.count > 1 ? String(parts[1]) : ""
+
+        let sanitizedCallId = callIdRaw.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        var sanitizedItemId = itemIdRaw.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        if !sanitizedItemId.hasPrefix("fc") {
+            sanitizedItemId = "fc_\(sanitizedItemId)"
+        }
+        var normalizedCallId = sanitizedCallId.count > 64 ? String(sanitizedCallId.prefix(64)) : sanitizedCallId
+        var normalizedItemId = sanitizedItemId.count > 64 ? String(sanitizedItemId.prefix(64)) : sanitizedItemId
+        normalizedCallId = normalizedCallId.replacingOccurrences(of: "_+$", with: "", options: .regularExpression)
+        normalizedItemId = normalizedItemId.replacingOccurrences(of: "_+$", with: "", options: .regularExpression)
+        return "\(normalizedCallId)|\(normalizedItemId)"
+    }
+
+    let transformed = transformMessages(context.messages, model: model, normalizeToolCallId: normalizeToolCallId)
 
     if let systemPrompt = context.systemPrompt {
         let role: EasyInputMessage.RolePayload = model.reasoning ? .developer : .system
@@ -396,7 +485,10 @@ private func convertResponsesMessages(model: Model, context: Context) -> [InputI
             }
         case .assistant(let assistant):
             var items: [InputItem] = []
-            let allowToolCalls = assistant.stopReason != .error
+            let allowToolCalls = assistant.stopReason != .error && assistant.stopReason != .aborted
+            let isDifferentModel = assistant.model != model.id &&
+                assistant.provider == model.provider &&
+                assistant.api == model.api
             for block in assistant.content {
                 switch block {
                 case .text(let textBlock):
@@ -415,7 +507,10 @@ private func convertResponsesMessages(model: Model, context: Context) -> [InputI
                     let parts = toolCall.id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
                     let callId = parts.first.map(String.init) ?? toolCall.id
                     let rawItemId = parts.count > 1 ? String(parts[1]) : nil
-                    let itemId = normalizeOptionalResponseItemId(rawItemId)
+                    var itemId = normalizeOptionalResponseItemId(rawItemId)
+                    if isDifferentModel, itemId?.hasPrefix("fc") == true {
+                        itemId = nil
+                    }
                     let toolItem = Components.Schemas.FunctionToolCall(
                         id: itemId,
                         _type: .functionCall,

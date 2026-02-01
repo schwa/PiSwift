@@ -10,6 +10,7 @@ private let allowedFrontmatterFields: Set<String> = [
     "compatibility",
     "metadata",
     "allowed-tools",
+    "disable-model-invocation",
 ]
 
 public struct Skill: Sendable {
@@ -18,13 +19,22 @@ public struct Skill: Sendable {
     public var filePath: String
     public var baseDir: String
     public var source: String
+    public var disableModelInvocation: Bool
 
-    public init(name: String, description: String, filePath: String, baseDir: String, source: String) {
+    public init(
+        name: String,
+        description: String,
+        filePath: String,
+        baseDir: String,
+        source: String,
+        disableModelInvocation: Bool = false
+    ) {
         self.name = name
         self.description = description
         self.filePath = filePath
         self.baseDir = baseDir
         self.source = source
+        self.disableModelInvocation = disableModelInvocation
     }
 }
 
@@ -165,7 +175,7 @@ private func validateFrontmatterFields(_ keys: [String]) -> [String] {
     }
 }
 
-private func loadSkillFromFile(_ filePath: String, source: String) -> (skill: Skill?, warnings: [SkillWarning]) {
+func loadSkillFromFile(_ filePath: String, source: String) -> (skill: Skill?, warnings: [SkillWarning]) {
     var warnings: [SkillWarning] = []
     guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
         return (nil, warnings)
@@ -176,6 +186,7 @@ private func loadSkillFromFile(_ filePath: String, source: String) -> (skill: Sk
     let parentDirName = URL(fileURLWithPath: skillDir).lastPathComponent
     let name = parsed.frontmatter["name"] ?? parentDirName
     let description = parsed.frontmatter["description"]
+    let disableModelInvocation = parsed.frontmatter["disable-model-invocation"]?.lowercased() == "true"
 
     for error in validateFrontmatterFields(parsed.keys) {
         warnings.append(SkillWarning(skillPath: filePath, message: error))
@@ -196,14 +207,17 @@ private func loadSkillFromFile(_ filePath: String, source: String) -> (skill: Sk
         description: description,
         filePath: filePath,
         baseDir: skillDir,
-        source: source
+        source: source,
+        disableModelInvocation: disableModelInvocation
     )
     return (skill, warnings)
 }
 
 public func loadSkillsFromDir(options: LoadSkillsFromDirOptions) -> LoadSkillsResult {
-    let dir = options.dir
-    let source = options.source
+    loadSkillsFromDirInternal(dir: options.dir, source: options.source, includeRootFiles: true)
+}
+
+private func loadSkillsFromDirInternal(dir: String, source: String, includeRootFiles: Bool) -> LoadSkillsResult {
     guard FileManager.default.fileExists(atPath: dir) else {
         return LoadSkillsResult(skills: [], warnings: [])
     }
@@ -211,33 +225,65 @@ public func loadSkillsFromDir(options: LoadSkillsFromDirOptions) -> LoadSkillsRe
     var skills: [Skill] = []
     var warnings: [SkillWarning] = []
 
-    if let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants], errorHandler: nil) {
-        for case let url as URL in enumerator {
-            let name = url.lastPathComponent
-            if name.hasPrefix(".") { continue }
-            if name == "node_modules" { continue }
+    guard let entries = try? FileManager.default.contentsOfDirectory(
+        at: URL(fileURLWithPath: dir),
+        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey],
+        options: []
+    ) else {
+        return LoadSkillsResult(skills: [], warnings: [])
+    }
 
-            if name == "SKILL.md" {
-                let result = loadSkillFromFile(url.path, source: source)
-                if let skill = result.skill {
-                    skills.append(skill)
-                }
-                warnings.append(contentsOf: result.warnings)
+    for entry in entries {
+        let name = entry.lastPathComponent
+        if name.hasPrefix(".") { continue }
+        if name == "node_modules" { continue }
+
+        let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey])
+        let isSymlink = values?.isSymbolicLink ?? false
+        var isDir = values?.isDirectory ?? false
+        var isFile = values?.isRegularFile ?? false
+
+        if isSymlink {
+            var dirFlag: ObjCBool = false
+            if FileManager.default.fileExists(atPath: entry.path, isDirectory: &dirFlag) {
+                isDir = dirFlag.boolValue
+                isFile = !dirFlag.boolValue
+            } else {
+                continue
             }
         }
+
+        if isDir {
+            let sub = loadSkillsFromDirInternal(dir: entry.path, source: source, includeRootFiles: false)
+            skills.append(contentsOf: sub.skills)
+            warnings.append(contentsOf: sub.warnings)
+            continue
+        }
+
+        guard isFile else { continue }
+        let isRootMd = includeRootFiles && name.hasSuffix(".md")
+        let isSkillMd = !includeRootFiles && name == "SKILL.md"
+        guard isRootMd || isSkillMd else { continue }
+
+        let result = loadSkillFromFile(entry.path, source: source)
+        if let skill = result.skill {
+            skills.append(skill)
+        }
+        warnings.append(contentsOf: result.warnings)
     }
 
     return LoadSkillsResult(skills: skills, warnings: warnings)
 }
 
 public func formatSkillsForPrompt(_ skills: [Skill]) -> String {
-    guard !skills.isEmpty else { return "" }
+    let visible = skills.filter { !$0.disableModelInvocation }
+    guard !visible.isEmpty else { return "" }
     var lines: [String] = []
     lines.append("\n\nThe following skills provide specialized instructions for specific tasks.")
     lines.append("Use the read tool to load a skill's file when the task matches its description.")
     lines.append("")
     lines.append("<available_skills>")
-    for skill in skills {
+    for skill in visible {
         lines.append("  <skill>")
         lines.append("    <name>\(escapeXml(skill.name))</name>")
         lines.append("    <description>\(escapeXml(skill.description))</description>")

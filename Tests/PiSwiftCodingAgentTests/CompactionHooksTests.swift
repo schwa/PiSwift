@@ -75,6 +75,7 @@ private func createSession(tempDir: String, hooks: [LoadedHook]) -> HookTestCont
         agent: agent,
         sessionManager: sessionManager,
         settingsManager: settingsManager,
+        resourceLoader: TestResourceLoader(),
         hookRunner: hookRunner,
         modelRegistry: modelRegistry
     ))

@@ -23,19 +23,17 @@ public func streamOpenAICodexResponses(
                 throw StreamError.missingApiKey(model.provider)
             }
 
-            let baseHeaders = try buildOpenAICodexHeaders(baseHeaders: model.headers, accessToken: apiKey)
+            var mergedHeaders = model.headers ?? [:]
+            if let headers = options.headers {
+                for (key, value) in headers {
+                    mergedHeaders[key] = value
+                }
+            }
+            let baseHeaders = try buildOpenAICodexHeaders(baseHeaders: mergedHeaders, accessToken: apiKey)
             let headers = buildCodexHeaders(
                 baseHeaders: baseHeaders,
                 accessToken: apiKey,
                 sessionId: options.sessionId
-            )
-
-            let codexInstructions = try await getOpenAICodexInstructions(model: model.id)
-            let bridgeText = buildCodexPiBridge(tools: context.tools)
-            let systemPrompt = buildCodexSystemPrompt(
-                codexInstructions: codexInstructions,
-                bridgeText: bridgeText,
-                userSystemPrompt: context.systemPrompt
             )
 
             var body: [String: Any] = [
@@ -56,9 +54,14 @@ public func streamOpenAICodexResponses(
             }
             if let tools = context.tools {
                 body["tools"] = convertCodexTools(tools)
+                body["tool_choice"] = "auto"
+                body["parallel_tool_calls"] = true
             }
 
-            body["instructions"] = systemPrompt.instructions
+            if let instructions = context.systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !instructions.isEmpty {
+                body["instructions"] = instructions
+            }
 
             let requestOptions = OpenAICodexRequestOptions(
                 reasoningEffort: options.reasoningEffort,
@@ -66,7 +69,7 @@ public func streamOpenAICodexResponses(
                 textVerbosity: options.textVerbosity,
                 include: options.include
             )
-            transformCodexRequestBody(&body, options: requestOptions, prompt: systemPrompt)
+            transformCodexRequestBody(&body, options: requestOptions, prompt: nil)
 
             let requestData = try JSONSerialization.data(withJSONObject: body, options: [])
             var request = URLRequest(url: codexResponsesUrl(baseUrl: model.baseUrl))
@@ -452,7 +455,27 @@ private func collectCodexData(from bytes: URLSession.AsyncBytes) async throws ->
 
 private func convertCodexMessages(model: Model, context: Context) -> [Any] {
     var messages: [Any] = []
-    let transformed = transformMessages(context.messages, model: model)
+    let codexToolCallProviders: Set<String> = ["openai", "openai-codex", "opencode"]
+
+    let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, model, _ in
+        guard codexToolCallProviders.contains(model.provider) else { return id }
+        guard id.contains("|") else { return id }
+        let parts = id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let callIdRaw = parts.first.map(String.init) ?? id
+        let itemIdRaw = parts.count > 1 ? String(parts[1]) : ""
+        let sanitizedCallId = callIdRaw.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        var sanitizedItemId = itemIdRaw.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+        if !sanitizedItemId.hasPrefix("fc") {
+            sanitizedItemId = "fc_\(sanitizedItemId)"
+        }
+        var normalizedCallId = sanitizedCallId.count > 64 ? String(sanitizedCallId.prefix(64)) : sanitizedCallId
+        var normalizedItemId = sanitizedItemId.count > 64 ? String(sanitizedItemId.prefix(64)) : sanitizedItemId
+        normalizedCallId = normalizedCallId.replacingOccurrences(of: "_+$", with: "", options: .regularExpression)
+        normalizedItemId = normalizedItemId.replacingOccurrences(of: "_+$", with: "", options: .regularExpression)
+        return "\(normalizedCallId)|\(normalizedItemId)"
+    }
+
+    let transformed = transformMessages(context.messages, model: model, normalizeToolCallId: normalizeToolCallId)
     var msgIndex = 0
 
     for message in transformed {
@@ -498,9 +521,10 @@ private func convertCodexMessages(model: Model, context: Context) -> [Any] {
 
         case .assistant(let assistant):
             var outputItems: [Any] = []
+            let allowToolCalls = assistant.stopReason != .error && assistant.stopReason != .aborted
             for block in assistant.content {
                 switch block {
-                case .thinking(let thinking) where assistant.stopReason != .error:
+                case .thinking(let thinking) where allowToolCalls:
                     if let signature = thinking.thinkingSignature,
                        let data = signature.data(using: .utf8),
                        let json = try? JSONSerialization.jsonObject(with: data, options: []) {
@@ -521,7 +545,7 @@ private func convertCodexMessages(model: Model, context: Context) -> [Any] {
                         "status": "completed",
                         "id": messageId,
                     ])
-                case .toolCall(let toolCall) where assistant.stopReason != .error:
+                case .toolCall(let toolCall) where allowToolCalls:
                     let parts = toolCall.id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
                     let callId = parts.first.map(String.init) ?? toolCall.id
                     let itemId = parts.count > 1 ? String(parts[1]) : ""

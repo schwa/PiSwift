@@ -97,6 +97,12 @@ public struct Settings: Sendable {
     public var hideThinkingBlock: Bool?
     public var shellPath: String?
     public var collapseChangelog: Bool?
+    public var packages: [PackageSource]?
+    public var extensions: [String]?
+    public var skillPaths: [String]?
+    public var prompts: [String]?
+    public var themes: [String]?
+    public var enableSkillCommands: Bool?
     public var hooks: [String]?
     public var customTools: [String]?
     public var skills: SkillsSettings?
@@ -165,6 +171,14 @@ public final class SettingsManager: Sendable {
 
     public func applyOverrides(_ overrides: Settings) {
         settings = mergeSettings(settings, overrides)
+    }
+
+    public func getGlobalSettings() -> Settings {
+        globalSettings
+    }
+
+    public func getProjectSettings() -> Settings {
+        loadProjectSettings()
     }
 
     public func getLastChangelogVersion() -> String? {
@@ -329,6 +343,86 @@ public final class SettingsManager: Sendable {
         save()
     }
 
+    public func getPackages() -> [PackageSource] {
+        settings.packages ?? []
+    }
+
+    public func setPackages(_ packages: [PackageSource]) {
+        globalSettings.packages = packages
+        save()
+    }
+
+    public func setProjectPackages(_ packages: [PackageSource]) {
+        var projectSettings = loadProjectSettings()
+        projectSettings.packages = packages
+        saveProjectSettings(projectSettings)
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
+    public func getExtensionPaths() -> [String] {
+        settings.extensions ?? []
+    }
+
+    public func setExtensionPaths(_ paths: [String]) {
+        globalSettings.extensions = paths
+        save()
+    }
+
+    public func setProjectExtensionPaths(_ paths: [String]) {
+        var projectSettings = loadProjectSettings()
+        projectSettings.extensions = paths
+        saveProjectSettings(projectSettings)
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
+    public func getSkillPaths() -> [String] {
+        settings.skillPaths ?? []
+    }
+
+    public func setSkillPaths(_ paths: [String]) {
+        globalSettings.skillPaths = paths
+        save()
+    }
+
+    public func setProjectSkillPaths(_ paths: [String]) {
+        var projectSettings = loadProjectSettings()
+        projectSettings.skillPaths = paths
+        saveProjectSettings(projectSettings)
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
+    public func getPromptTemplatePaths() -> [String] {
+        settings.prompts ?? []
+    }
+
+    public func setPromptTemplatePaths(_ paths: [String]) {
+        globalSettings.prompts = paths
+        save()
+    }
+
+    public func setProjectPromptTemplatePaths(_ paths: [String]) {
+        var projectSettings = loadProjectSettings()
+        projectSettings.prompts = paths
+        saveProjectSettings(projectSettings)
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
+    public func getThemePaths() -> [String] {
+        settings.themes ?? []
+    }
+
+    public func setThemePaths(_ paths: [String]) {
+        globalSettings.themes = paths
+        save()
+    }
+
+    public func setProjectThemePaths(_ paths: [String]) {
+        var projectSettings = loadProjectSettings()
+        projectSettings.themes = paths
+        saveProjectSettings(projectSettings)
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
     public func getSkillsSettings() -> SkillsSettings {
         let skills = settings.skills ?? SkillsSettings()
         return SkillsSettings(
@@ -346,12 +440,11 @@ public final class SettingsManager: Sendable {
     }
 
     public func getEnableSkillCommands() -> Bool {
-        settings.skills?.enableSkillCommands ?? true
+        settings.enableSkillCommands ?? settings.skills?.enableSkillCommands ?? true
     }
 
     public func setEnableSkillCommands(_ enabled: Bool) {
-        if globalSettings.skills == nil { globalSettings.skills = SkillsSettings() }
-        globalSettings.skills?.enableSkillCommands = enabled
+        globalSettings.enableSkillCommands = enabled
         save()
     }
 
@@ -436,6 +529,97 @@ public final class SettingsManager: Sendable {
         return SettingsManager.decodeSettings(json)
     }
 
+    private func saveProjectSettings(_ settings: Settings) {
+        guard let projectPath = projectSettingsPath else { return }
+        let dir = URL(fileURLWithPath: projectPath).deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        var json: [String: Any] = [:]
+        json["lastChangelogVersion"] = settings.lastChangelogVersion
+        json["defaultProvider"] = settings.defaultProvider
+        json["defaultModel"] = settings.defaultModel
+        json["defaultThinkingLevel"] = settings.defaultThinkingLevel
+        json["steeringMode"] = settings.steeringMode
+        json["followUpMode"] = settings.followUpMode
+        json["theme"] = settings.theme
+        json["hideThinkingBlock"] = settings.hideThinkingBlock
+        json["shellPath"] = settings.shellPath
+        json["collapseChangelog"] = settings.collapseChangelog
+        if let packages = settings.packages {
+            json["packages"] = encodePackageSources(packages)
+        }
+        json["extensions"] = settings.extensions
+        if let skillPaths = settings.skillPaths {
+            json["skills"] = skillPaths
+        }
+        json["prompts"] = settings.prompts
+        json["themes"] = settings.themes
+        json["enableSkillCommands"] = settings.enableSkillCommands
+        json["hooks"] = settings.hooks
+        json["customTools"] = settings.customTools
+        json["enabledModels"] = settings.enabledModels
+        json["doubleEscapeAction"] = settings.doubleEscapeAction
+
+        if let compaction = settings.compaction {
+            json["compaction"] = [
+                "enabled": compaction.enabled as Any,
+                "reserveTokens": compaction.reserveTokens as Any,
+                "keepRecentTokens": compaction.keepRecentTokens as Any,
+            ]
+        }
+
+        if let branch = settings.branchSummary {
+            json["branchSummary"] = ["reserveTokens": branch.reserveTokens as Any]
+        }
+
+        if let retry = settings.retry {
+            json["retry"] = [
+                "enabled": retry.enabled as Any,
+                "maxRetries": retry.maxRetries as Any,
+                "baseDelayMs": retry.baseDelayMs as Any,
+            ]
+        }
+
+        if settings.skillPaths == nil, let skills = settings.skills {
+            json["skills"] = [
+                "enabled": skills.enabled as Any,
+                "enableCodexUser": skills.enableCodexUser as Any,
+                "enableClaudeUser": skills.enableClaudeUser as Any,
+                "enableClaudeProject": skills.enableClaudeProject as Any,
+                "enablePiUser": skills.enablePiUser as Any,
+                "enablePiProject": skills.enablePiProject as Any,
+                "enableSkillCommands": skills.enableSkillCommands as Any,
+                "customDirectories": skills.customDirectories as Any,
+                "ignoredSkills": skills.ignoredSkills as Any,
+                "includeSkills": skills.includeSkills as Any,
+            ]
+        }
+
+        if let terminal = settings.terminal {
+            json["terminal"] = ["showImages": terminal.showImages as Any]
+        }
+
+        if let images = settings.images {
+            json["images"] = [
+                "autoResize": images.autoResize as Any,
+                "blockImages": images.blockImages as Any,
+            ]
+        }
+
+        if let budgets = settings.thinkingBudgets {
+            json["thinkingBudgets"] = [
+                "minimal": budgets.minimal as Any,
+                "low": budgets.low as Any,
+                "medium": budgets.medium as Any,
+                "high": budgets.high as Any,
+            ]
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
+            try? data.write(to: URL(fileURLWithPath: projectPath))
+        }
+    }
+
     private static func decodeSettings(_ json: [String: Any]) -> Settings {
         var settings = Settings()
         if let queueMode = json["queueMode"] as? String, json["steeringMode"] == nil {
@@ -451,6 +635,13 @@ public final class SettingsManager: Sendable {
         settings.hideThinkingBlock = json["hideThinkingBlock"] as? Bool
         settings.shellPath = json["shellPath"] as? String
         settings.collapseChangelog = json["collapseChangelog"] as? Bool
+        if let packages = json["packages"] as? [Any] {
+            settings.packages = decodePackageSources(packages)
+        }
+        settings.extensions = json["extensions"] as? [String]
+        settings.prompts = json["prompts"] as? [String]
+        settings.themes = json["themes"] as? [String]
+        settings.enableSkillCommands = json["enableSkillCommands"] as? Bool
         settings.hooks = json["hooks"] as? [String]
         settings.customTools = json["customTools"] as? [String]
         settings.enabledModels = json["enabledModels"] as? [String]
@@ -476,7 +667,16 @@ public final class SettingsManager: Sendable {
             )
         }
 
-        if let skills = json["skills"] as? [String: Any] {
+        if let skillArray = json["skills"] as? [String] {
+            settings.skillPaths = skillArray
+        } else if let skills = json["skills"] as? [String: Any] {
+            let enableSkillCommands = skills["enableSkillCommands"] as? Bool
+            if settings.enableSkillCommands == nil, let enableSkillCommands {
+                settings.enableSkillCommands = enableSkillCommands
+            }
+            if settings.skillPaths == nil, let custom = skills["customDirectories"] as? [String], !custom.isEmpty {
+                settings.skillPaths = custom
+            }
             settings.skills = SkillsSettings(
                 enabled: skills["enabled"] as? Bool,
                 enableCodexUser: skills["enableCodexUser"] as? Bool,
@@ -484,7 +684,7 @@ public final class SettingsManager: Sendable {
                 enableClaudeProject: skills["enableClaudeProject"] as? Bool,
                 enablePiUser: skills["enablePiUser"] as? Bool,
                 enablePiProject: skills["enablePiProject"] as? Bool,
-                enableSkillCommands: skills["enableSkillCommands"] as? Bool,
+                enableSkillCommands: enableSkillCommands,
                 customDirectories: skills["customDirectories"] as? [String],
                 ignoredSkills: skills["ignoredSkills"] as? [String],
                 includeSkills: skills["includeSkills"] as? [String]
@@ -514,6 +714,26 @@ public final class SettingsManager: Sendable {
         return settings
     }
 
+    private static func decodePackageSources(_ array: [Any]) -> [PackageSource] {
+        array.compactMap { decodePackageSource($0) }
+    }
+
+    private static func decodePackageSource(_ value: Any) -> PackageSource? {
+        if let string = value as? String {
+            return .simple(string)
+        }
+        if let dict = value as? [String: Any], let source = dict["source"] as? String {
+            return .filtered(PackageFilterSource(
+                source: source,
+                extensions: dict["extensions"] as? [String],
+                skills: dict["skills"] as? [String],
+                prompts: dict["prompts"] as? [String],
+                themes: dict["themes"] as? [String]
+            ))
+        }
+        return nil
+    }
+
     private func save() {
         guard persist, let settingsPath else { return }
         var json: [String: Any] = [:]
@@ -527,6 +747,16 @@ public final class SettingsManager: Sendable {
         json["hideThinkingBlock"] = globalSettings.hideThinkingBlock
         json["shellPath"] = globalSettings.shellPath
         json["collapseChangelog"] = globalSettings.collapseChangelog
+        if let packages = globalSettings.packages {
+            json["packages"] = encodePackageSources(packages)
+        }
+        json["extensions"] = globalSettings.extensions
+        if let skillPaths = globalSettings.skillPaths {
+            json["skills"] = skillPaths
+        }
+        json["prompts"] = globalSettings.prompts
+        json["themes"] = globalSettings.themes
+        json["enableSkillCommands"] = globalSettings.enableSkillCommands
         json["hooks"] = globalSettings.hooks
         json["customTools"] = globalSettings.customTools
         json["enabledModels"] = globalSettings.enabledModels
@@ -552,7 +782,7 @@ public final class SettingsManager: Sendable {
             ]
         }
 
-        if let skills = globalSettings.skills {
+        if globalSettings.skillPaths == nil, let skills = globalSettings.skills {
             json["skills"] = [
                 "enabled": skills.enabled as Any,
                 "enableCodexUser": skills.enableCodexUser as Any,
@@ -597,6 +827,22 @@ public final class SettingsManager: Sendable {
         settings = mergeSettings(globalSettings, projectSettings)
     }
 
+    private func encodePackageSources(_ packages: [PackageSource]) -> [Any] {
+        packages.map { source in
+            switch source {
+            case .simple(let value):
+                return value
+            case .filtered(let value):
+                var dict: [String: Any] = ["source": value.source]
+                if let extensions = value.extensions { dict["extensions"] = extensions }
+                if let skills = value.skills { dict["skills"] = skills }
+                if let prompts = value.prompts { dict["prompts"] = prompts }
+                if let themes = value.themes { dict["themes"] = themes }
+                return dict
+            }
+        }
+    }
+
     private func mergeSettings(_ base: Settings, _ override: Settings) -> Settings {
         var result = base
         if override.lastChangelogVersion != nil { result.lastChangelogVersion = override.lastChangelogVersion }
@@ -612,6 +858,12 @@ public final class SettingsManager: Sendable {
         if override.hideThinkingBlock != nil { result.hideThinkingBlock = override.hideThinkingBlock }
         if override.shellPath != nil { result.shellPath = override.shellPath }
         if override.collapseChangelog != nil { result.collapseChangelog = override.collapseChangelog }
+        if override.packages != nil { result.packages = override.packages }
+        if override.extensions != nil { result.extensions = override.extensions }
+        if override.skillPaths != nil { result.skillPaths = override.skillPaths }
+        if override.prompts != nil { result.prompts = override.prompts }
+        if override.themes != nil { result.themes = override.themes }
+        if override.enableSkillCommands != nil { result.enableSkillCommands = override.enableSkillCommands }
         if override.hooks != nil { result.hooks = override.hooks }
         if override.customTools != nil { result.customTools = override.customTools }
         if override.skills != nil { result.skills = override.skills }

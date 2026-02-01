@@ -401,6 +401,7 @@ public struct HookContext: Sendable {
     public var sessionManager: SessionManager
     public var modelRegistry: ModelRegistry
     private var getModelHandler: @Sendable () -> Model?
+    private var getSystemPromptHandler: @Sendable () -> String?
     public var isIdle: @Sendable () -> Bool
     public var abort: @Sendable () -> Void
     public var hasPendingMessages: @Sendable () -> Bool
@@ -412,6 +413,7 @@ public struct HookContext: Sendable {
         sessionManager: SessionManager,
         modelRegistry: ModelRegistry,
         model: @escaping @Sendable () -> Model?,
+        systemPrompt: @escaping @Sendable () -> String?,
         isIdle: @escaping @Sendable () -> Bool,
         abort: @escaping @Sendable () -> Void,
         hasPendingMessages: @escaping @Sendable () -> Bool
@@ -422,6 +424,7 @@ public struct HookContext: Sendable {
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
         self.getModelHandler = model
+        self.getSystemPromptHandler = systemPrompt
         self.isIdle = isIdle
         self.abort = abort
         self.hasPendingMessages = hasPendingMessages
@@ -435,6 +438,7 @@ public struct HookContext: Sendable {
             sessionManager: sessionManager,
             modelRegistry: modelRegistry,
             model: { model },
+            systemPrompt: { nil },
             isIdle: { true },
             abort: {},
             hasPendingMessages: { false }
@@ -443,6 +447,10 @@ public struct HookContext: Sendable {
 
     public var model: Model? {
         getModelHandler()
+    }
+
+    public func getSystemPrompt() -> String? {
+        getSystemPromptHandler()
     }
 }
 
@@ -453,6 +461,7 @@ public struct HookCommandContext: Sendable {
     public var sessionManager: SessionManager
     public var modelRegistry: ModelRegistry
     private var getModelHandler: @Sendable () -> Model?
+    private var getSystemPromptHandler: @Sendable () -> String?
     public var isIdle: @Sendable () -> Bool
     public var abort: @Sendable () -> Void
     public var hasPendingMessages: @Sendable () -> Bool
@@ -468,6 +477,7 @@ public struct HookCommandContext: Sendable {
         sessionManager: SessionManager,
         modelRegistry: ModelRegistry,
         model: @escaping @Sendable () -> Model?,
+        systemPrompt: @escaping @Sendable () -> String?,
         isIdle: @escaping @Sendable () -> Bool,
         abort: @escaping @Sendable () -> Void,
         hasPendingMessages: @escaping @Sendable () -> Bool,
@@ -482,6 +492,7 @@ public struct HookCommandContext: Sendable {
         self.sessionManager = sessionManager
         self.modelRegistry = modelRegistry
         self.getModelHandler = model
+        self.getSystemPromptHandler = systemPrompt
         self.isIdle = isIdle
         self.abort = abort
         self.hasPendingMessages = hasPendingMessages
@@ -493,6 +504,10 @@ public struct HookCommandContext: Sendable {
 
     public var model: Model? {
         getModelHandler()
+    }
+
+    public func getSystemPrompt() -> String? {
+        getSystemPromptHandler()
     }
 }
 

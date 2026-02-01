@@ -1,5 +1,13 @@
 import Foundation
 
+public func createAssistantMessageEventStream() -> AssistantMessageEventStream {
+    AssistantMessageEventStream()
+}
+
+public func resetApiProviders() {
+    // No-op in Swift port (providers are static)
+}
+
 private func shouldLogApiKeyDebug() -> Bool {
     let env = ProcessInfo.processInfo.environment
     let flag = (env["PI_DEBUG_API_KEYS"] ?? env["PI_DEBUG_LIVE_TESTS"])?.lowercased()
@@ -28,10 +36,17 @@ public func getEnvApiKey(provider: KnownProvider) -> String? {
 public func getEnvApiKey(provider: String) -> String? {
     let env = ProcessInfo.processInfo.environment
 
+    if provider == "github-copilot" {
+        return env["COPILOT_GITHUB_TOKEN"] ?? env["GH_TOKEN"] ?? env["GITHUB_TOKEN"]
+    }
+
     if provider == "amazon-bedrock" {
         if env["AWS_PROFILE"] != nil ||
             (env["AWS_ACCESS_KEY_ID"] != nil && env["AWS_SECRET_ACCESS_KEY"] != nil) ||
-            env["AWS_BEARER_TOKEN_BEDROCK"] != nil {
+            env["AWS_BEARER_TOKEN_BEDROCK"] != nil ||
+            env["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] != nil ||
+            env["AWS_CONTAINER_CREDENTIALS_FULL_URI"] != nil ||
+            env["AWS_WEB_IDENTITY_TOKEN_FILE"] != nil {
             return "<authenticated>"
         }
     }
@@ -52,37 +67,55 @@ public func getEnvApiKey(provider: String) -> String? {
         return selected
     }
 
-    if provider == "openai" {
-        let apiKey = env["OPENAI_API_KEY"]
-        logApiKeyDebug("provider=openai env apiKey=\(apiKeyInfo(apiKey))")
-        return apiKey
+    let envMap: [String: String] = [
+        "openai": "OPENAI_API_KEY",
+        "openai-codex": "OPENAI_API_KEY",
+        "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+        "google": "GEMINI_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "cerebras": "CEREBRAS_API_KEY",
+        "xai": "XAI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+        "zai": "ZAI_API_KEY",
+        "mistral": "MISTRAL_API_KEY",
+        "minimax": "MINIMAX_API_KEY",
+        "minimax-cn": "MINIMAX_CN_API_KEY",
+        "huggingface": "HF_TOKEN",
+        "opencode": "OPENCODE_API_KEY",
+        "kimi-coding": "KIMI_API_KEY",
+    ]
+
+    if provider == "google-vertex" {
+        if hasGoogleVertexCredentials(env: env) {
+            return "<authenticated>"
+        }
     }
 
-    if provider == "opencode" {
-        let apiKey = env["OPENCODE_API_KEY"]
-        logApiKeyDebug("provider=opencode env apiKey=\(apiKeyInfo(apiKey))")
-        return apiKey
-    }
-
-    if provider == "vercel-ai-gateway" {
-        let apiKey = env["AI_GATEWAY_API_KEY"]
-        logApiKeyDebug("provider=vercel-ai-gateway env apiKey=\(apiKeyInfo(apiKey))")
-        return apiKey
-    }
-
-    if provider == "minimax" {
-        let apiKey = env["MINIMAX_API_KEY"]
-        logApiKeyDebug("provider=minimax env apiKey=\(apiKeyInfo(apiKey))")
-        return apiKey
-    }
-
-    if provider == "zai" {
-        let apiKey = env["ZAI_API_KEY"]
-        logApiKeyDebug("provider=zai env apiKey=\(apiKeyInfo(apiKey))")
+    if let envVar = envMap[provider] {
+        let apiKey = env[envVar]
+        logApiKeyDebug("provider=\(provider) env apiKey=\(apiKeyInfo(apiKey))")
         return apiKey
     }
 
     return nil
+}
+
+private func hasGoogleVertexCredentials(env: [String: String]) -> Bool {
+    let project = env["GOOGLE_CLOUD_PROJECT"] ?? env["GCLOUD_PROJECT"]
+    let location = env["GOOGLE_CLOUD_LOCATION"]
+    guard project != nil, location != nil else { return false }
+
+    let fileManager = FileManager.default
+    if let gacPath = env["GOOGLE_APPLICATION_CREDENTIALS"],
+       fileManager.fileExists(atPath: gacPath) {
+        return true
+    }
+
+    let defaultPath = fileManager.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/gcloud/application_default_credentials.json")
+        .path
+    return fileManager.fileExists(atPath: defaultPath)
 }
 
 public func stream(model: Model, context: Context, options: StreamOptions? = nil) throws -> AssistantMessageEventStream {
@@ -90,7 +123,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
         let providerOptions = BedrockOptions(
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
-            signal: options?.signal
+            signal: options?.signal,
+            headers: options?.headers
         )
         return streamBedrock(model: model, context: context, options: providerOptions)
     }
@@ -107,7 +141,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
         let providerOptions = BedrockOptions(
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
-            signal: options?.signal
+            signal: options?.signal,
+            headers: options?.headers
         )
         return streamBedrock(model: model, context: context, options: providerOptions)
     case .openAICompletions:
@@ -115,7 +150,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
-            apiKey: apiKey
+            apiKey: apiKey,
+            headers: options?.headers
         )
         return streamOpenAICompletions(model: model, context: context, options: providerOptions)
     case .openAIResponses:
@@ -124,7 +160,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            sessionId: options?.sessionId
+            sessionId: options?.sessionId,
+            headers: options?.headers
         )
         return streamOpenAIResponses(model: model, context: context, options: providerOptions)
     case .anthropicMessages:
@@ -132,7 +169,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
-            apiKey: apiKey
+            apiKey: apiKey,
+            headers: options?.headers
         )
         return streamAnthropic(model: model, context: context, options: providerOptions)
     }
@@ -178,41 +216,35 @@ public func completeSimple(model: Model, context: Context, options: SimpleStream
 }
 
 private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> AnthropicOptions {
-    let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
+    let baseMaxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
 
     if options?.reasoning == nil {
         return AnthropicOptions(
             temperature: options?.temperature,
-            maxTokens: maxTokens,
+            maxTokens: baseMaxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            thinkingEnabled: false
+            thinkingEnabled: false,
+            headers: options?.headers
         )
     }
 
-    let defaultBudgets: ThinkingBudgets = [
-        .minimal: 1024,
-        .low: 2048,
-        .medium: 8192,
-        .high: 16384,
-    ]
-    let budgets = defaultBudgets.merging(options?.thinkingBudgets ?? [:]) { _, new in new }
-
-    let minOutputTokens = 1024
     let effort = clampThinkingLevel(options?.reasoning) ?? .medium
-    var thinkingBudget = budgets[effort] ?? 1024
-    let cappedMaxTokens = min(maxTokens + thinkingBudget, model.maxTokens)
-    if cappedMaxTokens <= thinkingBudget {
-        thinkingBudget = max(0, cappedMaxTokens - minOutputTokens)
-    }
+    let adjusted = adjustMaxTokensForThinking(
+        baseMaxTokens: baseMaxTokens,
+        modelMaxTokens: model.maxTokens,
+        reasoningLevel: effort,
+        customBudgets: options?.thinkingBudgets
+    )
 
     return AnthropicOptions(
         temperature: options?.temperature,
-        maxTokens: cappedMaxTokens,
+        maxTokens: adjusted.maxTokens,
         signal: options?.signal,
         apiKey: apiKey,
         thinkingEnabled: true,
-        thinkingBudgetTokens: thinkingBudget
+        thinkingBudgetTokens: adjusted.thinkingBudget,
+        headers: options?.headers
     )
 }
 
@@ -232,7 +264,8 @@ private func mapOpenAICompletionsOptions(model: Model, options: SimpleStreamOpti
         maxTokens: maxTokens,
         signal: options?.signal,
         apiKey: apiKey,
-        reasoningEffort: reasoningEffort
+        reasoningEffort: reasoningEffort,
+        headers: options?.headers
     )
 }
 
@@ -245,20 +278,70 @@ private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOption
         signal: options?.signal,
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
-        sessionId: options?.sessionId
+        sessionId: options?.sessionId,
+        headers: options?.headers
     )
 }
 
 private func mapBedrockOptions(model: Model, options: SimpleStreamOptions?) -> BedrockOptions {
-    let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
+    let baseMaxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let reasoning = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
+
+    if let reasoning, (model.id.contains("anthropic.claude") || model.id.contains("anthropic/claude")) {
+        let adjusted = adjustMaxTokensForThinking(
+            baseMaxTokens: baseMaxTokens,
+            modelMaxTokens: model.maxTokens,
+            reasoningLevel: reasoning,
+            customBudgets: options?.thinkingBudgets
+        )
+        return BedrockOptions(
+            temperature: options?.temperature,
+            maxTokens: adjusted.maxTokens,
+            signal: options?.signal,
+            reasoning: reasoning,
+            thinkingBudgets: mergeThinkingBudgets(options?.thinkingBudgets, reasoning: reasoning, thinkingBudget: adjusted.thinkingBudget),
+            headers: options?.headers
+        )
+    }
+
     return BedrockOptions(
         temperature: options?.temperature,
-        maxTokens: maxTokens,
+        maxTokens: baseMaxTokens,
         signal: options?.signal,
         reasoning: reasoning,
-        thinkingBudgets: options?.thinkingBudgets
+        thinkingBudgets: options?.thinkingBudgets,
+        headers: options?.headers
     )
+}
+
+private func adjustMaxTokensForThinking(
+    baseMaxTokens: Int,
+    modelMaxTokens: Int,
+    reasoningLevel: ThinkingLevel,
+    customBudgets: ThinkingBudgets?
+) -> (maxTokens: Int, thinkingBudget: Int) {
+    let defaultBudgets: ThinkingBudgets = [
+        .minimal: 1024,
+        .low: 2048,
+        .medium: 8192,
+        .high: 16384,
+    ]
+    let budgets = defaultBudgets.merging(customBudgets ?? [:]) { _, new in new }
+    let minOutputTokens = 1024
+    let clamped = clampThinkingLevel(reasoningLevel) ?? reasoningLevel
+    var thinkingBudget = budgets[clamped] ?? 1024
+    let maxTokens = min(baseMaxTokens + thinkingBudget, modelMaxTokens)
+    if maxTokens <= thinkingBudget {
+        thinkingBudget = max(0, maxTokens - minOutputTokens)
+    }
+    return (maxTokens, thinkingBudget)
+}
+
+private func mergeThinkingBudgets(_ budgets: ThinkingBudgets?, reasoning: ThinkingLevel, thinkingBudget: Int) -> ThinkingBudgets? {
+    var merged = budgets ?? [:]
+    let clamped = clampThinkingLevel(reasoning) ?? reasoning
+    merged[clamped] = thinkingBudget
+    return merged
 }
 
 public enum StreamError: Error, LocalizedError {

@@ -10,11 +10,25 @@ public enum Api: String, Sendable {
 public enum KnownProvider: String, Sendable {
     case openai
     case openaiCodex = "openai-codex"
+    case azureOpenAIResponses = "azure-openai-responses"
     case anthropic
     case amazonBedrock = "amazon-bedrock"
+    case githubCopilot = "github-copilot"
+    case xai
+    case groq
+    case cerebras
+    case openrouter
     case minimax
+    case minimaxCn = "minimax-cn"
+    case huggingface
+    case kimiCoding = "kimi-coding"
+    case google
+    case googleGeminiCli = "google-gemini-cli"
+    case googleAntigravity = "google-antigravity"
+    case googleVertex = "google-vertex"
     case vercelAiGateway = "vercel-ai-gateway"
     case zai
+    case mistral
     case opencode
 }
 
@@ -37,19 +51,22 @@ public struct StreamOptions: Sendable {
     public var signal: CancellationToken?
     public var apiKey: String?
     public var sessionId: String?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
         self.sessionId = sessionId
+        self.headers = headers
     }
 }
 
@@ -61,6 +78,7 @@ public struct SimpleStreamOptions: Sendable {
     public var reasoning: ThinkingLevel?
     public var sessionId: String?
     public var thinkingBudgets: ThinkingBudgets?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -69,7 +87,8 @@ public struct SimpleStreamOptions: Sendable {
         apiKey: String? = nil,
         reasoning: ThinkingLevel? = nil,
         sessionId: String? = nil,
-        thinkingBudgets: ThinkingBudgets? = nil
+        thinkingBudgets: ThinkingBudgets? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -78,6 +97,7 @@ public struct SimpleStreamOptions: Sendable {
         self.reasoning = reasoning
         self.sessionId = sessionId
         self.thinkingBudgets = thinkingBudgets
+        self.headers = headers
     }
 }
 
@@ -91,6 +111,26 @@ public enum OpenAICompatThinkingFormat: String, Sendable {
     case zai
 }
 
+public struct OpenRouterRouting: Sendable {
+    public var only: [String]?
+    public var order: [String]?
+
+    public init(only: [String]? = nil, order: [String]? = nil) {
+        self.only = only
+        self.order = order
+    }
+}
+
+public struct VercelGatewayRouting: Sendable {
+    public var only: [String]?
+    public var order: [String]?
+
+    public init(only: [String]? = nil, order: [String]? = nil) {
+        self.only = only
+        self.order = order
+    }
+}
+
 public struct OpenAICompat: Sendable {
     public var supportsStore: Bool?
     public var supportsDeveloperRole: Bool?
@@ -102,6 +142,8 @@ public struct OpenAICompat: Sendable {
     public var requiresThinkingAsText: Bool?
     public var requiresMistralToolIds: Bool?
     public var thinkingFormat: OpenAICompatThinkingFormat?
+    public var openRouterRouting: OpenRouterRouting?
+    public var vercelGatewayRouting: VercelGatewayRouting?
 
     public init(
         supportsStore: Bool? = nil,
@@ -113,7 +155,9 @@ public struct OpenAICompat: Sendable {
         requiresAssistantAfterToolResult: Bool? = nil,
         requiresThinkingAsText: Bool? = nil,
         requiresMistralToolIds: Bool? = nil,
-        thinkingFormat: OpenAICompatThinkingFormat? = nil
+        thinkingFormat: OpenAICompatThinkingFormat? = nil,
+        openRouterRouting: OpenRouterRouting? = nil,
+        vercelGatewayRouting: VercelGatewayRouting? = nil
     ) {
         self.supportsStore = supportsStore
         self.supportsDeveloperRole = supportsDeveloperRole
@@ -125,6 +169,8 @@ public struct OpenAICompat: Sendable {
         self.requiresThinkingAsText = requiresThinkingAsText
         self.requiresMistralToolIds = requiresMistralToolIds
         self.thinkingFormat = thinkingFormat
+        self.openRouterRouting = openRouterRouting
+        self.vercelGatewayRouting = vercelGatewayRouting
     }
 }
 
@@ -438,6 +484,7 @@ public struct OpenAICompletionsOptions: Sendable {
     public var apiKey: String?
     public var toolChoice: OpenAIToolChoice?
     public var reasoningEffort: ThinkingLevel?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -445,7 +492,8 @@ public struct OpenAICompletionsOptions: Sendable {
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
         toolChoice: OpenAIToolChoice? = nil,
-        reasoningEffort: ThinkingLevel? = nil
+        reasoningEffort: ThinkingLevel? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -453,6 +501,7 @@ public struct OpenAICompletionsOptions: Sendable {
         self.apiKey = apiKey
         self.toolChoice = toolChoice
         self.reasoningEffort = reasoningEffort
+        self.headers = headers
     }
 }
 
@@ -493,6 +542,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var reasoningSummary: OpenAIReasoningSummary?
     public var serviceTier: OpenAIServiceTier?
     public var sessionId: String?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -502,7 +552,8 @@ public struct OpenAIResponsesOptions: Sendable {
         reasoningEffort: ThinkingLevel? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
         serviceTier: OpenAIServiceTier? = nil,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -512,6 +563,7 @@ public struct OpenAIResponsesOptions: Sendable {
         self.reasoningSummary = reasoningSummary
         self.serviceTier = serviceTier
         self.sessionId = sessionId
+        self.headers = headers
     }
 }
 
@@ -525,6 +577,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
     public var textVerbosity: OpenAICodexTextVerbosity?
     public var include: [String]?
     public var sessionId: String?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -535,7 +588,8 @@ public struct OpenAICodexResponsesOptions: Sendable {
         reasoningSummary: OpenAICodexReasoningSummary? = nil,
         textVerbosity: OpenAICodexTextVerbosity? = nil,
         include: [String]? = nil,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -546,6 +600,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
         self.textVerbosity = textVerbosity
         self.include = include
         self.sessionId = sessionId
+        self.headers = headers
     }
 }
 
@@ -565,6 +620,7 @@ public struct AnthropicOptions: Sendable {
     public var thinkingBudgetTokens: Int?
     public var interleavedThinking: Bool?
     public var toolChoice: AnthropicToolChoice?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -574,7 +630,8 @@ public struct AnthropicOptions: Sendable {
         thinkingEnabled: Bool? = nil,
         thinkingBudgetTokens: Int? = nil,
         interleavedThinking: Bool? = nil,
-        toolChoice: AnthropicToolChoice? = nil
+        toolChoice: AnthropicToolChoice? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -584,6 +641,7 @@ public struct AnthropicOptions: Sendable {
         self.thinkingBudgetTokens = thinkingBudgetTokens
         self.interleavedThinking = interleavedThinking
         self.toolChoice = toolChoice
+        self.headers = headers
     }
 }
 
@@ -604,6 +662,7 @@ public struct BedrockOptions: Sendable {
     public var reasoning: ThinkingLevel?
     public var thinkingBudgets: ThinkingBudgets?
     public var interleavedThinking: Bool?
+    public var headers: [String: String]?
 
     public init(
         temperature: Double? = nil,
@@ -614,7 +673,8 @@ public struct BedrockOptions: Sendable {
         toolChoice: BedrockToolChoice? = nil,
         reasoning: ThinkingLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
-        interleavedThinking: Bool? = nil
+        interleavedThinking: Bool? = nil,
+        headers: [String: String]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -625,6 +685,7 @@ public struct BedrockOptions: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.interleavedThinking = interleavedThinking
+        self.headers = headers
     }
 }
 

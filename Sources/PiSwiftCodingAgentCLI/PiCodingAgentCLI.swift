@@ -152,9 +152,19 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         if parsed.noSkills == true {
             skillsSettings.enabled = false
         }
-        if let includeSkills = parsed.skills {
-            skillsSettings.includeSkills = includeSkills
-        }
+
+        let resourceLoader = DefaultResourceLoader(DefaultResourceLoaderOptions(
+            cwd: cwd,
+            agentDir: getAgentDir(),
+            settingsManager: settingsManager,
+            additionalSkillPaths: parsed.skills ?? [],
+            noExtensions: parsed.noExtensions ?? false,
+            noSkills: parsed.noSkills ?? false,
+            systemPrompt: parsed.systemPrompt,
+            appendSystemPrompt: parsed.appendSystemPrompt
+        ))
+        await resourceLoader.reload()
+        time("resourceLoader.reload")
 
         let allBuiltInToolsMap = createAllTools(
             cwd: cwd,
@@ -248,18 +258,19 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             toolRegistry = Dictionary(uniqueKeysWithValues: wrappedRegistry.map { ($0.name, $0) })
         }
 
-        let customPrompt = parsed.systemPrompt
-        let appendSystemPrompt = parsed.appendSystemPrompt
-        let skillsSettingsSnapshot = skillsSettings
+        let loaderSystemPrompt = resourceLoader.getSystemPrompt()
+        let loaderAppend = resourceLoader.getAppendSystemPrompt()
+        let appendSystemPrompt = loaderAppend.isEmpty ? nil : loaderAppend.joined(separator: "\n\n")
         let rebuildSystemPrompt: @Sendable ([String]) -> String = { toolNames in
             let validToolNames = toolNames.compactMap { ToolName(rawValue: $0) }
             return buildSystemPrompt(BuildSystemPromptOptions(
-                customPrompt: customPrompt,
+                customPrompt: loaderSystemPrompt,
                 selectedTools: validToolNames,
                 appendSystemPrompt: appendSystemPrompt,
-                skillsSettings: skillsSettingsSnapshot,
                 cwd: cwd,
-                agentDir: getAgentDir()
+                agentDir: getAgentDir(),
+                contextFiles: resourceLoader.getAgentsFiles(),
+                skills: resourceLoader.getSkills().skills
             ))
         }
 
@@ -331,7 +342,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         if shouldPrintMessages && parsed.continue != true && parsed.resume != true {
-            let contextFiles = loadProjectContextFiles(LoadContextFilesOptions(cwd: cwd, agentDir: getAgentDir()))
+            let contextFiles = resourceLoader.getAgentsFiles()
             if !contextFiles.isEmpty {
                 print("Loaded project context from:")
                 for file in contextFiles {
@@ -341,11 +352,12 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let fileCommands = loadSlashCommands(LoadSlashCommandsOptions(cwd: cwd, agentDir: getAgentDir()))
-        let promptTemplates = loadPromptTemplates(LoadPromptTemplatesOptions(cwd: cwd, agentDir: getAgentDir()))
+        let promptTemplates = resourceLoader.getPrompts().prompts
         let createdSession = AgentSession(config: AgentSessionConfig(
             agent: createdAgent,
             sessionManager: sessionManager,
             settingsManager: settingsManager,
+            resourceLoader: resourceLoader,
             scopedModels: scopedModels,
             fileCommands: fileCommands,
             promptTemplates: promptTemplates,

@@ -29,6 +29,7 @@ public final class HookRunner: Sendable {
     private struct State: Sendable {
         var hooks: [LoadedHook]
         var getModel: @Sendable () -> Model?
+        var getSystemPrompt: @Sendable () -> String?
         var isIdle: @Sendable () -> Bool
         var waitForIdle: @Sendable () async -> Void
         var abort: @Sendable () -> Void
@@ -49,6 +50,11 @@ public final class HookRunner: Sendable {
     private var getModel: @Sendable () -> Model? {
         get { state.withLock { $0.getModel } }
         set { state.withLock { $0.getModel = newValue } }
+    }
+
+    private var getSystemPrompt: @Sendable () -> String? {
+        get { state.withLock { $0.getSystemPrompt } }
+        set { state.withLock { $0.getSystemPrompt = newValue } }
     }
 
     private var isIdle: @Sendable () -> Bool {
@@ -108,6 +114,7 @@ public final class HookRunner: Sendable {
         self.state = LockedState(State(
             hooks: hooks,
             getModel: { nil },
+            getSystemPrompt: { nil },
             isIdle: { true },
             waitForIdle: {},
             abort: {},
@@ -123,6 +130,7 @@ public final class HookRunner: Sendable {
 
     public func initialize(
         getModel: @escaping @Sendable () -> Model?,
+        getSystemPrompt: @escaping @Sendable () -> String? = { nil },
         sendMessageHandler: @escaping HookSendMessageHandler = { _, _ in },
         appendEntryHandler: @escaping HookAppendEntryHandler = { _, _ in },
         setSessionNameHandler: @escaping HookSetSessionNameHandler = { _ in },
@@ -141,6 +149,7 @@ public final class HookRunner: Sendable {
         hasUI: Bool = false
     ) {
         self.getModel = getModel
+        self.getSystemPrompt = getSystemPrompt
         self.isIdle = isIdle ?? { true }
         self.waitForIdle = waitForIdle ?? {}
         self.abort = abort ?? {}
@@ -275,6 +284,9 @@ public final class HookRunner: Sendable {
             model: { [weak self] in
                 self?.getModel()
             },
+            systemPrompt: { [weak self] in
+                self?.getSystemPrompt()
+            },
             isIdle: { [weak self] in self?.isIdle() ?? true },
             abort: { [weak self] in self?.abort() },
             hasPendingMessages: { [weak self] in self?.hasPendingMessages() ?? false }
@@ -294,6 +306,9 @@ public final class HookRunner: Sendable {
             modelRegistry: modelRegistry,
             model: { [weak self] in
                 self?.getModel()
+            },
+            systemPrompt: { [weak self] in
+                self?.getSystemPrompt()
             },
             isIdle: { [weak self] in self?.isIdle() ?? true },
             abort: { [weak self] in self?.abort() },

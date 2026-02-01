@@ -443,6 +443,16 @@ private func validateThemeJson(_ json: ThemeJson, name: String) throws {
 }
 
 private func loadThemeJson(_ name: String) throws -> ThemeJson {
+    if let registeredPath = withThemeState({ $0.registeredThemePaths[name] }) {
+        guard FileManager.default.fileExists(atPath: registeredPath) else {
+            throw ThemeLoadError.missingTheme(name)
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: registeredPath))
+        let json = try JSONDecoder().decode(ThemeJson.self, from: data)
+        try validateThemeJson(json, name: name)
+        return json
+    }
+
     let builtins = getBuiltinThemeData()
     if let builtin = builtins[name] {
         return builtin
@@ -502,6 +512,7 @@ private struct ThemeState: Sendable {
     var theme: Theme = Theme.fallback()
     var builtinThemes: [String: ThemeJson]?
     var currentThemeName: String?
+    var registeredThemePaths: [String: String] = [:]
     var themeWatcher: DispatchSourceFileSystemObject?
     var themeWatcherFd: Int32 = -1
     var onThemeChangeCallback: (@Sendable () -> Void)?
@@ -637,8 +648,18 @@ public func stopThemeWatcher() {
     watcher?.cancel()
 }
 
+public func setRegisteredThemes(_ themes: [HookThemeInfo]) {
+    var updated: [String: String] = [:]
+    for theme in themes {
+        guard let path = theme.path, !theme.name.isEmpty else { continue }
+        updated[theme.name] = path
+    }
+    withThemeState { $0.registeredThemePaths = updated }
+}
+
 public func getAvailableThemes() -> [String] {
     var themes = Set(getBuiltinThemeData().keys)
+    themes.formUnion(withThemeState { $0.registeredThemePaths.keys })
     let customDir = getCustomThemesDir()
     if let contents = try? FileManager.default.contentsOfDirectory(atPath: customDir) {
         for file in contents where file.hasSuffix(".json") {
@@ -649,13 +670,13 @@ public func getAvailableThemes() -> [String] {
 }
 
 public func getAvailableThemesWithPaths() -> [HookThemeInfo] {
-    var results: [HookThemeInfo] = []
+    var results: [String: HookThemeInfo] = [:]
     let builtins = getBuiltinThemeData()
     let themesDir = getThemesDir()
     for name in builtins.keys {
         let fallbackPath = (themesDir as NSString).appendingPathComponent("\(name).json")
         let path = FileManager.default.fileExists(atPath: fallbackPath) ? fallbackPath : nil
-        results.append(HookThemeInfo(name: name, path: path))
+        results[name] = HookThemeInfo(name: name, path: path)
     }
 
     let customDir = getCustomThemesDir()
@@ -663,15 +684,16 @@ public func getAvailableThemesWithPaths() -> [HookThemeInfo] {
         for entry in entries where entry.hasSuffix(".json") {
             let name = (entry as NSString).deletingPathExtension
             let path = (customDir as NSString).appendingPathComponent(entry)
-            if let idx = results.firstIndex(where: { $0.name == name }) {
-                results[idx] = HookThemeInfo(name: name, path: path)
-            } else {
-                results.append(HookThemeInfo(name: name, path: path))
-            }
+            results[name] = HookThemeInfo(name: name, path: path)
         }
     }
 
-    return results.sorted { $0.name < $1.name }
+    let registered = withThemeState { $0.registeredThemePaths }
+    for (name, path) in registered {
+        results[name] = HookThemeInfo(name: name, path: path)
+    }
+
+    return results.values.sorted { $0.name < $1.name }
 }
 
 public func getThemeByName(_ name: String) -> Theme? {

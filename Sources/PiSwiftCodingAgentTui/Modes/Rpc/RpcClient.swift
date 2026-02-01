@@ -35,6 +35,7 @@ public enum RpcCommandType: String, Sendable {
     case abort
     case newSession = "new_session"
     case getState = "get_state"
+    case setSessionName = "set_session_name"
     case setModel = "set_model"
     case cycleModel = "cycle_model"
     case getAvailableModels = "get_available_models"
@@ -55,6 +56,7 @@ public enum RpcCommandType: String, Sendable {
     case getForkMessages = "get_fork_messages"
     case getLastAssistantText = "get_last_assistant_text"
     case getMessages = "get_messages"
+    case getCommands = "get_commands"
 }
 
 public struct RpcSessionState: Sendable {
@@ -66,6 +68,7 @@ public struct RpcSessionState: Sendable {
     public var followUpMode: AgentFollowUpMode
     public var sessionFile: String?
     public var sessionId: String
+    public var sessionName: String?
     public var autoCompactionEnabled: Bool
     public var messageCount: Int
     public var pendingMessageCount: Int
@@ -79,6 +82,7 @@ public struct RpcSessionState: Sendable {
         followUpMode: AgentFollowUpMode,
         sessionFile: String?,
         sessionId: String,
+        sessionName: String? = nil,
         autoCompactionEnabled: Bool,
         messageCount: Int,
         pendingMessageCount: Int
@@ -91,6 +95,7 @@ public struct RpcSessionState: Sendable {
         self.followUpMode = followUpMode
         self.sessionFile = sessionFile
         self.sessionId = sessionId
+        self.sessionName = sessionName
         self.autoCompactionEnabled = autoCompactionEnabled
         self.messageCount = messageCount
         self.pendingMessageCount = pendingMessageCount
@@ -116,6 +121,28 @@ public struct RpcForkResult: Sendable {
     public init(text: String, cancelled: Bool) {
         self.text = text
         self.cancelled = cancelled
+    }
+}
+
+public struct RpcSlashCommand: Sendable {
+    public var name: String
+    public var description: String?
+    public var source: String
+    public var location: String?
+    public var path: String?
+
+    public init(
+        name: String,
+        description: String? = nil,
+        source: String,
+        location: String? = nil,
+        path: String? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.source = source
+        self.location = location
+        self.path = path
     }
 }
 
@@ -423,6 +450,10 @@ public actor RpcClient {
         return state
     }
 
+    public func setSessionName(_ name: String) async throws {
+        _ = try await send(["type": "set_session_name", "name": name])
+    }
+
     public func setModel(provider: String, modelId: String) async throws -> Model {
         let response = try await send(["type": "set_model", "provider": provider, "modelId": modelId])
         guard let data = try responseData(response) as? [String: Any],
@@ -576,6 +607,15 @@ public actor RpcClient {
             throw RpcClientError("Invalid get_messages response")
         }
         return messages.compactMap { decodeAgentMessage($0) }
+    }
+
+    public func getCommands() async throws -> [RpcSlashCommand] {
+        let response = try await send(["type": "get_commands"])
+        guard let data = try responseData(response) as? [String: Any],
+              let commands = data["commands"] as? [[String: Any]] else {
+            throw RpcClientError("Invalid get_commands response")
+        }
+        return commands.compactMap { decodeRpcSlashCommand($0) }
     }
 
     public func sendHookUIResponse(_ response: RpcHookUIResponse) async throws {
@@ -1013,6 +1053,7 @@ private func decodeRpcSessionState(_ dict: [String: Any]) -> RpcSessionState? {
     let messageCount = dict["messageCount"] as? Int ?? 0
     let pendingMessageCount = dict["pendingMessageCount"] as? Int ?? 0
     let sessionFile = dict["sessionFile"] as? String
+    let sessionName = dict["sessionName"] as? String
     return RpcSessionState(
         model: model,
         thinkingLevel: thinking,
@@ -1022,9 +1063,27 @@ private func decodeRpcSessionState(_ dict: [String: Any]) -> RpcSessionState? {
         followUpMode: followUpMode,
         sessionFile: sessionFile,
         sessionId: sessionId,
+        sessionName: sessionName,
         autoCompactionEnabled: autoCompactionEnabled,
         messageCount: messageCount,
         pendingMessageCount: pendingMessageCount
+    )
+}
+
+private func decodeRpcSlashCommand(_ dict: [String: Any]) -> RpcSlashCommand? {
+    guard let name = dict["name"] as? String,
+          let source = dict["source"] as? String else {
+        return nil
+    }
+    let description = dict["description"] as? String
+    let location = dict["location"] as? String
+    let path = dict["path"] as? String
+    return RpcSlashCommand(
+        name: name,
+        description: description,
+        source: source,
+        location: location,
+        path: path
     )
 }
 

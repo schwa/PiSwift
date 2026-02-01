@@ -205,7 +205,7 @@ public final class SettingsSelectorComponent: Container {
                 label: "Double-escape action",
                 description: "Action when pressing Escape twice with empty editor",
                 currentValue: config.doubleEscapeAction,
-                values: ["tree", "fork"]
+                values: ["tree", "fork", "none"]
             ),
             SettingItem(
                 id: "thinking",

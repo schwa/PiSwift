@@ -67,7 +67,7 @@ struct CLIOptions: ParsableArguments {
     @Flag(name: .customLong("no-skills"), help: "Disable skills discovery and loading")
     var noSkills: Bool = false
 
-    @Option(name: .customLong("skills"), help: "Comma-separated glob patterns to filter skills")
+    @Option(name: .customLong("skills"), help: "Comma-separated skill file paths or directories")
     var skills: String?
 
     @Flag(name: .customLong("list-models"), help: "List available models (with optional fuzzy search)")

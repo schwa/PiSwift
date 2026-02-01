@@ -25,7 +25,7 @@ public func streamOpenAICompletions(
             if compat.thinkingFormat == .zai {
                 openAIStream = try streamZaiCompletions(model: model, context: context, options: options, query: query)
             } else {
-                let client = try makeOpenAIClient(model: model, apiKey: options.apiKey)
+                let client = try makeOpenAIClient(model: model, apiKey: options.apiKey, headers: options.headers)
                 openAIStream = client.chatsStream(query: query)
             }
             stream.push(.start(partial: output))
@@ -197,17 +197,18 @@ private struct ResolvedOpenAICompat {
     let thinkingFormat: OpenAICompatThinkingFormat
 }
 
-private func detectCompatFromUrl(_ baseUrl: String) -> ResolvedOpenAICompat {
-    let lowercased = baseUrl.lowercased()
-    let isNonStandard = baseUrl.contains("cerebras.ai") ||
-        baseUrl.contains("api.x.ai") ||
-        baseUrl.contains("mistral.ai") ||
-        baseUrl.contains("chutes.ai")
+private func detectCompat(model: Model) -> ResolvedOpenAICompat {
+    let baseUrl = model.baseUrl.lowercased()
+    let provider = model.provider.lowercased()
+    let isCerebras = provider == "cerebras" || baseUrl.contains("cerebras.ai")
+    let isGrok = provider == "xai" || baseUrl.contains("api.x.ai")
+    let isMistral = provider == "mistral" || baseUrl.contains("mistral.ai")
+    let isChutes = baseUrl.contains("chutes.ai")
+    let isZai = provider == "zai" || baseUrl.contains("z.ai")
+    let isDeepSeek = baseUrl.contains("deepseek.com")
 
-    let useMaxTokens = baseUrl.contains("mistral.ai") || baseUrl.contains("chutes.ai")
-    let isGrok = baseUrl.contains("api.x.ai")
-    let isMistral = baseUrl.contains("mistral.ai")
-    let isZai = lowercased.contains("z.ai")
+    let isNonStandard = isCerebras || isGrok || isMistral || isChutes || isDeepSeek
+    let useMaxTokens = isMistral || isChutes
 
     return ResolvedOpenAICompat(
         supportsStore: !isNonStandard,
@@ -224,7 +225,7 @@ private func detectCompatFromUrl(_ baseUrl: String) -> ResolvedOpenAICompat {
 }
 
 private func resolveCompat(model: Model) -> ResolvedOpenAICompat {
-    let detected = detectCompatFromUrl(model.baseUrl)
+    let detected = detectCompat(model: model)
     guard let compat = model.compat else { return detected }
 
     return ResolvedOpenAICompat(
@@ -346,7 +347,31 @@ private func convertCompletionsMessages(
     compat: ResolvedOpenAICompat
 ) -> [ChatQuery.ChatCompletionMessageParam] {
     var params: [ChatQuery.ChatCompletionMessageParam] = []
-    let transformed = transformMessages(context.messages, model: model)
+
+    let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, model, _ in
+        if compat.requiresMistralToolIds {
+            return normalizeMistralToolId(id, requiresMistral: true)
+        }
+
+        if id.contains("|") {
+            let callId = id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? id
+            let sanitized = callId.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+            return String(sanitized.prefix(40))
+        }
+
+        if model.provider == "openai" {
+            return id.count > 40 ? String(id.prefix(40)) : id
+        }
+
+        if model.provider == "github-copilot", model.id.lowercased().contains("claude") {
+            let sanitized = id.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+            return String(sanitized.prefix(64))
+        }
+
+        return id
+    }
+
+    let transformed = transformMessages(context.messages, model: model, normalizeToolCallId: normalizeToolCallId)
 
     if let systemPrompt = context.systemPrompt {
         let role: ChatQuery.ChatCompletionMessageParam.Role = (model.reasoning && compat.supportsDeveloperRole) ? .developer : .system
@@ -505,10 +530,14 @@ private func streamZaiCompletions(
     request.setValue("text/event-stream", forHTTPHeaderField: "accept")
     request.setValue("application/json", forHTTPHeaderField: "content-type")
 
-    if let headers = model.headers {
+    var mergedHeaders = model.headers ?? [:]
+    if let headers = options.headers {
         for (key, value) in headers {
-            request.setValue(value, forHTTPHeaderField: key)
+            mergedHeaders[key] = value
         }
+    }
+    for (key, value) in mergedHeaders {
+        request.setValue(value, forHTTPHeaderField: key)
     }
 
     request.httpBody = try buildZaiRequestBody(query: query, model: model, options: options)
