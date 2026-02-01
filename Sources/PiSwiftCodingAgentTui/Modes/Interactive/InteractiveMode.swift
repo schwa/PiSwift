@@ -338,6 +338,7 @@ public final class InteractiveMode {
         let status = Container()
         let widgets = Container()
         let defaultEditor = CustomEditor(theme: getEditorTheme(), keybindings: keybindings)
+        defaultEditor.setAutocompleteMaxVisible(settingsManager.getAutocompleteMaxVisible())
         let editorContainer = Container()
         let footerDataProvider = FooterDataProvider()
         footerBranchUnsubscribe = footerDataProvider.onBranchChange { [weak tui] in
@@ -377,6 +378,7 @@ public final class InteractiveMode {
             SlashCommand(name: "copy", description: "Copy last assistant message"),
             SlashCommand(name: "name", description: "Set session display name"),
             SlashCommand(name: "session", description: "Show session info"),
+            SlashCommand(name: "files", description: "Show file operations in this session"),
             SlashCommand(name: "changelog", description: "Show changelog"),
             SlashCommand(name: "hotkeys", description: "Show shortcuts"),
             SlashCommand(name: "debug", description: "Show theme diagnostics"),
@@ -1085,6 +1087,9 @@ public final class InteractiveMode {
                 if let autocompleteProvider {
                     newEditor.setAutocompleteProvider(autocompleteProvider)
                 }
+                if let settingsManager = session?.settingsManager {
+                    newEditor.setAutocompleteMaxVisible(settingsManager.getAutocompleteMaxVisible())
+                }
 
                 if let customEditor = newEditor as? CustomEditor {
                     customEditor.onEscape = defaultEditor.onEscape
@@ -1097,6 +1102,9 @@ public final class InteractiveMode {
                 editor = newEditor
             } else {
                 defaultEditor.setText(currentText)
+                if let settingsManager = session?.settingsManager {
+                    defaultEditor.setAutocompleteMaxVisible(settingsManager.getAutocompleteMaxVisible())
+                }
                 editor = defaultEditor
             }
         } else {
@@ -2004,6 +2012,11 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
+        if trimmed == "/files" {
+            handleFilesCommand()
+            editor.setText("")
+            return
+        }
         if trimmed == "/changelog" {
             handleChangelogCommand()
             editor.setText("")
@@ -2308,7 +2321,8 @@ public final class InteractiveMode {
             availableThemes: getAvailableThemes(),
             hideThinkingBlock: hideThinkingBlock,
             collapseChangelog: settingsManager.getCollapseChangelog(),
-            doubleEscapeAction: settingsManager.getDoubleEscapeAction()
+            doubleEscapeAction: settingsManager.getDoubleEscapeAction(),
+            autocompleteMaxVisible: settingsManager.getAutocompleteMaxVisible()
         )
 
         showSelector { done in
@@ -2364,6 +2378,12 @@ public final class InteractiveMode {
                 },
                 onDoubleEscapeActionChange: { action in
                     settingsManager.setDoubleEscapeAction(action)
+                },
+                onAutocompleteMaxVisibleChange: { [weak self] maxVisible in
+                    settingsManager.setAutocompleteMaxVisible(maxVisible)
+                    self?.defaultEditor?.setAutocompleteMaxVisible(maxVisible)
+                    self?.editor?.setAutocompleteMaxVisible(maxVisible)
+                    self?.scheduleRender()
                 },
                 onCancel: {
                     done()
@@ -2953,6 +2973,36 @@ public final class InteractiveMode {
         if stats.cost > 0 {
             info += "\n\(theme.bold("Cost"))\n"
             info += "\(theme.fg(.dim, "Total:")) \(String(format: "%.4f", stats.cost))"
+        }
+
+        chatContainer.addChild(Spacer(1))
+        chatContainer.addChild(Text(info, paddingX: 1, paddingY: 0))
+        scheduleRender()
+    }
+
+    @MainActor
+    private func handleFilesCommand() {
+        guard let session else { return }
+        var fileOps = createFileOps()
+        let context = session.sessionManager.buildSessionContext()
+        for message in context.messages {
+            extractFileOpsFromMessage(message, &fileOps)
+        }
+        let lists = computeFileLists(fileOps)
+
+        var info = "\(theme.bold("File Operations"))\n\n"
+        if lists.readFiles.isEmpty && lists.modifiedFiles.isEmpty {
+            info += theme.fg(.dim, "No file operations recorded.")
+        } else {
+            if !lists.readFiles.isEmpty {
+                info += "\(theme.bold("Read"))\n"
+                info += lists.readFiles.map { "  \($0)" }.joined(separator: "\n")
+                info += "\n\n"
+            }
+            if !lists.modifiedFiles.isEmpty {
+                info += "\(theme.bold("Modified"))\n"
+                info += lists.modifiedFiles.map { "  \($0)" }.joined(separator: "\n")
+            }
         }
 
         chatContainer.addChild(Spacer(1))

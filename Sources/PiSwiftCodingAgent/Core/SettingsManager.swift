@@ -110,6 +110,7 @@ public struct Settings: Sendable {
     public var images: ImageSettings?
     public var enabledModels: [String]?
     public var doubleEscapeAction: String?
+    public var autocompleteMaxVisible: Int?
     public var thinkingBudgets: ThinkingBudgetsSettings?
 
     public init() {}
@@ -466,6 +467,15 @@ public final class SettingsManager: Sendable {
         save()
     }
 
+    public func getAutocompleteMaxVisible() -> Int {
+        settings.autocompleteMaxVisible ?? 5
+    }
+
+    public func setAutocompleteMaxVisible(_ maxVisible: Int) {
+        globalSettings.autocompleteMaxVisible = max(3, min(20, maxVisible))
+        save()
+    }
+
     public func getTerminalSettings() -> TerminalSettings {
         settings.terminal ?? TerminalSettings()
     }
@@ -559,6 +569,7 @@ public final class SettingsManager: Sendable {
         json["customTools"] = settings.customTools
         json["enabledModels"] = settings.enabledModels
         json["doubleEscapeAction"] = settings.doubleEscapeAction
+        json["autocompleteMaxVisible"] = settings.autocompleteMaxVisible
 
         if let compaction = settings.compaction {
             json["compaction"] = [
@@ -646,6 +657,7 @@ public final class SettingsManager: Sendable {
         settings.customTools = json["customTools"] as? [String]
         settings.enabledModels = json["enabledModels"] as? [String]
         settings.doubleEscapeAction = json["doubleEscapeAction"] as? String
+        settings.autocompleteMaxVisible = json["autocompleteMaxVisible"] as? Int
 
         if let compaction = json["compaction"] as? [String: Any] {
             settings.compaction = CompactionSettingsOverrides(
@@ -761,6 +773,7 @@ public final class SettingsManager: Sendable {
         json["customTools"] = globalSettings.customTools
         json["enabledModels"] = globalSettings.enabledModels
         json["doubleEscapeAction"] = globalSettings.doubleEscapeAction
+        json["autocompleteMaxVisible"] = globalSettings.autocompleteMaxVisible
 
         if let compaction = globalSettings.compaction {
             json["compaction"] = [
@@ -871,6 +884,7 @@ public final class SettingsManager: Sendable {
         if override.images != nil { result.images = override.images }
         if override.enabledModels != nil { result.enabledModels = override.enabledModels }
         if override.doubleEscapeAction != nil { result.doubleEscapeAction = override.doubleEscapeAction }
+        if override.autocompleteMaxVisible != nil { result.autocompleteMaxVisible = override.autocompleteMaxVisible }
         if override.thinkingBudgets != nil { result.thinkingBudgets = override.thinkingBudgets }
         return result
     }

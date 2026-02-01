@@ -66,6 +66,10 @@ public final class CustomEditor: Component, SystemCursorAware, EditorComponent {
         editor.setAutocompleteProvider(provider)
     }
 
+    public func setAutocompleteMaxVisible(_ maxVisible: Int) {
+        editor.setAutocompleteMaxVisible(maxVisible)
+    }
+
     public func isShowingAutocomplete() -> Bool {
         editor.isShowingAutocomplete()
     }
@@ -102,8 +106,8 @@ public final class CustomEditor: Component, SystemCursorAware, EditorComponent {
             if editor.getText().isEmpty {
                 let handler = onCtrlD ?? actionHandlers[.exit]
                 handler?()
+                return
             }
-            return
         }
 
         for (action, handler) in actionHandlers where action != .interrupt && action != .exit {

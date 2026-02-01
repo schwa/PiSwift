@@ -22,27 +22,34 @@ public enum ClipboardError: Error, CustomStringConvertible {
 }
 
 public func copyToClipboard(_ text: String) throws {
+    emitOsc52(text)
 #if canImport(UIKit)
     UIPasteboard.general.string = text
 #elseif os(Windows)
-    try runClipboardCommand(command: "clip", args: [], input: text)
+    try? runClipboardCommand(command: "clip", args: [], input: text)
 #elseif os(Linux)
-    do {
-        try runClipboardCommand(command: "xclip", args: ["-selection", "clipboard"], input: text)
-    } catch {
-        do {
-            try runClipboardCommand(command: "xsel", args: ["--clipboard", "--input"], input: text)
-        } catch {
-            throw ClipboardError.missingTool("Failed to copy to clipboard. Install xclip or xsel.")
+    if isWaylandSession() {
+        if !runClipboardCommandAsync(command: "wl-copy", args: [], input: text) {
+            try? runClipboardCommand(command: "xclip", args: ["-selection", "clipboard"], input: text)
+            try? runClipboardCommand(command: "xsel", args: ["--clipboard", "--input"], input: text)
         }
+    } else {
+        try? runClipboardCommand(command: "xclip", args: ["-selection", "clipboard"], input: text)
+        try? runClipboardCommand(command: "xsel", args: ["--clipboard", "--input"], input: text)
     }
 #elseif os(macOS)
     if NSClassFromString("NSApplication") != nil {
         NSPasteboard.general.setString(text, forType: .string)
     } else {
-        try runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
+        try? runClipboardCommand(command: "/usr/bin/pbcopy", args: [], input: text)
     }
 #endif
+}
+
+private func emitOsc52(_ text: String) {
+    let encoded = Data(text.utf8).base64EncodedString()
+    guard let data = "\u{001B}]52;c;\(encoded)\u{0007}".data(using: .utf8) else { return }
+    FileHandle.standardOutput.write(data)
 }
 
 public func clipboardHasImage() -> Bool {
@@ -159,5 +166,33 @@ private func runClipboardCommand(command: String, args: [String], input: String)
     if process.terminationStatus != 0 {
         throw ClipboardError.copyFailed("Clipboard command failed: \(command)")
     }
+}
+
+private func runClipboardCommandAsync(command: String, args: [String], input: String) -> Bool {
+    let process = Process()
+    if command.contains("/") {
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = args
+    } else {
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + args
+    }
+
+    let stdinPipe = Pipe()
+    process.standardInput = stdinPipe
+    process.standardOutput = Pipe()
+    process.standardError = Pipe()
+
+    do {
+        try process.run()
+    } catch {
+        return false
+    }
+
+    if let data = input.data(using: .utf8) {
+        stdinPipe.fileHandleForWriting.write(data)
+    }
+    try? stdinPipe.fileHandleForWriting.close()
+    return true
 }
 #endif

@@ -27,6 +27,7 @@ public struct SettingsConfig: Sendable {
     public var hideThinkingBlock: Bool
     public var collapseChangelog: Bool
     public var doubleEscapeAction: String
+    public var autocompleteMaxVisible: Int
 
     public init(
         autoCompact: Bool,
@@ -42,7 +43,8 @@ public struct SettingsConfig: Sendable {
         availableThemes: [String],
         hideThinkingBlock: Bool,
         collapseChangelog: Bool,
-        doubleEscapeAction: String
+        doubleEscapeAction: String,
+        autocompleteMaxVisible: Int
     ) {
         self.autoCompact = autoCompact
         self.showImages = showImages
@@ -58,6 +60,7 @@ public struct SettingsConfig: Sendable {
         self.hideThinkingBlock = hideThinkingBlock
         self.collapseChangelog = collapseChangelog
         self.doubleEscapeAction = doubleEscapeAction
+        self.autocompleteMaxVisible = autocompleteMaxVisible
     }
 }
 
@@ -75,6 +78,7 @@ public struct SettingsCallbacks {
     public var onHideThinkingBlockChange: (Bool) -> Void
     public var onCollapseChangelogChange: (Bool) -> Void
     public var onDoubleEscapeActionChange: (String) -> Void
+    public var onAutocompleteMaxVisibleChange: (Int) -> Void
     public var onCancel: () -> Void
 
     public init(
@@ -91,6 +95,7 @@ public struct SettingsCallbacks {
         onHideThinkingBlockChange: @escaping (Bool) -> Void,
         onCollapseChangelogChange: @escaping (Bool) -> Void,
         onDoubleEscapeActionChange: @escaping (String) -> Void,
+        onAutocompleteMaxVisibleChange: @escaping (Int) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.onAutoCompactChange = onAutoCompactChange
@@ -106,6 +111,7 @@ public struct SettingsCallbacks {
         self.onHideThinkingBlockChange = onHideThinkingBlockChange
         self.onCollapseChangelogChange = onCollapseChangelogChange
         self.onDoubleEscapeActionChange = onDoubleEscapeActionChange
+        self.onAutocompleteMaxVisibleChange = onAutocompleteMaxVisibleChange
         self.onCancel = onCancel
     }
 }
@@ -206,6 +212,13 @@ public final class SettingsSelectorComponent: Container {
                 description: "Action when pressing Escape twice with empty editor",
                 currentValue: config.doubleEscapeAction,
                 values: ["tree", "fork", "none"]
+            ),
+            SettingItem(
+                id: "autocomplete-max-visible",
+                label: "Autocomplete max items",
+                description: "Max visible items in autocomplete dropdown (3-20)",
+                currentValue: String(config.autocompleteMaxVisible),
+                values: ["3", "5", "7", "10", "15", "20"]
             ),
             SettingItem(
                 id: "thinking",
@@ -333,6 +346,10 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onCollapseChangelogChange(newValue == "true")
                 case "double-escape-action":
                     callbacks.onDoubleEscapeActionChange(newValue)
+                case "autocomplete-max-visible":
+                    if let value = Int(newValue) {
+                        callbacks.onAutocompleteMaxVisibleChange(value)
+                    }
                 default:
                     break
                 }

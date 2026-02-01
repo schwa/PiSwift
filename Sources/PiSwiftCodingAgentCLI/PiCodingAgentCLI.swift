@@ -19,6 +19,21 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
     mutating func run() async throws {
         time("start")
+        if cli.rawMessages.first == "config" {
+            let cwd = FileManager.default.currentDirectoryPath
+            let agentDir = getAgentDir()
+            let settingsManager = SettingsManager.create(cwd, agentDir)
+            let packageManager = DefaultPackageManager(cwd: cwd, agentDir: agentDir, settingsManager: settingsManager)
+            let resolvedPaths = try await packageManager.resolve()
+            await selectConfig(
+                resolvedPaths: resolvedPaths,
+                settingsManager: settingsManager,
+                cwd: cwd,
+                agentDir: agentDir
+            )
+            return
+        }
+
         let migrationResult = runMigrations()
         let migratedProviders = migrationResult.migratedAuthProviders
         time("runMigrations")
@@ -476,6 +491,9 @@ Examples:
   # Export a session file to HTML
   \(APP_NAME) --export ~/\(CONFIG_DIR_NAME)/agent/sessions/--path--/session.jsonl
   \(APP_NAME) --export session.jsonl output.html
+
+  # Configure resources (extensions, skills, prompts, themes)
+  \(APP_NAME) config
 
 Environment Variables:
   ANTHROPIC_API_KEY       - Anthropic Claude API key
