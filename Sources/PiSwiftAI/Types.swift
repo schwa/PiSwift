@@ -3,8 +3,12 @@ import Foundation
 public enum Api: String, Sendable {
     case openAICompletions = "openai-completions"
     case openAIResponses = "openai-responses"
+    case azureOpenAIResponses = "azure-openai-responses"
     case anthropicMessages = "anthropic-messages"
     case bedrockConverseStream = "bedrock-converse-stream"
+    case googleGenerativeAI = "google-generative-ai"
+    case googleGeminiCli = "google-gemini-cli"
+    case googleVertex = "google-vertex"
 }
 
 public enum KnownProvider: String, Sendable {
@@ -567,6 +571,49 @@ public struct OpenAIResponsesOptions: Sendable {
     }
 }
 
+public struct AzureOpenAIResponsesOptions: Sendable {
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var apiKey: String?
+    public var reasoningEffort: ThinkingLevel?
+    public var reasoningSummary: OpenAIReasoningSummary?
+    public var sessionId: String?
+    public var headers: [String: String]?
+    public var azureApiVersion: String?
+    public var azureResourceName: String?
+    public var azureBaseUrl: String?
+    public var azureDeploymentName: String?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        apiKey: String? = nil,
+        reasoningEffort: ThinkingLevel? = nil,
+        reasoningSummary: OpenAIReasoningSummary? = nil,
+        sessionId: String? = nil,
+        headers: [String: String]? = nil,
+        azureApiVersion: String? = nil,
+        azureResourceName: String? = nil,
+        azureBaseUrl: String? = nil,
+        azureDeploymentName: String? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.apiKey = apiKey
+        self.reasoningEffort = reasoningEffort
+        self.reasoningSummary = reasoningSummary
+        self.sessionId = sessionId
+        self.headers = headers
+        self.azureApiVersion = azureApiVersion
+        self.azureResourceName = azureResourceName
+        self.azureBaseUrl = azureBaseUrl
+        self.azureDeploymentName = azureDeploymentName
+    }
+}
+
 public struct OpenAICodexResponsesOptions: Sendable {
     public var temperature: Double?
     public var maxTokens: Int?
@@ -601,6 +648,122 @@ public struct OpenAICodexResponsesOptions: Sendable {
         self.include = include
         self.sessionId = sessionId
         self.headers = headers
+    }
+}
+
+public enum GoogleThinkingLevel: String, Sendable {
+    case unspecified = "THINKING_LEVEL_UNSPECIFIED"
+    case minimal = "MINIMAL"
+    case low = "LOW"
+    case medium = "MEDIUM"
+    case high = "HIGH"
+}
+
+public struct GoogleOptions: Sendable {
+    public struct ThinkingConfig: Sendable {
+        public var enabled: Bool
+        public var budgetTokens: Int?
+        public var level: GoogleThinkingLevel?
+
+        public init(enabled: Bool, budgetTokens: Int? = nil, level: GoogleThinkingLevel? = nil) {
+            self.enabled = enabled
+            self.budgetTokens = budgetTokens
+            self.level = level
+        }
+    }
+
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var apiKey: String?
+    public var headers: [String: String]?
+    public var toolChoice: String?
+    public var thinking: ThinkingConfig?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        apiKey: String? = nil,
+        headers: [String: String]? = nil,
+        toolChoice: String? = nil,
+        thinking: ThinkingConfig? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.apiKey = apiKey
+        self.headers = headers
+        self.toolChoice = toolChoice
+        self.thinking = thinking
+    }
+}
+
+public struct GoogleGeminiCliOptions: Sendable {
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var apiKey: String?
+    public var headers: [String: String]?
+    public var toolChoice: String?
+    public var thinking: GoogleOptions.ThinkingConfig?
+    public var sessionId: String?
+    public var projectId: String?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        apiKey: String? = nil,
+        headers: [String: String]? = nil,
+        toolChoice: String? = nil,
+        thinking: GoogleOptions.ThinkingConfig? = nil,
+        sessionId: String? = nil,
+        projectId: String? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.apiKey = apiKey
+        self.headers = headers
+        self.toolChoice = toolChoice
+        self.thinking = thinking
+        self.sessionId = sessionId
+        self.projectId = projectId
+    }
+}
+
+public struct GoogleVertexOptions: Sendable {
+    public var temperature: Double?
+    public var maxTokens: Int?
+    public var signal: CancellationToken?
+    public var apiKey: String?
+    public var headers: [String: String]?
+    public var toolChoice: String?
+    public var thinking: GoogleOptions.ThinkingConfig?
+    public var project: String?
+    public var location: String?
+
+    public init(
+        temperature: Double? = nil,
+        maxTokens: Int? = nil,
+        signal: CancellationToken? = nil,
+        apiKey: String? = nil,
+        headers: [String: String]? = nil,
+        toolChoice: String? = nil,
+        thinking: GoogleOptions.ThinkingConfig? = nil,
+        project: String? = nil,
+        location: String? = nil
+    ) {
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.signal = signal
+        self.apiKey = apiKey
+        self.headers = headers
+        self.toolChoice = toolChoice
+        self.thinking = thinking
+        self.project = project
+        self.location = location
     }
 }
 

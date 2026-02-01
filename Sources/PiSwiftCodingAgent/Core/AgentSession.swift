@@ -226,8 +226,12 @@ public final class AgentSession: Sendable {
         var steeringMessages: [String]
         var followUpMessages: [String]
         var pendingNextTurnMessages: [HookMessage]
+        var lastAssistantMessage: AssistantMessage?
         var compactionAbort: CancellationToken?
         var branchSummaryAbort: CancellationToken?
+        var retryAbort: CancellationToken?
+        var retryAttempt: Int
+        var retryTask: Task<Void, Never>?
         var bashAbort: CancellationToken?
         var pendingBashMessages: [BashExecutionMessage]
         var isCompactingInternal: Bool
@@ -295,6 +299,11 @@ public final class AgentSession: Sendable {
         set { state.withLock { $0.pendingNextTurnMessages = newValue } }
     }
 
+    private var lastAssistantMessage: AssistantMessage? {
+        get { state.withLock { $0.lastAssistantMessage } }
+        set { state.withLock { $0.lastAssistantMessage = newValue } }
+    }
+
     private var compactionAbort: CancellationToken? {
         get { state.withLock { $0.compactionAbort } }
         set { state.withLock { $0.compactionAbort = newValue } }
@@ -303,6 +312,21 @@ public final class AgentSession: Sendable {
     private var branchSummaryAbort: CancellationToken? {
         get { state.withLock { $0.branchSummaryAbort } }
         set { state.withLock { $0.branchSummaryAbort = newValue } }
+    }
+
+    private var retryAbort: CancellationToken? {
+        get { state.withLock { $0.retryAbort } }
+        set { state.withLock { $0.retryAbort = newValue } }
+    }
+
+    private var retryAttempt: Int {
+        get { state.withLock { $0.retryAttempt } }
+        set { state.withLock { $0.retryAttempt = newValue } }
+    }
+
+    private var retryTask: Task<Void, Never>? {
+        get { state.withLock { $0.retryTask } }
+        set { state.withLock { $0.retryTask = newValue } }
     }
 
     private var bashAbort: CancellationToken? {
@@ -370,8 +394,12 @@ public final class AgentSession: Sendable {
             steeringMessages: [],
             followUpMessages: [],
             pendingNextTurnMessages: [],
+            lastAssistantMessage: nil,
             compactionAbort: nil,
             branchSummaryAbort: nil,
+            retryAbort: nil,
+            retryAttempt: 0,
+            retryTask: nil,
             bashAbort: nil,
             pendingBashMessages: [],
             isCompactingInternal: false,
@@ -495,6 +523,17 @@ public final class AgentSession: Sendable {
                     _ = sessionManager.appendMessage(message)
                 }
             }
+
+            if case .assistant(let assistant) = message {
+                lastAssistantMessage = assistant
+                if assistant.stopReason != .error, retryAttempt > 0 {
+                    let attempt = retryAttempt
+                    retryAttempt = 0
+                    retryAbort = nil
+                    retryTask = nil
+                    emit(.autoRetryEnd(success: true, attempt: attempt, finalError: nil))
+                }
+            }
         }
 
         if case .agentEnd = event {
@@ -522,6 +561,100 @@ public final class AgentSession: Sendable {
         }
 
         emit(.agent(event))
+
+        if case .agentEnd = event, let lastAssistantMessage {
+            self.lastAssistantMessage = nil
+            Task { [weak self] in
+                guard let self else { return }
+                if self.isRetryableError(lastAssistantMessage) {
+                    let didRetry = await self.handleRetryableError(lastAssistantMessage)
+                    if didRetry { return }
+                }
+            }
+        }
+    }
+
+    private func isRetryableError(_ message: AssistantMessage) -> Bool {
+        guard message.stopReason == .error, let errorMessage = message.errorMessage else { return false }
+        let contextWindow = agent.state.model.contextWindow
+        if isContextOverflow(message, contextWindow: contextWindow) { return false }
+        let pattern = "overloaded|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|terminated"
+        return errorMessage.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private func handleRetryableError(_ message: AssistantMessage) async -> Bool {
+        let settings = settingsManager.getRetrySettings()
+        guard settings.enabled ?? true else { return false }
+
+        retryAttempt += 1
+
+        if retryAttempt > (settings.maxRetries ?? 3) {
+            emit(.autoRetryEnd(success: false, attempt: retryAttempt - 1, finalError: message.errorMessage))
+            retryAttempt = 0
+            retryAbort = nil
+            retryTask = nil
+            return false
+        }
+
+        let delayBase = settings.baseDelayMs ?? 2000
+        let delayMs = delayBase * (1 << max(0, retryAttempt - 1))
+
+        emit(.autoRetryStart(
+            attempt: retryAttempt,
+            maxAttempts: settings.maxRetries ?? 3,
+            delayMs: delayMs,
+            errorMessage: message.errorMessage ?? "Unknown error"
+        ))
+
+        let messages = agent.state.messages
+        if let last = messages.last, last.role == "assistant" {
+            agent.replaceMessages(Array(messages.dropLast()))
+        }
+
+        let token = CancellationToken()
+        retryAbort = token
+        let attempt = retryAttempt
+        retryTask = Task { [weak self] in
+            await self?.performRetry(delayMs: delayMs, attempt: attempt, token: token)
+        }
+
+        return true
+    }
+
+    private func performRetry(delayMs: Int, attempt: Int, token: CancellationToken) async {
+        do {
+            try await sleepWithCancellation(delayMs: delayMs, token: token)
+        } catch {
+            let shouldEmit = retryAttempt > 0
+            retryAttempt = 0
+            retryAbort = nil
+            retryTask = nil
+            if shouldEmit {
+                emit(.autoRetryEnd(success: false, attempt: attempt, finalError: "Retry cancelled"))
+            }
+            return
+        }
+
+        retryAbort = nil
+        do {
+            try await agent.continue()
+        } catch {
+            // Retry errors are handled on the next agent_end.
+        }
+    }
+
+    private func sleepWithCancellation(delayMs: Int, token: CancellationToken) async throws {
+        guard delayMs > 0 else { return }
+        var remaining = UInt64(delayMs) * 1_000_000
+        let step: UInt64 = 100_000_000
+        while remaining > 0 {
+            if Task.isCancelled || token.isCancelled {
+                throw CancellationError()
+            }
+            let slice = min(step, remaining)
+            try await Task.sleep(nanoseconds: slice)
+            remaining -= slice
+        }
     }
 
     public var isStreaming: Bool {
@@ -716,7 +849,9 @@ public final class AgentSession: Sendable {
     }
 
     public func abort() async {
+        abortRetry()
         agent.abort()
+        await agent.waitForIdle()
         compactionAbort?.cancel()
         branchSummaryAbort?.cancel()
         bashAbort?.cancel()
@@ -795,7 +930,8 @@ public final class AgentSession: Sendable {
     }
 
     public func abortRetry() {
-        // Auto-retry is not implemented in the Swift port yet.
+        retryAbort?.cancel()
+        retryTask?.cancel()
     }
 
     public func newSession(_ options: NewSessionOptions? = nil) async -> Bool {

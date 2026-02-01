@@ -20,6 +20,14 @@ private func tryMacOSScreenshotPath(_ path: String) -> String {
         .replacingOccurrences(of: " PM.", with: "\(narrowNoBreakSpace)PM.")
 }
 
+private func tryNFDVariant(_ path: String) -> String {
+    path.decomposedStringWithCanonicalMapping
+}
+
+private func tryCurlyQuoteVariant(_ path: String) -> String {
+    path.replacingOccurrences(of: "'", with: "\u{2019}")
+}
+
 private func fileExists(_ path: String) -> Bool {
     FileManager.default.fileExists(atPath: path)
 }
@@ -52,6 +60,18 @@ public func resolveReadPath(_ filePath: String, cwd: String) -> String {
     let macOSVariant = tryMacOSScreenshotPath(resolved)
     if macOSVariant != resolved && fileExists(macOSVariant) {
         return macOSVariant
+    }
+    let nfdVariant = tryNFDVariant(resolved)
+    if nfdVariant != resolved && fileExists(nfdVariant) {
+        return nfdVariant
+    }
+    let curlyVariant = tryCurlyQuoteVariant(resolved)
+    if curlyVariant != resolved && fileExists(curlyVariant) {
+        return curlyVariant
+    }
+    let nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant)
+    if nfdCurlyVariant != resolved && fileExists(nfdCurlyVariant) {
+        return nfdCurlyVariant
     }
     return resolved
 }

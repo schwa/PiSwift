@@ -21,6 +21,12 @@ public struct RetrySettings: Sendable {
     public var enabled: Bool?
     public var maxRetries: Int?
     public var baseDelayMs: Int?
+
+    public init(enabled: Bool? = nil, maxRetries: Int? = nil, baseDelayMs: Int? = nil) {
+        self.enabled = enabled
+        self.maxRetries = maxRetries
+        self.baseDelayMs = baseDelayMs
+    }
 }
 
 public struct SkillsSettings: Sendable {
@@ -122,6 +128,10 @@ public final class SettingsManager: Sendable {
         var projectSettingsPath: String?
         var globalSettings: Settings
         var settings: Settings
+        var inMemoryProjectSettings: Settings
+        var modifiedFields: Set<String>
+        var modifiedNestedFields: [String: Set<String>]
+        var globalSettingsLoadError: String?
     }
 
     private let state: LockedState<State>
@@ -147,13 +157,37 @@ public final class SettingsManager: Sendable {
         set { state.withLock { $0.settings = newValue } }
     }
 
-    private init(settingsPath: String?, projectSettingsPath: String?, initial: Settings, persist: Bool) {
+    private var inMemoryProjectSettings: Settings {
+        get { state.withLock { $0.inMemoryProjectSettings } }
+        set { state.withLock { $0.inMemoryProjectSettings = newValue } }
+    }
+
+    private var modifiedFields: Set<String> {
+        get { state.withLock { $0.modifiedFields } }
+        set { state.withLock { $0.modifiedFields = newValue } }
+    }
+
+    private var modifiedNestedFields: [String: Set<String>] {
+        get { state.withLock { $0.modifiedNestedFields } }
+        set { state.withLock { $0.modifiedNestedFields = newValue } }
+    }
+
+    private var globalSettingsLoadError: String? {
+        get { state.withLock { $0.globalSettingsLoadError } }
+        set { state.withLock { $0.globalSettingsLoadError = newValue } }
+    }
+
+    private init(settingsPath: String?, projectSettingsPath: String?, initial: Settings, persist: Bool, loadError: String? = nil) {
         self.persist = persist
         self.state = LockedState(State(
             settingsPath: settingsPath,
             projectSettingsPath: projectSettingsPath,
             globalSettings: initial,
-            settings: initial
+            settings: initial,
+            inMemoryProjectSettings: Settings(),
+            modifiedFields: Set<String>(),
+            modifiedNestedFields: [:],
+            globalSettingsLoadError: loadError
         ))
         let projectSettings = loadProjectSettings()
         self.settings = mergeSettings(globalSettings, projectSettings)
@@ -162,8 +196,17 @@ public final class SettingsManager: Sendable {
     public static func create(_ cwd: String = FileManager.default.currentDirectoryPath, _ agentDir: String = getAgentDir()) -> SettingsManager {
         let settingsPath = URL(fileURLWithPath: agentDir).appendingPathComponent("settings.json").path
         let projectSettingsPath = URL(fileURLWithPath: cwd).appendingPathComponent(CONFIG_DIR_NAME).appendingPathComponent("settings.json").path
-        let globalSettings = loadFromFile(settingsPath)
-        return SettingsManager(settingsPath: settingsPath, projectSettingsPath: projectSettingsPath, initial: globalSettings, persist: true)
+        var loadError: String?
+        let globalSettings: Settings
+        do {
+            globalSettings = try loadFromFile(settingsPath)
+        } catch {
+            loadError = error.localizedDescription
+            print("Warning: Invalid JSON in \(settingsPath): \(error.localizedDescription)")
+            print("Fix the syntax error to enable settings persistence.")
+            globalSettings = Settings()
+        }
+        return SettingsManager(settingsPath: settingsPath, projectSettingsPath: projectSettingsPath, initial: globalSettings, persist: true, loadError: loadError)
     }
 
     public static func inMemory(_ settings: Settings = Settings()) -> SettingsManager {
@@ -172,6 +215,17 @@ public final class SettingsManager: Sendable {
 
     public func applyOverrides(_ overrides: Settings) {
         settings = mergeSettings(settings, overrides)
+    }
+
+    private func markModified(_ field: String, _ nestedKey: String? = nil) {
+        state.withLock { state in
+            state.modifiedFields.insert(field)
+            if let nestedKey {
+                var nested = state.modifiedNestedFields[field] ?? Set<String>()
+                nested.insert(nestedKey)
+                state.modifiedNestedFields[field] = nested
+            }
+        }
     }
 
     public func getGlobalSettings() -> Settings {
@@ -188,6 +242,7 @@ public final class SettingsManager: Sendable {
 
     public func setLastChangelogVersion(_ version: String) {
         globalSettings.lastChangelogVersion = version
+        markModified("lastChangelogVersion")
         save()
     }
 
@@ -201,17 +256,21 @@ public final class SettingsManager: Sendable {
 
     public func setDefaultProvider(_ provider: String) {
         globalSettings.defaultProvider = provider
+        markModified("defaultProvider")
         save()
     }
 
     public func setDefaultModel(_ model: String) {
         globalSettings.defaultModel = model
+        markModified("defaultModel")
         save()
     }
 
     public func setDefaultModelAndProvider(_ provider: String, _ model: String) {
         globalSettings.defaultProvider = provider
         globalSettings.defaultModel = model
+        markModified("defaultProvider")
+        markModified("defaultModel")
         save()
     }
 
@@ -221,6 +280,7 @@ public final class SettingsManager: Sendable {
 
     public func setSteeringMode(_ mode: String) {
         globalSettings.steeringMode = mode
+        markModified("steeringMode")
         save()
     }
 
@@ -230,6 +290,7 @@ public final class SettingsManager: Sendable {
 
     public func setFollowUpMode(_ mode: String) {
         globalSettings.followUpMode = mode
+        markModified("followUpMode")
         save()
     }
 
@@ -239,6 +300,7 @@ public final class SettingsManager: Sendable {
 
     public func setTheme(_ theme: String) {
         globalSettings.theme = theme
+        markModified("theme")
         save()
     }
 
@@ -248,6 +310,7 @@ public final class SettingsManager: Sendable {
 
     public func setDefaultThinkingLevel(_ level: String) {
         globalSettings.defaultThinkingLevel = level
+        markModified("defaultThinkingLevel")
         save()
     }
 
@@ -258,6 +321,7 @@ public final class SettingsManager: Sendable {
     public func setCompactionEnabled(_ enabled: Bool) {
         if globalSettings.compaction == nil { globalSettings.compaction = CompactionSettingsOverrides() }
         globalSettings.compaction?.enabled = enabled
+        markModified("compaction", "enabled")
         save()
     }
 
@@ -296,6 +360,7 @@ public final class SettingsManager: Sendable {
     public func setRetryEnabled(_ enabled: Bool) {
         if globalSettings.retry == nil { globalSettings.retry = RetrySettings() }
         globalSettings.retry?.enabled = enabled
+        markModified("retry", "enabled")
         save()
     }
 
@@ -305,6 +370,7 @@ public final class SettingsManager: Sendable {
 
     public func setHideThinkingBlock(_ hide: Bool) {
         globalSettings.hideThinkingBlock = hide
+        markModified("hideThinkingBlock")
         save()
     }
 
@@ -314,6 +380,7 @@ public final class SettingsManager: Sendable {
 
     public func setShellPath(_ path: String?) {
         globalSettings.shellPath = path
+        markModified("shellPath")
         save()
     }
 
@@ -323,6 +390,7 @@ public final class SettingsManager: Sendable {
 
     public func setCollapseChangelog(_ collapse: Bool) {
         globalSettings.collapseChangelog = collapse
+        markModified("collapseChangelog")
         save()
     }
 
@@ -332,6 +400,7 @@ public final class SettingsManager: Sendable {
 
     public func setHooks(_ paths: [String]) {
         globalSettings.hooks = paths
+        markModified("hooks")
         save()
     }
 
@@ -341,6 +410,7 @@ public final class SettingsManager: Sendable {
 
     public func setCustomTools(_ paths: [String]) {
         globalSettings.customTools = paths
+        markModified("customTools")
         save()
     }
 
@@ -350,6 +420,7 @@ public final class SettingsManager: Sendable {
 
     public func setPackages(_ packages: [PackageSource]) {
         globalSettings.packages = packages
+        markModified("packages")
         save()
     }
 
@@ -366,6 +437,7 @@ public final class SettingsManager: Sendable {
 
     public func setExtensionPaths(_ paths: [String]) {
         globalSettings.extensions = paths
+        markModified("extensions")
         save()
     }
 
@@ -382,6 +454,7 @@ public final class SettingsManager: Sendable {
 
     public func setSkillPaths(_ paths: [String]) {
         globalSettings.skillPaths = paths
+        markModified("skills")
         save()
     }
 
@@ -398,6 +471,7 @@ public final class SettingsManager: Sendable {
 
     public func setPromptTemplatePaths(_ paths: [String]) {
         globalSettings.prompts = paths
+        markModified("prompts")
         save()
     }
 
@@ -414,6 +488,7 @@ public final class SettingsManager: Sendable {
 
     public func setThemePaths(_ paths: [String]) {
         globalSettings.themes = paths
+        markModified("themes")
         save()
     }
 
@@ -446,6 +521,7 @@ public final class SettingsManager: Sendable {
 
     public func setEnableSkillCommands(_ enabled: Bool) {
         globalSettings.enableSkillCommands = enabled
+        markModified("enableSkillCommands")
         save()
     }
 
@@ -455,6 +531,7 @@ public final class SettingsManager: Sendable {
 
     public func setEnabledModels(_ patterns: [String]?) {
         globalSettings.enabledModels = patterns
+        markModified("enabledModels")
         save()
     }
 
@@ -464,6 +541,7 @@ public final class SettingsManager: Sendable {
 
     public func setDoubleEscapeAction(_ action: String) {
         globalSettings.doubleEscapeAction = action
+        markModified("doubleEscapeAction")
         save()
     }
 
@@ -473,6 +551,7 @@ public final class SettingsManager: Sendable {
 
     public func setAutocompleteMaxVisible(_ maxVisible: Int) {
         globalSettings.autocompleteMaxVisible = max(3, min(20, maxVisible))
+        markModified("autocompleteMaxVisible")
         save()
     }
 
@@ -487,6 +566,7 @@ public final class SettingsManager: Sendable {
     public func setShowImages(_ show: Bool) {
         if globalSettings.terminal == nil { globalSettings.terminal = TerminalSettings() }
         globalSettings.terminal?.showImages = show
+        markModified("terminal", "showImages")
         save()
     }
 
@@ -497,6 +577,7 @@ public final class SettingsManager: Sendable {
     public func setAutoResizeImages(_ enabled: Bool) {
         if globalSettings.images == nil { globalSettings.images = ImageSettings() }
         globalSettings.images?.autoResize = enabled
+        markModified("images", "autoResize")
         save()
     }
 
@@ -509,6 +590,7 @@ public final class SettingsManager: Sendable {
         globalSettings.images?.blockImages = blocked
         if settings.images == nil { settings.images = ImageSettings() }
         settings.images?.blockImages = blocked
+        markModified("images", "blockImages")
         save()
     }
 
@@ -522,24 +604,52 @@ public final class SettingsManager: Sendable {
         return result.isEmpty ? nil : result
     }
 
-    private static func loadFromFile(_ path: String) -> Settings {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    private static func loadFromFile(_ path: String) throws -> Settings {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return Settings()
         }
-        return SettingsManager.decodeSettings(json)
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard let dict = json as? [String: Any] else {
+            return Settings()
+        }
+        return SettingsManager.decodeSettings(dict)
+    }
+
+    private static func loadRawJson(_ path: String) throws -> [String: Any] {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return [:]
+        }
+        let json = try JSONSerialization.jsonObject(with: data)
+        return json as? [String: Any] ?? [:]
     }
 
     private func loadProjectSettings() -> Settings {
-        guard let projectPath = projectSettingsPath,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: projectPath)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        if !persist {
+            return inMemoryProjectSettings
+        }
+        guard let projectPath = projectSettingsPath else {
             return Settings()
         }
-        return SettingsManager.decodeSettings(json)
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: projectPath)) else {
+            return Settings()
+        }
+        do {
+            let json = try JSONSerialization.jsonObject(with: data)
+            guard let dict = json as? [String: Any] else {
+                return Settings()
+            }
+            return SettingsManager.decodeSettings(dict)
+        } catch {
+            print("Warning: Could not read project settings file: \(error.localizedDescription)")
+            return Settings()
+        }
     }
 
     private func saveProjectSettings(_ settings: Settings) {
+        if !persist {
+            inMemoryProjectSettings = settings
+            return
+        }
         guard let projectPath = projectSettingsPath else { return }
         let dir = URL(fileURLWithPath: projectPath).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -747,35 +857,89 @@ public final class SettingsManager: Sendable {
     }
 
     private func save() {
-        guard persist, let settingsPath else { return }
+        if persist, let settingsPath {
+            if globalSettingsLoadError != nil {
+                let projectSettings = loadProjectSettings()
+                settings = mergeSettings(globalSettings, projectSettings)
+                return
+            }
+
+            do {
+                let dir = URL(fileURLWithPath: settingsPath).deletingLastPathComponent()
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+                let currentJson = try SettingsManager.loadRawJson(settingsPath)
+                let encoded = encodeSettingsToJson(globalSettings)
+
+                var merged = currentJson
+                for field in modifiedFields {
+                    if let nestedKeys = modifiedNestedFields[field] {
+                        let baseNested = merged[field] as? [String: Any] ?? [:]
+                        let nextNested = encoded[field] as? [String: Any] ?? [:]
+                        var updated = baseNested
+                        for nestedKey in nestedKeys {
+                            if let value = nextNested[nestedKey] {
+                                updated[nestedKey] = value
+                            } else {
+                                updated.removeValue(forKey: nestedKey)
+                            }
+                        }
+                        if updated.isEmpty {
+                            merged.removeValue(forKey: field)
+                        } else {
+                            merged[field] = updated
+                        }
+                    } else {
+                        if encoded.keys.contains(field) {
+                            merged[field] = encoded[field]
+                        } else {
+                            merged.removeValue(forKey: field)
+                        }
+                    }
+                }
+
+                globalSettings = SettingsManager.decodeSettings(merged)
+                if let data = try? JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted]) {
+                    try? data.write(to: URL(fileURLWithPath: settingsPath))
+                }
+            } catch {
+                print("Warning: Could not save settings file: \(error.localizedDescription)")
+            }
+        }
+
+        let projectSettings = loadProjectSettings()
+        settings = mergeSettings(globalSettings, projectSettings)
+    }
+
+    private func encodeSettingsToJson(_ settings: Settings) -> [String: Any] {
         var json: [String: Any] = [:]
-        json["lastChangelogVersion"] = globalSettings.lastChangelogVersion
-        json["defaultProvider"] = globalSettings.defaultProvider
-        json["defaultModel"] = globalSettings.defaultModel
-        json["defaultThinkingLevel"] = globalSettings.defaultThinkingLevel
-        json["steeringMode"] = globalSettings.steeringMode
-        json["followUpMode"] = globalSettings.followUpMode
-        json["theme"] = globalSettings.theme
-        json["hideThinkingBlock"] = globalSettings.hideThinkingBlock
-        json["shellPath"] = globalSettings.shellPath
-        json["collapseChangelog"] = globalSettings.collapseChangelog
-        if let packages = globalSettings.packages {
+        json["lastChangelogVersion"] = settings.lastChangelogVersion
+        json["defaultProvider"] = settings.defaultProvider
+        json["defaultModel"] = settings.defaultModel
+        json["defaultThinkingLevel"] = settings.defaultThinkingLevel
+        json["steeringMode"] = settings.steeringMode
+        json["followUpMode"] = settings.followUpMode
+        json["theme"] = settings.theme
+        json["hideThinkingBlock"] = settings.hideThinkingBlock
+        json["shellPath"] = settings.shellPath
+        json["collapseChangelog"] = settings.collapseChangelog
+        if let packages = settings.packages {
             json["packages"] = encodePackageSources(packages)
         }
-        json["extensions"] = globalSettings.extensions
-        if let skillPaths = globalSettings.skillPaths {
+        json["extensions"] = settings.extensions
+        if let skillPaths = settings.skillPaths {
             json["skills"] = skillPaths
         }
-        json["prompts"] = globalSettings.prompts
-        json["themes"] = globalSettings.themes
-        json["enableSkillCommands"] = globalSettings.enableSkillCommands
-        json["hooks"] = globalSettings.hooks
-        json["customTools"] = globalSettings.customTools
-        json["enabledModels"] = globalSettings.enabledModels
-        json["doubleEscapeAction"] = globalSettings.doubleEscapeAction
-        json["autocompleteMaxVisible"] = globalSettings.autocompleteMaxVisible
+        json["prompts"] = settings.prompts
+        json["themes"] = settings.themes
+        json["enableSkillCommands"] = settings.enableSkillCommands
+        json["hooks"] = settings.hooks
+        json["customTools"] = settings.customTools
+        json["enabledModels"] = settings.enabledModels
+        json["doubleEscapeAction"] = settings.doubleEscapeAction
+        json["autocompleteMaxVisible"] = settings.autocompleteMaxVisible
 
-        if let compaction = globalSettings.compaction {
+        if let compaction = settings.compaction {
             json["compaction"] = [
                 "enabled": compaction.enabled as Any,
                 "reserveTokens": compaction.reserveTokens as Any,
@@ -783,11 +947,11 @@ public final class SettingsManager: Sendable {
             ]
         }
 
-        if let branch = globalSettings.branchSummary {
+        if let branch = settings.branchSummary {
             json["branchSummary"] = ["reserveTokens": branch.reserveTokens as Any]
         }
 
-        if let retry = globalSettings.retry {
+        if let retry = settings.retry {
             json["retry"] = [
                 "enabled": retry.enabled as Any,
                 "maxRetries": retry.maxRetries as Any,
@@ -795,7 +959,7 @@ public final class SettingsManager: Sendable {
             ]
         }
 
-        if globalSettings.skillPaths == nil, let skills = globalSettings.skills {
+        if settings.skillPaths == nil, let skills = settings.skills {
             json["skills"] = [
                 "enabled": skills.enabled as Any,
                 "enableCodexUser": skills.enableCodexUser as Any,
@@ -810,18 +974,18 @@ public final class SettingsManager: Sendable {
             ]
         }
 
-        if let terminal = globalSettings.terminal {
+        if let terminal = settings.terminal {
             json["terminal"] = ["showImages": terminal.showImages as Any]
         }
 
-        if let images = globalSettings.images {
+        if let images = settings.images {
             json["images"] = [
                 "autoResize": images.autoResize as Any,
                 "blockImages": images.blockImages as Any,
             ]
         }
 
-        if let budgets = globalSettings.thinkingBudgets {
+        if let budgets = settings.thinkingBudgets {
             json["thinkingBudgets"] = [
                 "minimal": budgets.minimal as Any,
                 "low": budgets.low as Any,
@@ -830,14 +994,7 @@ public final class SettingsManager: Sendable {
             ]
         }
 
-        let dir = URL(fileURLWithPath: settingsPath).deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
-            try? data.write(to: URL(fileURLWithPath: settingsPath))
-        }
-
-        let projectSettings = loadProjectSettings()
-        settings = mergeSettings(globalSettings, projectSettings)
+        return json
     }
 
     private func encodePackageSources(_ packages: [PackageSource]) -> [Any] {

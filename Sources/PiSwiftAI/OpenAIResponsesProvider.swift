@@ -351,7 +351,7 @@ private func buildResponsesQuery(
     return query
 }
 
-private func mapResponsesReasoningEffort(_ effort: ThinkingLevel?) -> Components.Schemas.ReasoningEffort? {
+func mapResponsesReasoningEffort(_ effort: ThinkingLevel?) -> Components.Schemas.ReasoningEffort? {
     guard let effort else { return nil }
     switch effort {
     case .minimal:
@@ -365,7 +365,7 @@ private func mapResponsesReasoningEffort(_ effort: ThinkingLevel?) -> Components
     }
 }
 
-private func mapReasoningSummary(_ summary: OpenAIReasoningSummary?) -> Components.Schemas.Reasoning.SummaryPayload? {
+func mapReasoningSummary(_ summary: OpenAIReasoningSummary?) -> Components.Schemas.Reasoning.SummaryPayload? {
     switch summary {
     case .auto:
         return .auto
@@ -427,7 +427,7 @@ private func applyServiceTierPricing(_ usage: inout Usage, serviceTier: OpenAISe
     usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite
 }
 
-private func convertResponsesMessages(model: Model, context: Context, allowedToolCallProviders: Set<String>) -> [InputItem] {
+func convertResponsesMessages(model: Model, context: Context, allowedToolCallProviders: Set<String>) -> [InputItem] {
     var messages: [InputItem] = []
 
     let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, model, _ in
@@ -574,7 +574,7 @@ private func convertResponsesMessages(model: Model, context: Context, allowedToo
     return messages
 }
 
-private func convertResponsesTools(_ tools: [AITool]) -> [Tool] {
+func convertResponsesTools(_ tools: [AITool]) -> [Tool] {
     tools.compactMap { tool in
         let schema = openAIJSONSchema(from: tool.parameters) ?? .object([:])
         let function = FunctionTool(name: tool.name, description: tool.description, parameters: schema, strict: false)
@@ -582,7 +582,7 @@ private func convertResponsesTools(_ tools: [AITool]) -> [Tool] {
     }
 }
 
-private func normalizeResponseItemId(_ id: String?, fallbackIndex: Int) -> String {
+func normalizeResponseItemId(_ id: String?, fallbackIndex: Int) -> String {
     var resolved = (id?.isEmpty == false) ? id! : "msg_\(fallbackIndex)"
     if resolved.count > 64 {
         resolved = "msg_\(shortHash(resolved))"
@@ -590,7 +590,7 @@ private func normalizeResponseItemId(_ id: String?, fallbackIndex: Int) -> Strin
     return resolved
 }
 
-private func normalizeOptionalResponseItemId(_ id: String?) -> String? {
+func normalizeOptionalResponseItemId(_ id: String?) -> String? {
     guard let id, !id.isEmpty else { return nil }
     if id.count > 64 {
         return "msg_\(shortHash(id))"
@@ -598,7 +598,7 @@ private func normalizeOptionalResponseItemId(_ id: String?) -> String? {
     return id
 }
 
-private func shortHash(_ value: String) -> String {
+func shortHash(_ value: String) -> String {
     guard let data = value.data(using: .utf8) else {
         return String(value.prefix(16))
     }
@@ -678,7 +678,7 @@ private func debugOpenAIResponsesError(client: OpenAI, query: CreateModelRespons
     }
 }
 
-private func parseJSONStringArguments(_ json: String) -> [String: AnyCodable] {
+func parseJSONStringArguments(_ json: String) -> [String: AnyCodable] {
     guard let data = json.data(using: .utf8),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return [:]
@@ -686,7 +686,7 @@ private func parseJSONStringArguments(_ json: String) -> [String: AnyCodable] {
     return object.mapValues { AnyCodable($0) }
 }
 
-private func mapResponsesStopReason(_ status: String) -> StopReason {
+func mapResponsesStopReason(_ status: String) -> StopReason {
     switch status {
     case "completed":
         return .stop

@@ -67,6 +67,65 @@ private func resolveHeaders(_ headers: [String: String]?) -> [String: String]? {
     return resolved.isEmpty ? nil : resolved
 }
 
+private func parseRouting(_ value: Any?) -> (only: [String]?, order: [String]?)? {
+    guard let dict = value as? [String: Any] else { return nil }
+    let only = dict["only"] as? [String]
+    let order = dict["order"] as? [String]
+    if only == nil && order == nil { return nil }
+    return (only, order)
+}
+
+private func parseCompat(_ value: Any?) -> OpenAICompat? {
+    guard let dict = value as? [String: Any] else { return nil }
+
+    let supportsStore = dict["supportsStore"] as? Bool
+    let supportsDeveloperRole = dict["supportsDeveloperRole"] as? Bool
+    let supportsReasoningEffort = dict["supportsReasoningEffort"] as? Bool
+    let supportsUsageInStreaming = dict["supportsUsageInStreaming"] as? Bool
+    let maxTokensField = (dict["maxTokensField"] as? String).flatMap(OpenAICompatMaxTokensField.init(rawValue:))
+    let requiresToolResultName = dict["requiresToolResultName"] as? Bool
+    let requiresAssistantAfterToolResult = dict["requiresAssistantAfterToolResult"] as? Bool
+    let requiresThinkingAsText = dict["requiresThinkingAsText"] as? Bool
+    let requiresMistralToolIds = dict["requiresMistralToolIds"] as? Bool
+    let thinkingFormat = (dict["thinkingFormat"] as? String).flatMap(OpenAICompatThinkingFormat.init(rawValue:))
+
+    let openRouterRoutingValue = parseRouting(dict["openRouterRouting"])
+    let vercelGatewayRoutingValue = parseRouting(dict["vercelGatewayRouting"])
+
+    let openRouterRouting = openRouterRoutingValue.map { OpenRouterRouting(only: $0.only, order: $0.order) }
+    let vercelGatewayRouting = vercelGatewayRoutingValue.map { VercelGatewayRouting(only: $0.only, order: $0.order) }
+
+    if supportsStore == nil,
+       supportsDeveloperRole == nil,
+       supportsReasoningEffort == nil,
+       supportsUsageInStreaming == nil,
+       maxTokensField == nil,
+       requiresToolResultName == nil,
+       requiresAssistantAfterToolResult == nil,
+       requiresThinkingAsText == nil,
+       requiresMistralToolIds == nil,
+       thinkingFormat == nil,
+       openRouterRouting == nil,
+       vercelGatewayRouting == nil {
+        return nil
+    }
+
+    return OpenAICompat(
+        supportsStore: supportsStore,
+        supportsDeveloperRole: supportsDeveloperRole,
+        supportsReasoningEffort: supportsReasoningEffort,
+        supportsUsageInStreaming: supportsUsageInStreaming,
+        maxTokensField: maxTokensField,
+        requiresToolResultName: requiresToolResultName,
+        requiresAssistantAfterToolResult: requiresAssistantAfterToolResult,
+        requiresThinkingAsText: requiresThinkingAsText,
+        requiresMistralToolIds: requiresMistralToolIds,
+        thinkingFormat: thinkingFormat,
+        openRouterRouting: openRouterRouting,
+        vercelGatewayRouting: vercelGatewayRouting
+    )
+}
+
 private struct ProviderOverride: Sendable {
     var baseUrl: String?
     var headers: [String: String]?
@@ -249,7 +308,8 @@ public final class ModelRegistry: Sendable {
                 cost: costModel,
                 contextWindow: contextWindow,
                 maxTokens: maxTokens,
-                headers: entry["headers"] as? [String: String]
+                headers: entry["headers"] as? [String: String],
+                compat: parseCompat(entry["compat"])
             )
             custom.append(model)
         }
@@ -329,7 +389,8 @@ public final class ModelRegistry: Sendable {
                     cost: costModel,
                     contextWindow: contextWindow,
                     maxTokens: maxTokens,
-                    headers: resolvedHeaders
+                    headers: resolvedHeaders,
+                    compat: parseCompat(modelDef["compat"])
                 )
                 custom.append(model)
             }

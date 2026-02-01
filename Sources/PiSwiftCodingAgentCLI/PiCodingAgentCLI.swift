@@ -19,6 +19,12 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
     mutating func run() async throws {
         time("start")
+        if cli.rawMessages.first == "package" {
+            let args = Array(cli.rawMessages.dropFirst())
+            if await handlePackageCommand(args) {
+                return
+            }
+        }
         if cli.rawMessages.first == "config" {
             let cwd = FileManager.default.currentDirectoryPath
             let agentDir = getAgentDir()
@@ -494,6 +500,12 @@ Examples:
 
   # Configure resources (extensions, skills, prompts, themes)
   \(APP_NAME) config
+
+  # Manage packages (npm/git)
+  \(APP_NAME) package install <source>
+  \(APP_NAME) package remove <source>
+  \(APP_NAME) package update [source]
+  \(APP_NAME) package list
 
 Environment Variables:
   ANTHROPIC_API_KEY       - Anthropic Claude API key

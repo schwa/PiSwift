@@ -25,7 +25,13 @@ public func streamOpenAICompletions(
             if compat.thinkingFormat == .zai {
                 openAIStream = try streamZaiCompletions(model: model, context: context, options: options, query: query)
             } else {
-                let client = try makeOpenAIClient(model: model, apiKey: options.apiKey, headers: options.headers)
+                let middlewares = buildCompletionsMiddlewares(model: model)
+                let client = try makeOpenAIClient(
+                    model: model,
+                    apiKey: options.apiKey,
+                    headers: options.headers,
+                    middlewares: middlewares
+                )
                 openAIStream = client.chatsStream(query: query)
             }
             stream.push(.start(partial: output))
@@ -206,8 +212,9 @@ private func detectCompat(model: Model) -> ResolvedOpenAICompat {
     let isChutes = baseUrl.contains("chutes.ai")
     let isZai = provider == "zai" || baseUrl.contains("z.ai")
     let isDeepSeek = baseUrl.contains("deepseek.com")
+    let isOpencode = provider == "opencode" || baseUrl.contains("opencode.ai")
 
-    let isNonStandard = isCerebras || isGrok || isMistral || isChutes || isDeepSeek
+    let isNonStandard = isCerebras || isGrok || isMistral || isChutes || isDeepSeek || isZai || isOpencode
     let useMaxTokens = isMistral || isChutes
 
     return ResolvedOpenAICompat(
@@ -556,6 +563,72 @@ private func buildZaiRequestBody(query: ChatQuery, model: Model, options: OpenAI
     }
 
     return try JSONSerialization.data(withJSONObject: object, options: [])
+}
+
+private func buildCompletionsMiddlewares(model: Model) -> [OpenAIMiddleware] {
+    var middlewares: [OpenAIMiddleware] = []
+    if model.compat?.openRouterRouting != nil || model.compat?.vercelGatewayRouting != nil {
+        middlewares.append(OpenAICompletionsRoutingMiddleware(
+            baseUrl: model.baseUrl,
+            openRouterRouting: model.compat?.openRouterRouting,
+            vercelGatewayRouting: model.compat?.vercelGatewayRouting
+        ))
+    }
+    return middlewares
+}
+
+private struct OpenAICompletionsRoutingMiddleware: OpenAIMiddleware {
+    let baseUrl: String
+    let openRouterRouting: OpenRouterRouting?
+    let vercelGatewayRouting: VercelGatewayRouting?
+
+    func intercept(request: URLRequest) -> URLRequest {
+        guard let body = readRequestBody(request) else { return request }
+        guard var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return request }
+
+        if baseUrl.contains("openrouter.ai"), let routing = openRouterRouting {
+            var provider: [String: Any] = [:]
+            if let only = routing.only { provider["only"] = only }
+            if let order = routing.order { provider["order"] = order }
+            payload["provider"] = provider
+        }
+
+        if baseUrl.contains("ai-gateway.vercel.sh"), let routing = vercelGatewayRouting {
+            var gateway: [String: Any] = [:]
+            if let only = routing.only { gateway["only"] = only }
+            if let order = routing.order { gateway["order"] = order }
+            if !gateway.isEmpty {
+                payload["providerOptions"] = ["gateway": gateway]
+            }
+        }
+
+        guard let updatedBody = try? JSONSerialization.data(withJSONObject: payload) else { return request }
+        var updated = request
+        updated.httpBodyStream = nil
+        updated.httpBody = updatedBody
+        return updated
+    }
+
+    private func readRequestBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: bufferSize)
+            if read > 0 {
+                data.append(buffer, count: read)
+            } else {
+                break
+            }
+        }
+        return data.isEmpty ? nil : data
+    }
 }
 
 private func chatCompletionsUrl(baseUrl: String) -> URL {
