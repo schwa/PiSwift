@@ -439,7 +439,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                     customTools: customToolsResult.tools,
                     setToolUIContext: customToolsResult.setUIContext,
                     setToolSendMessageHandler: customToolsResult.setSendMessageHandler,
-                    fdPath: fdPath
+                    fdPath: fdPath,
+                    verbose: parsed.verbose == true
                 )
             }
             await interactiveMode.start(

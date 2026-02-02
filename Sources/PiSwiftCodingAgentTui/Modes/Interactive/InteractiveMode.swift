@@ -186,6 +186,17 @@ private struct InteractiveHookUIContext: HookUIContext {
 
 @MainActor
 public final class InteractiveMode {
+    private struct ResourceDisplayOptions: Sendable {
+        var extensionPaths: [String]
+        var force: Bool
+    }
+
+    private struct ScopeGroup: Sendable {
+        var scope: String
+        var paths: [String]
+        var packages: [String: [String]]
+    }
+
     public var chatContainer: Container
     public var ui: RenderRequesting
     public var lastStatusSpacer: Spacer?
@@ -197,6 +208,8 @@ public final class InteractiveMode {
     private var changelogMarkdown: String?
     private var scopedModels: [ScopedModel] = []
     private var fdPath: String?
+    private var verboseStartup = false
+    private var pendingResourceDisplayOptions: ResourceDisplayOptions?
 
     private var pendingMessagesContainer: Container?
     private var statusContainer: Container?
@@ -266,7 +279,8 @@ public final class InteractiveMode {
         customTools: [LoadedCustomTool] = [],
         setToolUIContext: @escaping (HookUIContext, Bool) -> Void = { _, _ in },
         setToolSendMessageHandler: @escaping @Sendable (_ handler: @escaping HookSendMessageHandler) -> Void = { _ in },
-        fdPath: String? = nil
+        fdPath: String? = nil,
+        verbose: Bool = false
     ) {
         self.init(chatContainer: Container(), ui: NullRenderRequester())
         self.session = session
@@ -277,6 +291,7 @@ public final class InteractiveMode {
         self.setToolUIContext = setToolUIContext
         self.setToolSendMessageHandler = setToolSendMessageHandler
         self.fdPath = fdPath
+        self.verboseStartup = verbose
     }
 
     public func start(
@@ -285,6 +300,12 @@ public final class InteractiveMode {
         initialImages: [ImageContent]? = nil
     ) async {
         await initializeIfNeeded()
+        if let session {
+            pendingResourceDisplayOptions = ResourceDisplayOptions(
+                extensionPaths: session.resourceLoader.getExtensions().paths,
+                force: false
+            )
+        }
         renderInitialMessages()
 
         if let initialMessage {
@@ -333,7 +354,6 @@ public final class InteractiveMode {
 
         initTheme(settingsManager.getTheme(), enableWatcher: true)
 
-        let header = buildHeaderText()
         let pendingMessages = Container()
         let status = Container()
         let widgets = Container()
@@ -394,22 +414,33 @@ public final class InteractiveMode {
         baseSlashCommands = slashCommands
         rebuildAutocomplete()
 
-        tui.addChild(Spacer(1))
-        tui.addChild(Text(header, paddingX: 1, paddingY: 0))
-        tui.addChild(Spacer(1))
+        let shouldShowHeader = verboseStartup || !settingsManager.getQuietStartup()
+        if shouldShowHeader {
+            let header = buildHeaderText()
+            tui.addChild(Spacer(1))
+            tui.addChild(Text(header, paddingX: 1, paddingY: 0))
+            tui.addChild(Spacer(1))
 
-        if let changelogMarkdown, !changelogMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            tui.addChild(DynamicBorder())
-            if settingsManager.getCollapseChangelog() {
+            if let changelogMarkdown, !changelogMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                tui.addChild(DynamicBorder())
+                if settingsManager.getCollapseChangelog() {
+                    let condensed = "Updated. Use /changelog to view details."
+                    tui.addChild(Text(condensed, paddingX: 1, paddingY: 0))
+                } else {
+                    tui.addChild(Text(theme.bold(theme.fg(.accent, "What's New")), paddingX: 1, paddingY: 0))
+                    tui.addChild(Spacer(1))
+                    tui.addChild(Markdown(changelogMarkdown.trimmingCharacters(in: .whitespacesAndNewlines), paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
+                    tui.addChild(Spacer(1))
+                }
+                tui.addChild(DynamicBorder())
+            }
+        } else {
+            tui.addChild(Text("", paddingX: 0, paddingY: 0))
+            if let changelogMarkdown, !changelogMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                tui.addChild(Spacer(1))
                 let condensed = "Updated. Use /changelog to view details."
                 tui.addChild(Text(condensed, paddingX: 1, paddingY: 0))
-            } else {
-                tui.addChild(Text(theme.bold(theme.fg(.accent, "What's New")), paddingX: 1, paddingY: 0))
-                tui.addChild(Spacer(1))
-                tui.addChild(Markdown(changelogMarkdown.trimmingCharacters(in: .whitespacesAndNewlines), paddingX: 1, paddingY: 0, theme: getMarkdownTheme()))
-                tui.addChild(Spacer(1))
             }
-            tui.addChild(DynamicBorder())
         }
 
         tui.addChild(chatContainer)
@@ -1428,8 +1459,13 @@ public final class InteractiveMode {
     @MainActor
     private func renderInitialMessages() {
         guard let session, let tui else { return }
+        let resourceOptions = pendingResourceDisplayOptions
+        pendingResourceDisplayOptions = nil
         chatContainer.clear()
         pendingTools.removeAll()
+        if let resourceOptions {
+            showLoadedResources(resourceOptions)
+        }
         var toolCalls: [String: (name: String, args: [String: AnyCodable])] = [:]
 
         let context = session.sessionManager.buildSessionContext()
@@ -1562,6 +1598,323 @@ public final class InteractiveMode {
             theme.fg(.dim, pasteImage) + theme.fg(.muted, " to paste image"),
         ].joined(separator: "\n")
         return "\(logo)\n\(instructions)"
+    }
+
+    private func formatDisplayPath(_ path: String) -> String {
+        let home = getHomeDir()
+        if path == home { return "~" }
+        let prefix = home.hasSuffix("/") ? home : "\(home)/"
+        if path.hasPrefix(prefix) {
+            return "~" + String(path.dropFirst(home.count))
+        }
+        return path
+    }
+
+    private func getShortPath(_ fullPath: String, source: String) -> String {
+        if source.hasPrefix("npm:") {
+            if let range = fullPath.range(of: "/node_modules/") {
+                let remainder = fullPath[range.upperBound...]
+                let parts = remainder.split(separator: "/")
+                if parts.isEmpty { return formatDisplayPath(fullPath) }
+                var index = 1
+                if parts[0].hasPrefix("@") {
+                    guard parts.count > 1 else { return formatDisplayPath(fullPath) }
+                    index = 2
+                }
+                if parts.count > index {
+                    return parts[index...].joined(separator: "/")
+                }
+                return ""
+            }
+        }
+
+        if source.hasPrefix("git:"), let range = fullPath.range(of: "/git/") {
+            let remainder = fullPath[range.upperBound...]
+            let parts = remainder.split(separator: "/")
+            guard parts.count >= 2 else { return formatDisplayPath(fullPath) }
+            let sourceValue = source.dropFirst(4)
+            let repoSpec = sourceValue.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            let sourceParts = repoSpec.split(separator: "/")
+            if let host = sourceParts.first, parts.first == host {
+                let repoCount = max(0, sourceParts.count - 1)
+                let startIndex = 1 + repoCount
+                if parts.count > startIndex {
+                    return parts[startIndex...].joined(separator: "/")
+                }
+                return ""
+            }
+        }
+
+        return formatDisplayPath(fullPath)
+    }
+
+    private func getDisplaySourceInfo(source: String, scope: String) -> (label: String, scopeLabel: String?) {
+        if source == "local" {
+            if scope == "user" {
+                return (label: "user", scopeLabel: nil)
+            }
+            if scope == "project" {
+                return (label: "project", scopeLabel: nil)
+            }
+            if scope == "temporary" {
+                return (label: "path", scopeLabel: "temp")
+            }
+            return (label: "path", scopeLabel: nil)
+        }
+
+        if source == "cli" {
+            return (label: "path", scopeLabel: scope == "temporary" ? "temp" : nil)
+        }
+
+        let scopeLabel: String?
+        switch scope {
+        case "user":
+            scopeLabel = "user"
+        case "project":
+            scopeLabel = "project"
+        case "temporary":
+            scopeLabel = "temp"
+        default:
+            scopeLabel = nil
+        }
+        return (label: source, scopeLabel: scopeLabel)
+    }
+
+    private func getScopeGroup(source: String, scope: String) -> String {
+        if source == "cli" || scope == "temporary" { return "path" }
+        if scope == "user" { return "user" }
+        if scope == "project" { return "project" }
+        return "path"
+    }
+
+    private func isPackageSource(_ source: String) -> Bool {
+        source.hasPrefix("npm:") || source.hasPrefix("git:")
+    }
+
+    private func buildScopeGroups(_ paths: [String], _ metadata: [String: PathMetadata]) -> [ScopeGroup] {
+        var groups: [String: ScopeGroup] = [
+            "user": ScopeGroup(scope: "user", paths: [], packages: [:]),
+            "project": ScopeGroup(scope: "project", paths: [], packages: [:]),
+            "path": ScopeGroup(scope: "path", paths: [], packages: [:]),
+        ]
+
+        for path in paths {
+            let meta = findMetadata(path, metadata)
+            let source = meta?.source ?? "local"
+            let scope = meta?.scope ?? "project"
+            let groupKey = getScopeGroup(source: source, scope: scope)
+            var group = groups[groupKey] ?? ScopeGroup(scope: groupKey, paths: [], packages: [:])
+
+            if isPackageSource(source) {
+                var list = group.packages[source] ?? []
+                list.append(path)
+                group.packages[source] = list
+            } else {
+                group.paths.append(path)
+            }
+
+            groups[groupKey] = group
+        }
+
+        let ordered = ["user", "project", "path"].compactMap { groups[$0] }
+        return ordered.filter { !$0.paths.isEmpty || !$0.packages.isEmpty }
+    }
+
+    private func formatScopeGroups(
+        _ groups: [ScopeGroup],
+        formatPath: (String) -> String,
+        formatPackagePath: (String, String) -> String
+    ) -> String {
+        var lines: [String] = []
+        for group in groups {
+            lines.append("  \(theme.fg(.accent, group.scope))")
+
+            let sortedPaths = group.paths.sorted { $0.localizedCompare($1) == .orderedAscending }
+            for path in sortedPaths {
+                lines.append(theme.fg(.dim, "    \(formatPath(path))"))
+            }
+
+            let sortedPackages = group.packages.keys.sorted { $0.localizedCompare($1) == .orderedAscending }
+            for source in sortedPackages {
+                lines.append("    \(theme.fg(.mdLink, source))")
+                let paths = (group.packages[source] ?? []).sorted { $0.localizedCompare($1) == .orderedAscending }
+                for path in paths {
+                    lines.append(theme.fg(.dim, "      \(formatPackagePath(path, source))"))
+                }
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func findMetadata(_ path: String, _ metadata: [String: PathMetadata]) -> PathMetadata? {
+        if let exact = metadata[path] { return exact }
+
+        var current = path
+        while let range = current.range(of: "/", options: .backwards) {
+            current = String(current[..<range.lowerBound])
+            if let parent = metadata[current] { return parent }
+            if current.isEmpty { break }
+        }
+
+        return nil
+    }
+
+    private func formatPathWithSource(_ path: String, _ metadata: [String: PathMetadata]) -> String {
+        if let meta = findMetadata(path, metadata) {
+            let shortPath = getShortPath(path, source: meta.source)
+            let info = getDisplaySourceInfo(source: meta.source, scope: meta.scope)
+            let labelText = info.scopeLabel == nil ? info.label : "\(info.label) (\(info.scopeLabel ?? ""))"
+            return "\(labelText) \(shortPath)"
+        }
+        return formatDisplayPath(path)
+    }
+
+    private func formatDiagnostics(_ diagnostics: [ResourceDiagnostic], _ metadata: [String: PathMetadata]) -> String {
+        var lines: [String] = []
+        var collisions: [String: [ResourceDiagnostic]] = [:]
+        var others: [ResourceDiagnostic] = []
+
+        for diagnostic in diagnostics {
+            if diagnostic.type == "collision", let collision = diagnostic.collision {
+                collisions[collision.name, default: []].append(diagnostic)
+            } else {
+                others.append(diagnostic)
+            }
+        }
+
+        for name in collisions.keys.sorted() {
+            guard let collisionList = collisions[name], let first = collisionList.first?.collision else { continue }
+            lines.append(theme.fg(.warning, "  \"\(name)\" collision:"))
+            lines.append(theme.fg(.dim, "    \(theme.fg(.success, "✓")) \(formatPathWithSource(first.winnerPath, metadata))"))
+            for diagnostic in collisionList {
+                if let collision = diagnostic.collision {
+                    lines.append(theme.fg(.dim, "    \(theme.fg(.warning, "✗")) \(formatPathWithSource(collision.loserPath, metadata)) (skipped)"))
+                }
+            }
+        }
+
+        for diagnostic in others {
+            let color: ThemeColor = diagnostic.type == "error" ? .error : .warning
+            if let path = diagnostic.path {
+                let sourceInfo = formatPathWithSource(path, metadata)
+                lines.append(theme.fg(color, "  \(sourceInfo)"))
+                lines.append(theme.fg(color, "    \(diagnostic.message)"))
+            } else {
+                lines.append(theme.fg(color, "  \(diagnostic.message)"))
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func showLoadedResources(_ options: ResourceDisplayOptions) {
+        guard let session else { return }
+        let settingsManager = session.settingsManager
+        let shouldShow = options.force || verboseStartup || !settingsManager.getQuietStartup()
+        if !shouldShow { return }
+
+        let metadata = session.resourceLoader.getPathMetadata()
+        let sectionHeader: (String, ThemeColor) -> String = { name, color in
+            theme.fg(color, "[\(name)]")
+        }
+
+        let contextFiles = session.resourceLoader.getAgentsFiles()
+        if !contextFiles.isEmpty {
+            let contextList = contextFiles
+                .map { theme.fg(.dim, "  \(formatDisplayPath($0.path))") }
+                .joined(separator: "\n")
+            chatContainer.addChild(Text("\(sectionHeader("Context", .mdHeading))\n\(contextList)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let skillResult = session.resourceLoader.getSkills()
+        if !skillResult.skills.isEmpty {
+            let skillPaths = skillResult.skills.map { $0.filePath }
+            let groups = buildScopeGroups(skillPaths, metadata)
+            let skillList = formatScopeGroups(
+                groups,
+                formatPath: { formatDisplayPath($0) },
+                formatPackagePath: { getShortPath($0, source: $1) }
+            )
+            chatContainer.addChild(Text("\(sectionHeader("Skills", .mdHeading))\n\(skillList)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        if !skillResult.diagnostics.isEmpty {
+            let warningLines = formatDiagnostics(skillResult.diagnostics, metadata)
+            chatContainer.addChild(Text("\(theme.fg(.warning, "[Skill conflicts]"))\n\(warningLines)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let templates = session.promptTemplates
+        if !templates.isEmpty {
+            let templatePaths = templates.map { $0.filePath }
+            let groups = buildScopeGroups(templatePaths, metadata)
+            let templateByPath = Dictionary(uniqueKeysWithValues: templates.map { ($0.filePath, $0) })
+            let templateList = formatScopeGroups(
+                groups,
+                formatPath: { path in
+                    if let template = templateByPath[path] {
+                        return "/\(template.name)"
+                    }
+                    return formatDisplayPath(path)
+                },
+                formatPackagePath: { path, _ in
+                    if let template = templateByPath[path] {
+                        return "/\(template.name)"
+                    }
+                    return formatDisplayPath(path)
+                }
+            )
+            chatContainer.addChild(Text("\(sectionHeader("Prompts", .mdHeading))\n\(templateList)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let promptDiagnostics = session.resourceLoader.getPrompts().diagnostics
+        if !promptDiagnostics.isEmpty {
+            let warningLines = formatDiagnostics(promptDiagnostics, metadata)
+            chatContainer.addChild(Text("\(theme.fg(.warning, "[Prompt conflicts]"))\n\(warningLines)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        if !options.extensionPaths.isEmpty {
+            let groups = buildScopeGroups(options.extensionPaths, metadata)
+            let extensionList = formatScopeGroups(
+                groups,
+                formatPath: { formatDisplayPath($0) },
+                formatPackagePath: { getShortPath($0, source: $1) }
+            )
+            chatContainer.addChild(Text("\(sectionHeader("Extensions", .mdHeading))\n\(extensionList)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let extensionDiagnostics = session.resourceLoader.getExtensions().diagnostics
+        if !extensionDiagnostics.isEmpty {
+            let warningLines = formatDiagnostics(extensionDiagnostics, metadata)
+            chatContainer.addChild(Text("\(theme.fg(.warning, "[Extension issues]"))\n\(warningLines)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let themes = session.resourceLoader.getThemes().themes
+        let customThemes = themes.filter { $0.path != nil }
+        if !customThemes.isEmpty {
+            let themePaths = customThemes.compactMap { $0.path }
+            let groups = buildScopeGroups(themePaths, metadata)
+            let themeList = formatScopeGroups(
+                groups,
+                formatPath: { formatDisplayPath($0) },
+                formatPackagePath: { getShortPath($0, source: $1) }
+            )
+            chatContainer.addChild(Text("\(sectionHeader("Themes", .mdHeading))\n\(themeList)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
+
+        let themeDiagnostics = session.resourceLoader.getThemes().diagnostics
+        if !themeDiagnostics.isEmpty {
+            let warningLines = formatDiagnostics(themeDiagnostics, metadata)
+            chatContainer.addChild(Text("\(theme.fg(.warning, "[Theme conflicts]"))\n\(warningLines)", paddingX: 0, paddingY: 0))
+            chatContainer.addChild(Spacer(1))
+        }
     }
 
     private func extractUserMessageText(_ message: AgentMessage) -> String {
@@ -2322,6 +2675,7 @@ public final class InteractiveMode {
             availableThemes: getAvailableThemes(),
             hideThinkingBlock: hideThinkingBlock,
             collapseChangelog: settingsManager.getCollapseChangelog(),
+            quietStartup: settingsManager.getQuietStartup(),
             doubleEscapeAction: settingsManager.getDoubleEscapeAction(),
             autocompleteMaxVisible: settingsManager.getAutocompleteMaxVisible()
         )
@@ -2376,6 +2730,9 @@ public final class InteractiveMode {
                 },
                 onCollapseChangelogChange: { collapse in
                     settingsManager.setCollapseChangelog(collapse)
+                },
+                onQuietStartupChange: { quiet in
+                    settingsManager.setQuietStartup(quiet)
                 },
                 onDoubleEscapeActionChange: { action in
                     settingsManager.setDoubleEscapeAction(action)
@@ -3211,6 +3568,10 @@ public final class InteractiveMode {
         skills = session.resourceLoader.getSkills().skills
         setRegisteredThemes(session.resourceLoader.getThemes().themes)
         rebuildAutocomplete()
+        pendingResourceDisplayOptions = ResourceDisplayOptions(
+            extensionPaths: session.resourceLoader.getExtensions().paths,
+            force: true
+        )
         chatContainer.clear()
         renderInitialMessages()
         restoreEditor(previousEditor)

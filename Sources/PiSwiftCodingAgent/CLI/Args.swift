@@ -37,6 +37,7 @@ public struct Args: Sendable {
     public var noSkills: Bool?
     public var skills: [String]?
     public var listModels: ListModelsOption?
+    public var verbose: Bool?
     public var messages: [String]
     public var fileArgs: [String]
 

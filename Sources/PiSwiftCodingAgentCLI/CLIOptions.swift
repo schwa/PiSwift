@@ -58,6 +58,9 @@ struct CLIOptions: ParsableArguments {
     @Flag(name: .customLong("no-extensions"), help: "Disable extension discovery")
     var noExtensions: Bool = false
 
+    @Flag(name: .customLong("verbose"), help: "Force verbose startup (overrides quiet startup setting)")
+    var verbose: Bool = false
+
     @Flag(name: [.customShort("p"), .customLong("print")], help: "Non-interactive mode: process prompt and exit")
     var print: Bool = false
 
@@ -136,6 +139,9 @@ extension CLIOptions {
         }
         if noExtensions {
             result.noExtensions = true
+        }
+        if verbose {
+            result.verbose = true
         }
         if print {
             result.print = true

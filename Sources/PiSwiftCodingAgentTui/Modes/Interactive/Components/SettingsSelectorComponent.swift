@@ -26,6 +26,7 @@ public struct SettingsConfig: Sendable {
     public var availableThemes: [String]
     public var hideThinkingBlock: Bool
     public var collapseChangelog: Bool
+    public var quietStartup: Bool
     public var doubleEscapeAction: String
     public var autocompleteMaxVisible: Int
 
@@ -43,6 +44,7 @@ public struct SettingsConfig: Sendable {
         availableThemes: [String],
         hideThinkingBlock: Bool,
         collapseChangelog: Bool,
+        quietStartup: Bool,
         doubleEscapeAction: String,
         autocompleteMaxVisible: Int
     ) {
@@ -59,6 +61,7 @@ public struct SettingsConfig: Sendable {
         self.availableThemes = availableThemes
         self.hideThinkingBlock = hideThinkingBlock
         self.collapseChangelog = collapseChangelog
+        self.quietStartup = quietStartup
         self.doubleEscapeAction = doubleEscapeAction
         self.autocompleteMaxVisible = autocompleteMaxVisible
     }
@@ -77,6 +80,7 @@ public struct SettingsCallbacks {
     public var onThemePreview: ((String) -> Void)?
     public var onHideThinkingBlockChange: (Bool) -> Void
     public var onCollapseChangelogChange: (Bool) -> Void
+    public var onQuietStartupChange: (Bool) -> Void
     public var onDoubleEscapeActionChange: (String) -> Void
     public var onAutocompleteMaxVisibleChange: (Int) -> Void
     public var onCancel: () -> Void
@@ -94,6 +98,7 @@ public struct SettingsCallbacks {
         onThemePreview: ((String) -> Void)? = nil,
         onHideThinkingBlockChange: @escaping (Bool) -> Void,
         onCollapseChangelogChange: @escaping (Bool) -> Void,
+        onQuietStartupChange: @escaping (Bool) -> Void,
         onDoubleEscapeActionChange: @escaping (String) -> Void,
         onAutocompleteMaxVisibleChange: @escaping (Int) -> Void,
         onCancel: @escaping () -> Void
@@ -110,6 +115,7 @@ public struct SettingsCallbacks {
         self.onThemePreview = onThemePreview
         self.onHideThinkingBlockChange = onHideThinkingBlockChange
         self.onCollapseChangelogChange = onCollapseChangelogChange
+        self.onQuietStartupChange = onQuietStartupChange
         self.onDoubleEscapeActionChange = onDoubleEscapeActionChange
         self.onAutocompleteMaxVisibleChange = onAutocompleteMaxVisibleChange
         self.onCancel = onCancel
@@ -204,6 +210,13 @@ public final class SettingsSelectorComponent: Container {
                 label: "Collapse changelog",
                 description: "Show condensed changelog after updates",
                 currentValue: config.collapseChangelog ? "true" : "false",
+                values: ["true", "false"]
+            ),
+            SettingItem(
+                id: "quiet-startup",
+                label: "Quiet startup",
+                description: "Disable verbose printing at startup",
+                currentValue: config.quietStartup ? "true" : "false",
                 values: ["true", "false"]
             ),
             SettingItem(
@@ -344,6 +357,8 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onHideThinkingBlockChange(newValue == "true")
                 case "collapse-changelog":
                     callbacks.onCollapseChangelogChange(newValue == "true")
+                case "quiet-startup":
+                    callbacks.onQuietStartupChange(newValue == "true")
                 case "double-escape-action":
                     callbacks.onDoubleEscapeActionChange(newValue)
                 case "autocomplete-max-visible":

@@ -48,3 +48,23 @@ import PiSwiftCodingAgent
     let contents = try String(contentsOfFile: settingsPath, encoding: .utf8)
     #expect(contents == invalid)
 }
+
+@Test func settingsQuietStartupRoundTrip() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-quiet-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+    manager.setQuietStartup(true)
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["quietStartup"] as? Bool == true)
+
+    let reloaded = SettingsManager.create(tempDir, tempDir)
+    #expect(reloaded.getQuietStartup() == true)
+}
