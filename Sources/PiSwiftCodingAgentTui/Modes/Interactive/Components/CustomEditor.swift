@@ -87,7 +87,7 @@ public final class CustomEditor: Component, SystemCursorAware, EditorComponent {
             return
         }
 
-        if matchesKey(data, Key.ctrl("v")) {
+        if keybindings.matches(data, .pasteImage) {
             onPasteImage?()
             return
         }

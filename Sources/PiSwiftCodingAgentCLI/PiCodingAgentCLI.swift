@@ -125,14 +125,35 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let isInteractive = parsed.print != true && parsed.mode == nil
         let mode = parsed.mode ?? .text
         let shouldPrintMessages = isInteractive
+        let sessionContext = sessionManager.buildSessionContext()
+        let hasExistingSession = !sessionContext.messages.isEmpty
+        let defaultThinkingLevel = ThinkingLevel(rawValue: settingsManager.getDefaultThinkingLevel() ?? "off") ?? .off
+        let useScopedModels = !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true
 
-        var initialModel = await findInitialModelForSession(parsed, scopedModels, settingsManager, modelRegistry)
-        var initialThinking: ThinkingLevel = .off
+        if !scopedModels.isEmpty {
+            scopedModels = scopedModels.map { scoped in
+                let resolvedThinking = scoped.isThinkingExplicit ? scoped.thinkingLevel : defaultThinkingLevel
+                return ScopedModel(model: scoped.model, thinkingLevel: resolvedThinking, isThinkingExplicit: scoped.isThinkingExplicit)
+            }
+        }
 
-        if !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true {
-            initialThinking = scopedModels[0].thinkingLevel
-        } else if let savedThinking = settingsManager.getDefaultThinkingLevel() {
-            initialThinking = ThinkingLevel(rawValue: savedThinking) ?? .off
+        let initialSelection = await findInitialModelForSession(
+            parsed,
+            scopedModels,
+            settingsManager,
+            modelRegistry,
+            sessionContext,
+            shouldPrintMessages
+        )
+        let initialModel = initialSelection.model
+        var initialThinking: ThinkingLevel = defaultThinkingLevel
+        if hasExistingSession {
+            initialThinking = ThinkingLevel(rawValue: sessionContext.thinkingLevel) ?? initialThinking
+        }
+        if let scopedModel = initialSelection.scopedModel {
+            if scopedModel.isThinkingExplicit || !hasExistingSession {
+                initialThinking = scopedModel.thinkingLevel
+            }
         }
 
         if !isInteractive && initialModel == nil {
@@ -147,8 +168,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 if let provider = parsed.provider, let modelId = parsed.model {
                     return modelRegistry.find(provider, modelId)
                 }
-                if !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true {
-                    return scopedModels[0].model
+                if useScopedModels, let scopedModel = initialSelection.scopedModel {
+                    return scopedModel.model
                 }
                 return nil
             }()
@@ -298,20 +319,6 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         let systemPrompt = rebuildSystemPrompt(initialActiveToolNames)
         time("buildSystemPrompt")
 
-        if parsed.continue == true || parsed.resume == true {
-            let context = sessionManager.buildSessionContext()
-            if !context.messages.isEmpty {
-                initialThinking = ThinkingLevel(rawValue: context.thinkingLevel) ?? initialThinking
-                if let modelInfo = context.model {
-                    if let restored = modelRegistry.find(modelInfo.provider, modelInfo.modelId) {
-                        initialModel = restored
-                    } else if shouldPrintMessages {
-                        print("Could not restore model \(modelInfo.provider)/\(modelInfo.modelId). Using fallback.")
-                    }
-                }
-            }
-        }
-
         if let cliThinking = parsed.thinking {
             initialThinking = cliThinking
         }
@@ -356,9 +363,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         if parsed.continue == true || parsed.resume == true {
-            let context = sessionManager.buildSessionContext()
-            if !context.messages.isEmpty {
-                createdAgent.replaceMessages(context.messages)
+            if !sessionContext.messages.isEmpty {
+                createdAgent.replaceMessages(sessionContext.messages)
             }
         }
 
@@ -415,7 +421,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
             if !scopedModels.isEmpty {
                 let modelList = scopedModels.map { scoped in
-                    let thinking = scoped.thinkingLevel == .off ? "" : ":\(scoped.thinkingLevel.rawValue)"
+                    let thinking = scoped.isThinkingExplicit ? ":\(scoped.thinkingLevel.rawValue)" : ""
                     return "\(scoped.model.id)\(thinking)"
                 }.joined(separator: ", ")
                 print("Model scope: \(modelList) (Ctrl+P to cycle)")
@@ -632,35 +638,84 @@ private func createSessionManager(_ parsed: Args, cwd: String, resumeSession: St
     return SessionManager.create(cwd, nil)
 }
 
+private struct InitialModelSelection {
+    var model: Model?
+    var scopedModel: ScopedModel?
+}
+
 private func findInitialModelForSession(
     _ parsed: Args,
     _ scopedModels: [ScopedModel],
     _ settingsManager: SettingsManager,
-    _ modelRegistry: ModelRegistry
-) async -> Model? {
+    _ modelRegistry: ModelRegistry,
+    _ sessionContext: SessionContext,
+    _ shouldPrintMessages: Bool
+) async -> InitialModelSelection {
+    let hasExistingSession = !sessionContext.messages.isEmpty
+    let useScopedModels = !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true
+    var restoreWarning: String?
+
     if let provider = parsed.provider, let modelId = parsed.model {
         if let model = modelRegistry.find(provider, modelId) {
-            return model
+            return InitialModelSelection(model: model, scopedModel: nil)
         }
         fputs("Model \(provider)/\(modelId) not found\n", stderr)
         Darwin.exit(1)
     }
 
-    if !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true {
-        return scopedModels[0].model
+    if useScopedModels {
+        if let provider = settingsManager.getDefaultProvider(),
+           let modelId = settingsManager.getDefaultModel(),
+           let savedModel = modelRegistry.find(provider, modelId),
+           let savedInScope = scopedModels.first(where: { modelsAreEqual($0.model, savedModel) }) {
+            return InitialModelSelection(model: savedInScope.model, scopedModel: savedInScope)
+        }
+        return InitialModelSelection(model: scopedModels[0].model, scopedModel: scopedModels[0])
+    }
+
+    if hasExistingSession, let modelInfo = sessionContext.model {
+        let restored = modelRegistry.find(modelInfo.provider, modelInfo.modelId)
+        var hasApiKey = false
+        if let restored {
+            hasApiKey = await modelRegistry.getApiKey(restored.provider) != nil
+        }
+        if let restored, hasApiKey {
+            if shouldPrintMessages {
+                print("Restored model: \(modelInfo.provider)/\(modelInfo.modelId)")
+            }
+            return InitialModelSelection(model: restored, scopedModel: nil)
+        }
+
+        let reason = restored == nil ? "model no longer exists" : "no API key available"
+        restoreWarning = "Could not restore model \(modelInfo.provider)/\(modelInfo.modelId) (\(reason))."
+        if shouldPrintMessages {
+            print("Warning: \(restoreWarning!)")
+        }
     }
 
     if let provider = settingsManager.getDefaultProvider(),
        let modelId = settingsManager.getDefaultModel(),
        let model = modelRegistry.find(provider, modelId) {
-        return model
+        return InitialModelSelection(model: model, scopedModel: nil)
     }
 
     let available = await modelRegistry.getAvailable()
     if let preferred = await selectDefaultModel(available: available, registry: modelRegistry) {
-        return preferred
+        if restoreWarning != nil && shouldPrintMessages {
+            print("Falling back to: \(preferred.provider)/\(preferred.id)")
+        }
+        return InitialModelSelection(model: preferred, scopedModel: nil)
     }
-    return available.first
+    if let fallback = available.first {
+        if restoreWarning != nil && shouldPrintMessages {
+            print("Falling back to: \(fallback.provider)/\(fallback.id)")
+        }
+        return InitialModelSelection(model: fallback, scopedModel: nil)
+    }
+    if restoreWarning != nil, shouldPrintMessages {
+        print("No fallback model available.")
+    }
+    return InitialModelSelection(model: nil, scopedModel: nil)
 }
 
 private func runSimpleInteractiveLoop(

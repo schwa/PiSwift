@@ -5,16 +5,19 @@ import PiSwiftAgent
 public struct ScopedModel: Sendable {
     public var model: Model
     public var thinkingLevel: ThinkingLevel
+    public var isThinkingExplicit: Bool
 
-    public init(model: Model, thinkingLevel: ThinkingLevel) {
+    public init(model: Model, thinkingLevel: ThinkingLevel, isThinkingExplicit: Bool = true) {
         self.model = model
         self.thinkingLevel = thinkingLevel
+        self.isThinkingExplicit = isThinkingExplicit
     }
 }
 
 public struct ParsedModelResult: Sendable {
     public var model: Model?
     public var thinkingLevel: ThinkingLevel
+    public var isThinkingExplicit: Bool
     public var warning: String?
 }
 
@@ -66,11 +69,11 @@ private func tryMatchModel(_ modelPattern: String, availableModels: [Model]) -> 
 
 public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> ParsedModelResult {
     if let exact = tryMatchModel(pattern, availableModels: availableModels) {
-        return ParsedModelResult(model: exact, thinkingLevel: .off, warning: nil)
+        return ParsedModelResult(model: exact, thinkingLevel: .off, isThinkingExplicit: false, warning: nil)
     }
 
     guard let lastColon = pattern.lastIndex(of: ":") else {
-        return ParsedModelResult(model: nil, thinkingLevel: .off, warning: nil)
+        return ParsedModelResult(model: nil, thinkingLevel: .off, isThinkingExplicit: false, warning: nil)
     }
 
     let prefix = String(pattern[..<lastColon])
@@ -79,8 +82,11 @@ public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> 
     if isValidThinkingLevel(suffix) {
         let result = parseModelPattern(prefix, availableModels)
         if let model = result.model {
-            let level = result.warning == nil ? ThinkingLevel(rawValue: suffix) ?? .off : .off
-            return ParsedModelResult(model: model, thinkingLevel: level, warning: result.warning)
+            let level = ThinkingLevel(rawValue: suffix) ?? .off
+            if result.warning == nil {
+                return ParsedModelResult(model: model, thinkingLevel: level, isThinkingExplicit: true, warning: nil)
+            }
+            return ParsedModelResult(model: model, thinkingLevel: .off, isThinkingExplicit: false, warning: result.warning)
         }
         return result
     } else {
@@ -89,6 +95,7 @@ public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> 
             return ParsedModelResult(
                 model: model,
                 thinkingLevel: .off,
+                isThinkingExplicit: false,
                 warning: "Invalid thinking level \"\(suffix)\" in pattern \"\(pattern)\". Using \"off\" instead."
             )
         }
@@ -104,11 +111,13 @@ public func resolveModelScope(_ patterns: [String], _ modelRegistry: ModelRegist
         if pattern.contains("*") || pattern.contains("?") || pattern.contains("[") {
             var globPattern = pattern
             var thinkingLevel: ThinkingLevel = .off
+            var isThinkingExplicit = false
             if let colon = pattern.lastIndex(of: ":") {
                 let suffix = String(pattern[pattern.index(after: colon)...])
                 if isValidThinkingLevel(suffix) {
                     thinkingLevel = ThinkingLevel(rawValue: suffix) ?? .off
                     globPattern = String(pattern[..<colon])
+                    isThinkingExplicit = true
                 }
             }
 
@@ -116,7 +125,7 @@ public func resolveModelScope(_ patterns: [String], _ modelRegistry: ModelRegist
                 let fullId = "\(model.provider)/\(model.id)"
                 if matchesGlob(fullId, globPattern) || matchesGlob(model.id, globPattern) {
                     if !scoped.contains(where: { modelsAreEqual($0.model, model) }) {
-                        scoped.append(ScopedModel(model: model, thinkingLevel: thinkingLevel))
+                        scoped.append(ScopedModel(model: model, thinkingLevel: thinkingLevel, isThinkingExplicit: isThinkingExplicit))
                     }
                 }
             }
@@ -126,7 +135,7 @@ public func resolveModelScope(_ patterns: [String], _ modelRegistry: ModelRegist
         let parsed = parseModelPattern(pattern, available)
         if let model = parsed.model {
             if !scoped.contains(where: { modelsAreEqual($0.model, model) }) {
-                scoped.append(ScopedModel(model: model, thinkingLevel: parsed.thinkingLevel))
+                scoped.append(ScopedModel(model: model, thinkingLevel: parsed.thinkingLevel, isThinkingExplicit: parsed.isThinkingExplicit))
             }
         }
     }

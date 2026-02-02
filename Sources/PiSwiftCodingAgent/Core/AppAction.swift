@@ -12,4 +12,5 @@ public enum AppAction: String, CaseIterable, Sendable {
     case externalEditor
     case followUp
     case dequeue
+    case pasteImage
 }

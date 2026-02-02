@@ -18,6 +18,7 @@ public let DEFAULT_APP_KEYBINDINGS: [AppAction: [KeyId]] = [
     .externalEditor: [Key.ctrl("g")],
     .followUp: [Key.alt("enter")],
     .dequeue: [Key.alt("up")],
+    .pasteImage: [Key.ctrl("v")],
 ]
 
 public final class KeybindingsManager {

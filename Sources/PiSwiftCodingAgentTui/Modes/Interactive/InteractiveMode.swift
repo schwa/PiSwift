@@ -1541,6 +1541,7 @@ public final class InteractiveMode {
         let externalEditor = formatKeyDisplay(keybindings.getDisplayString(.externalEditor))
         let followUp = formatKeyDisplay(keybindings.getDisplayString(.followUp))
         let dequeue = formatKeyDisplay(keybindings.getDisplayString(.dequeue))
+        let pasteImage = formatKeyDisplay(keybindings.getDisplayString(.pasteImage))
         let instructions = [
             theme.fg(.dim, interrupt) + theme.fg(.muted, " to interrupt"),
             theme.fg(.dim, clear) + theme.fg(.muted, " to clear"),
@@ -1558,7 +1559,7 @@ public final class InteractiveMode {
             theme.fg(.dim, "!") + theme.fg(.muted, " to run bash"),
             theme.fg(.dim, followUp) + theme.fg(.muted, " to queue follow-up"),
             theme.fg(.dim, dequeue) + theme.fg(.muted, " to restore queued messages"),
-            theme.fg(.dim, "ctrl+v") + theme.fg(.muted, " to paste image"),
+            theme.fg(.dim, pasteImage) + theme.fg(.muted, " to paste image"),
         ].joined(separator: "\n")
         return "\(logo)\n\(instructions)"
     }
@@ -2521,8 +2522,8 @@ public final class InteractiveMode {
                 let currentThinkingLevel = session.agent.state.thinkingLevel
                 let scoped = await resolveModelScope(enabledIds, session.modelRegistry)
                 let resolved = scoped.map { scopedModel in
-                    let level = scopedModel.thinkingLevel == .off ? currentThinkingLevel : scopedModel.thinkingLevel
-                    return ScopedModel(model: scopedModel.model, thinkingLevel: level)
+                    let level = scopedModel.isThinkingExplicit ? scopedModel.thinkingLevel : currentThinkingLevel
+                    return ScopedModel(model: scopedModel.model, thinkingLevel: level, isThinkingExplicit: scopedModel.isThinkingExplicit)
                 }
                 session.setScopedModels(resolved)
                 self.scopedModels = resolved

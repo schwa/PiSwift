@@ -61,15 +61,18 @@ private func mockModels() -> [Model] {
     let exact = parseModelPattern("claude-sonnet-4-5", models)
     #expect(exact.model?.id == "claude-sonnet-4-5")
     #expect(exact.thinkingLevel == .off)
+    #expect(exact.isThinkingExplicit == false)
     #expect(exact.warning == nil)
 
     let partial = parseModelPattern("sonnet", models)
     #expect(partial.model?.id == "claude-sonnet-4-5")
     #expect(partial.thinkingLevel == .off)
+    #expect(partial.isThinkingExplicit == false)
 
     let missing = parseModelPattern("nonexistent", models)
     #expect(missing.model == nil)
     #expect(missing.thinkingLevel == .off)
+    #expect(missing.isThinkingExplicit == false)
 }
 
 @Test func parseModelPatternThinkingLevels() {
@@ -77,16 +80,19 @@ private func mockModels() -> [Model] {
     let high = parseModelPattern("sonnet:high", models)
     #expect(high.model?.id == "claude-sonnet-4-5")
     #expect(high.thinkingLevel == .high)
+    #expect(high.isThinkingExplicit == true)
     #expect(high.warning == nil)
 
     let medium = parseModelPattern("gpt-4o:medium", models)
     #expect(medium.model?.id == "gpt-4o")
     #expect(medium.thinkingLevel == .medium)
+    #expect(medium.isThinkingExplicit == true)
 
     for level in ["off", "minimal", "low", "medium", "high", "xhigh"] {
         let result = parseModelPattern("sonnet:\(level)", models)
         #expect(result.model?.id == "claude-sonnet-4-5")
         #expect(result.thinkingLevel.rawValue == level)
+        #expect(result.isThinkingExplicit == true)
         #expect(result.warning == nil)
     }
 }
@@ -96,10 +102,12 @@ private func mockModels() -> [Model] {
     let result = parseModelPattern("sonnet:random", models)
     #expect(result.model?.id == "claude-sonnet-4-5")
     #expect(result.thinkingLevel == .off)
+    #expect(result.isThinkingExplicit == false)
     #expect(result.warning?.contains("Invalid thinking level") == true)
 
     let result2 = parseModelPattern("gpt-4o:invalid", models)
     #expect(result2.model?.id == "gpt-4o")
+    #expect(result2.isThinkingExplicit == false)
     #expect(result2.warning?.contains("Invalid thinking level") == true)
 }
 
@@ -108,19 +116,24 @@ private func mockModels() -> [Model] {
     let qwen = parseModelPattern("qwen/qwen3-coder:exacto", models)
     #expect(qwen.model?.id == "qwen/qwen3-coder:exacto")
     #expect(qwen.thinkingLevel == .off)
+    #expect(qwen.isThinkingExplicit == false)
 
     let qwenProvider = parseModelPattern("openrouter/qwen/qwen3-coder:exacto", models)
     #expect(qwenProvider.model?.id == "qwen/qwen3-coder:exacto")
     #expect(qwenProvider.model?.provider == "openrouter")
+    #expect(qwenProvider.isThinkingExplicit == false)
 
     let qwenHigh = parseModelPattern("qwen/qwen3-coder:exacto:high", models)
     #expect(qwenHigh.thinkingLevel == .high)
+    #expect(qwenHigh.isThinkingExplicit == true)
 
     let qwenProviderHigh = parseModelPattern("openrouter/qwen/qwen3-coder:exacto:high", models)
     #expect(qwenProviderHigh.thinkingLevel == .high)
+    #expect(qwenProviderHigh.isThinkingExplicit == true)
 
     let extended = parseModelPattern("openai/gpt-4o:extended", models)
     #expect(extended.model?.id == "openai/gpt-4o:extended")
+    #expect(extended.isThinkingExplicit == false)
 }
 
 @Test func parseModelPatternInvalidOpenRouterThinking() {
@@ -128,11 +141,13 @@ private func mockModels() -> [Model] {
     let result = parseModelPattern("qwen/qwen3-coder:exacto:random", models)
     #expect(result.model?.id == "qwen/qwen3-coder:exacto")
     #expect(result.thinkingLevel == .off)
+    #expect(result.isThinkingExplicit == false)
     #expect(result.warning?.contains("Invalid thinking level") == true)
 
     let result2 = parseModelPattern("qwen/qwen3-coder:exacto:high:random", models)
     #expect(result2.model?.id == "qwen/qwen3-coder:exacto")
     #expect(result2.thinkingLevel == .off)
+    #expect(result2.isThinkingExplicit == false)
     #expect(result2.warning?.contains("Invalid thinking level") == true)
 }
 
@@ -141,8 +156,10 @@ private func mockModels() -> [Model] {
     let empty = parseModelPattern("", models)
     #expect(empty.model != nil)
     #expect(empty.thinkingLevel == .off)
+    #expect(empty.isThinkingExplicit == false)
 
     let trailing = parseModelPattern("sonnet:", models)
     #expect(trailing.model?.id == "claude-sonnet-4-5")
     #expect(trailing.warning?.contains("Invalid thinking level") == true)
+    #expect(trailing.isThinkingExplicit == false)
 }
