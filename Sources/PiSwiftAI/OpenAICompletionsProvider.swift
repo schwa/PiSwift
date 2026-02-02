@@ -656,7 +656,8 @@ private func streamChatCompletions(
             let delimiterLf = Data([10, 10])
 
             do {
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                let session = proxySession(for: request.url)
+                let (bytes, response) = try await session.bytes(for: request)
                 guard let http = response as? HTTPURLResponse else {
                     throw OpenAICompletionsStreamError.invalidResponse
                 }

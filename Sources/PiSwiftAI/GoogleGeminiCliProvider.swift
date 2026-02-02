@@ -184,7 +184,8 @@ public func streamGoogleGeminiCli(
                         request.setValue(value, forHTTPHeaderField: key)
                     }
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let session = proxySession(for: request.url)
+                    let (bytes, response) = try await session.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         throw GoogleGeminiCliError.invalidResponse
                     }
@@ -390,7 +391,8 @@ public func streamGoogleGeminiCli(
                         request.setValue(value, forHTTPHeaderField: key)
                     }
 
-                    let (retryBytes, retryResponse) = try await URLSession.shared.bytes(for: request)
+                    let session = proxySession(for: request.url)
+                    let (retryBytes, retryResponse) = try await session.bytes(for: request)
                     guard let retryHttp = retryResponse as? HTTPURLResponse, retryHttp.statusCode >= 200 && retryHttp.statusCode < 300 else {
                         let body = try await collectSseStreamData(from: retryBytes)
                         let message = String(data: body, encoding: .utf8) ?? "HTTP \(retryResponse)"

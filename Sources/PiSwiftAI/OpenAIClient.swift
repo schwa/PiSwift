@@ -34,6 +34,6 @@ func makeOpenAIClient(
         timeoutInterval: 60,
         customHeaders: mergedHeaders
     )
-
-    return OpenAI(configuration: configuration, middlewares: middlewares)
+    let session = proxySession(for: url)
+    return OpenAI(configuration: configuration, session: session, middlewares: middlewares)
 }

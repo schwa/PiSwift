@@ -444,7 +444,8 @@ private func postJson(url: URL, body: [String: Any]) async throws -> HttpRespons
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
 
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let session = proxySession(for: request.url)
+    let (data, response) = try await session.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     if status != 200 {
         let message = String(data: data, encoding: .utf8) ?? ""
@@ -462,7 +463,8 @@ private func postForm(url: URL, params: [String: String]) async throws -> HttpRe
         .joined(separator: "&")
     request.httpBody = form.data(using: .utf8)
 
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let session = proxySession(for: request.url)
+    let (data, response) = try await session.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     if status != 200 {
         let message = String(data: data, encoding: .utf8) ?? ""

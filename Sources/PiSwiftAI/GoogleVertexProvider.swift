@@ -44,7 +44,8 @@ public func streamGoogleVertex(
                 request.setValue(value, forHTTPHeaderField: key)
             }
 
-            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            let session = proxySession(for: request.url)
+            let (bytes, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw GoogleVertexError.invalidResponse
             }
