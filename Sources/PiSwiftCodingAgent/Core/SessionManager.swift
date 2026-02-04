@@ -397,14 +397,15 @@ public func parseSessionEntries(_ content: String) -> [FileEntry] {
     return []
 }
 
-public func migrateSessionEntries(_ entries: inout [FileEntry]) {
+@discardableResult
+public func migrateSessionEntries(_ entries: inout [FileEntry]) -> Bool {
     guard let headerIndex = entries.firstIndex(where: { if case .session = $0 { return true } else { return false } }) else {
-        return
+        return false
     }
-    guard case .session(var header) = entries[headerIndex] else { return }
+    guard case .session(var header) = entries[headerIndex] else { return false }
     let version = header.version ?? 1
     if version >= CURRENT_SESSION_VERSION {
-        return
+        return false
     }
 
     // v1 → v2: add id/parentId tree structure
@@ -434,6 +435,7 @@ public func migrateSessionEntries(_ entries: inout [FileEntry]) {
     // Update header version
     header.version = CURRENT_SESSION_VERSION
     entries[headerIndex] = .session(header)
+    return true
 }
 
 public func buildSessionContext(_ entries: [SessionEntry], _ leafId: String? = nil, _ byId: [String: SessionEntry]? = nil) -> SessionContext {
@@ -549,6 +551,31 @@ public func loadEntriesFromFile(_ filePath: String) -> [FileEntry] {
     return entries
 }
 
+/// Efficiently checks if a file has a valid session header by reading only the first 512 bytes
+public func isValidSessionFile(_ filePath: String) -> Bool {
+    guard let handle = FileHandle(forReadingAtPath: filePath) else {
+        return false
+    }
+    defer { try? handle.close() }
+
+    guard let data = try? handle.read(upToCount: 512),
+          let content = String(data: data, encoding: .utf8) else {
+        return false
+    }
+
+    let firstLine = content.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+    guard !firstLine.isEmpty,
+          let jsonData = firstLine.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let type = json["type"] as? String,
+          type == "session",
+          json["id"] is String else {
+        return false
+    }
+
+    return true
+}
+
 public func findMostRecentSession(_ dir: String) -> String? {
     guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
     let jsonlFiles = files.filter { $0.hasSuffix(".jsonl") }
@@ -556,8 +583,7 @@ public func findMostRecentSession(_ dir: String) -> String? {
 
     for file in jsonlFiles {
         let path = URL(fileURLWithPath: dir).appendingPathComponent(file).path
-        let entries = loadEntriesFromFile(path)
-        guard let first = entries.first, case .session = first else { continue }
+        guard isValidSessionFile(path) else { continue }
         if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
            let mtime = attrs[.modificationDate] as? Date {
             if newest == nil || mtime > newest!.date {
@@ -747,6 +773,16 @@ public final class SessionManager: Sendable {
         }.first
         let cwd = header?.cwd ?? FileManager.default.currentDirectoryPath
         let dir = sessionDir ?? URL(fileURLWithPath: path).deletingLastPathComponent().path
+
+        // If file exists but is corrupted (empty or no valid header), recover it
+        if FileManager.default.fileExists(atPath: path) && entries.isEmpty {
+            let sm = SessionManager(cwd, dir, nil, true)
+            _ = sm.newSession()
+            sm.sessionFile = path
+            sm.rewriteFile()
+            return sm
+        }
+
         return SessionManager(cwd, dir, path, true)
     }
 
@@ -1144,9 +1180,22 @@ public final class SessionManager: Sendable {
         }
     }
 
+    private func rewriteFile() {
+        guard persist, let sessionFile else { return }
+        var lines: [String] = []
+        if let header {
+            lines.append(encodeSessionHeader(header))
+        }
+        for entry in entries {
+            lines.append(encodeSessionEntry(entry))
+        }
+        let content = lines.joined(separator: "\n") + "\n"
+        try? content.write(toFile: sessionFile, atomically: true, encoding: .utf8)
+    }
+
     private func loadFromFile(_ path: String) {
         var entries = loadEntriesFromFile(path)
-        migrateSessionEntries(&entries)
+        let migrated = migrateSessionEntries(&entries)
         self.entries = entries.compactMap { entry -> SessionEntry? in
             if case .entry(let entry) = entry { return entry }
             return nil
@@ -1157,6 +1206,9 @@ public final class SessionManager: Sendable {
         }
         self.sessionFile = path
         rebuildIndex()
+        if migrated {
+            rewriteFile()
+        }
     }
 
     private func rebuildIndex() {
