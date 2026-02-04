@@ -856,6 +856,10 @@ public final class DefaultPackageManager: PackageManager {
         globalBaseDir: String,
         projectBaseDir: String
     ) {
+        // Resolve symlinks to handle /var vs /private/var on macOS
+        let standardGlobalBaseDir = resolveRealPath(globalBaseDir)
+        let standardProjectBaseDir = resolveRealPath(projectBaseDir)
+
         let userMetadata = PathMetadata(source: "auto", scope: "user", origin: "top-level", baseDir: globalBaseDir)
         let projectMetadata = PathMetadata(source: "auto", scope: "project", origin: "top-level", baseDir: projectBaseDir)
 
@@ -873,16 +877,16 @@ public final class DefaultPackageManager: PackageManager {
         )
 
         let userDirs = SettingsPaths(
-            extensions: [URL(fileURLWithPath: globalBaseDir).appendingPathComponent("extensions").path],
-            skills: [URL(fileURLWithPath: globalBaseDir).appendingPathComponent("skills").path],
-            prompts: [URL(fileURLWithPath: globalBaseDir).appendingPathComponent("prompts").path],
-            themes: [URL(fileURLWithPath: globalBaseDir).appendingPathComponent("themes").path]
+            extensions: [URL(fileURLWithPath: standardGlobalBaseDir).appendingPathComponent("extensions").path],
+            skills: [URL(fileURLWithPath: standardGlobalBaseDir).appendingPathComponent("skills").path],
+            prompts: [URL(fileURLWithPath: standardGlobalBaseDir).appendingPathComponent("prompts").path],
+            themes: [URL(fileURLWithPath: standardGlobalBaseDir).appendingPathComponent("themes").path]
         )
         let projectDirs = SettingsPaths(
-            extensions: [URL(fileURLWithPath: projectBaseDir).appendingPathComponent("extensions").path],
-            skills: [URL(fileURLWithPath: projectBaseDir).appendingPathComponent("skills").path],
-            prompts: [URL(fileURLWithPath: projectBaseDir).appendingPathComponent("prompts").path],
-            themes: [URL(fileURLWithPath: projectBaseDir).appendingPathComponent("themes").path]
+            extensions: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("extensions").path],
+            skills: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("skills").path],
+            prompts: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("prompts").path],
+            themes: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("themes").path]
         )
 
         func addResources(
@@ -903,28 +907,28 @@ public final class DefaultPackageManager: PackageManager {
             paths: collectAutoExtensionEntries(dir: userDirs.extensions.first ?? ""),
             metadata: userMetadata,
             overrides: userOverrides.extensions,
-            baseDir: globalBaseDir
+            baseDir: standardGlobalBaseDir
         )
         addResources(
             resourceType: .skills,
             paths: collectAutoSkillEntries(dir: userDirs.skills.first ?? ""),
             metadata: userMetadata,
             overrides: userOverrides.skills,
-            baseDir: globalBaseDir
+            baseDir: standardGlobalBaseDir
         )
         addResources(
             resourceType: .prompts,
             paths: collectAutoPromptEntries(dir: userDirs.prompts.first ?? ""),
             metadata: userMetadata,
             overrides: userOverrides.prompts,
-            baseDir: globalBaseDir
+            baseDir: standardGlobalBaseDir
         )
         addResources(
             resourceType: .themes,
             paths: collectAutoThemeEntries(dir: userDirs.themes.first ?? ""),
             metadata: userMetadata,
             overrides: userOverrides.themes,
-            baseDir: globalBaseDir
+            baseDir: standardGlobalBaseDir
         )
 
         addResources(
@@ -932,28 +936,28 @@ public final class DefaultPackageManager: PackageManager {
             paths: collectAutoExtensionEntries(dir: projectDirs.extensions.first ?? ""),
             metadata: projectMetadata,
             overrides: projectOverrides.extensions,
-            baseDir: projectBaseDir
+            baseDir: standardProjectBaseDir
         )
         addResources(
             resourceType: .skills,
             paths: collectAutoSkillEntries(dir: projectDirs.skills.first ?? ""),
             metadata: projectMetadata,
             overrides: projectOverrides.skills,
-            baseDir: projectBaseDir
+            baseDir: standardProjectBaseDir
         )
         addResources(
             resourceType: .prompts,
             paths: collectAutoPromptEntries(dir: projectDirs.prompts.first ?? ""),
             metadata: projectMetadata,
             overrides: projectOverrides.prompts,
-            baseDir: projectBaseDir
+            baseDir: standardProjectBaseDir
         )
         addResources(
             resourceType: .themes,
             paths: collectAutoThemeEntries(dir: projectDirs.themes.first ?? ""),
             metadata: projectMetadata,
             overrides: projectOverrides.themes,
-            baseDir: projectBaseDir
+            baseDir: standardProjectBaseDir
         )
     }
 
@@ -1234,6 +1238,14 @@ private let ignoreFileNames = [".gitignore", ".ignore", ".fdignore"]
 
 private func toPosixPath(_ path: String) -> String {
     path.replacingOccurrences(of: "\\", with: "/")
+}
+
+/// Resolves symlinks in a path to get the canonical path.
+/// Handles /var -> /private/var on macOS.
+private func resolveRealPath(_ path: String) -> String {
+    guard let resolved = realpath(path, nil) else { return path }
+    defer { free(resolved) }
+    return String(cString: resolved)
 }
 
 private func prefixIgnorePattern(_ line: String, prefix: String) -> String? {

@@ -349,6 +349,10 @@ public final class DefaultResourceLoader: ResourceLoader {
         if trimmed.hasPrefix("~") {
             return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst())).path
         }
+        // If the path is already absolute, return it as-is (standardized)
+        if trimmed.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmed).standardized.path
+        }
         return URL(fileURLWithPath: cwd).appendingPathComponent(trimmed).standardized.path
     }
 
