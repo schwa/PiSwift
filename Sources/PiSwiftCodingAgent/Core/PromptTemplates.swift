@@ -16,31 +16,6 @@ public struct PromptTemplate: Sendable {
     }
 }
 
-private func parseFrontmatter(_ content: String) -> (frontmatter: [String: String], content: String) {
-    guard content.hasPrefix("---") else {
-        return ([:], content)
-    }
-
-    guard let endRange = content.range(of: "\n---", options: [], range: content.index(content.startIndex, offsetBy: 3)..<content.endIndex) else {
-        return ([:], content)
-    }
-
-    let frontmatterBlock = String(content[content.index(content.startIndex, offsetBy: 4)..<endRange.lowerBound])
-    let bodyStart = content.index(endRange.lowerBound, offsetBy: 4)
-    let body = String(content[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-    var frontmatter: [String: String] = [:]
-    for line in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false) {
-        let parts = line.split(separator: ":", maxSplits: 1).map { String($0) }
-        guard parts.count == 2 else { continue }
-        let key = parts[0].trimmingCharacters(in: .whitespaces)
-        let value = parts[1].trimmingCharacters(in: .whitespaces)
-        frontmatter[key] = value
-    }
-
-    return (frontmatter, body)
-}
-
 private func normalizePromptPath(_ input: String) -> String {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed == "~" { return getHomeDir() }
@@ -70,7 +45,7 @@ private func loadTemplateFromFile(_ filePath: String, source: String, sourceLabe
 
     var description = parsed.frontmatter["description"] ?? ""
     if description.isEmpty {
-        if let firstLine = parsed.content.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+        if let firstLine = parsed.body.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             let line = String(firstLine)
             description = line.count > 60 ? String(line.prefix(60)) + "..." : line
         }
@@ -81,7 +56,7 @@ private func loadTemplateFromFile(_ filePath: String, source: String, sourceLabe
     return PromptTemplate(
         name: baseName,
         description: description,
-        content: parsed.content,
+        content: parsed.body,
         source: source,
         filePath: filePath
     )

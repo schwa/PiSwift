@@ -67,35 +67,6 @@ public struct LoadSubagentsOptions: Sendable {
     }
 }
 
-private func parseFrontmatter(_ content: String) -> (frontmatter: [String: String], content: String) {
-    let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
-    guard normalized.hasPrefix("---") else {
-        return ([:], normalized)
-    }
-
-    guard let endRange = normalized.range(of: "\n---", options: [], range: normalized.index(normalized.startIndex, offsetBy: 3)..<normalized.endIndex) else {
-        return ([:], normalized)
-    }
-
-    let frontmatterBlock = String(normalized[normalized.index(normalized.startIndex, offsetBy: 4)..<endRange.lowerBound])
-    let bodyStart = normalized.index(endRange.lowerBound, offsetBy: 4)
-    let body = String(normalized[bodyStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-    var frontmatter: [String: String] = [:]
-    for line in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false) {
-        let parts = line.split(separator: ":", maxSplits: 1).map { String($0) }
-        guard parts.count == 2 else { continue }
-        let key = parts[0].trimmingCharacters(in: .whitespaces)
-        var value = parts[1].trimmingCharacters(in: .whitespaces)
-        if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
-            value = String(value.dropFirst().dropLast())
-        }
-        frontmatter[key] = value
-    }
-
-    return (frontmatter, body)
-}
-
 private func parseToolsList(_ raw: String) -> [String] {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return [] }
@@ -141,7 +112,7 @@ private func loadAgentsFromDir(_ dir: String, source: SubagentSource) -> [Subage
 
         var description = parsed.frontmatter["description"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if description.isEmpty {
-            if let firstLine = parsed.content.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            if let firstLine = parsed.body.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
                 let line = String(firstLine)
                 description = line.count > 60 ? String(line.prefix(60)) + "..." : line
             }
@@ -161,7 +132,7 @@ private func loadAgentsFromDir(_ dir: String, source: SubagentSource) -> [Subage
             tools: tools,
             model: model?.isEmpty == false ? model : nil,
             outputFormat: outputFormat?.isEmpty == false ? outputFormat : nil,
-            systemPrompt: parsed.content,
+            systemPrompt: parsed.body,
             source: source,
             sourceLabel: source.rawValue,
             path: entry.path
