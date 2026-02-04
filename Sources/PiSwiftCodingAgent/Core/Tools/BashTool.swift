@@ -45,9 +45,12 @@ public struct DefaultBashOperations: BashOperations {
 
 public struct BashToolOptions: Sendable {
     public var operations: BashOperations?
+    /// Command prefix prepended to every command (e.g., "shopt -s expand_aliases" for alias support)
+    public var commandPrefix: String?
 
-    public init(operations: BashOperations? = nil) {
+    public init(operations: BashOperations? = nil, commandPrefix: String? = nil) {
         self.operations = operations
+        self.commandPrefix = commandPrefix
     }
 }
 
@@ -72,6 +75,13 @@ public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> PiSw
         guard let command = params["command"]?.value as? String else {
             throw BashToolError.missingCommand
         }
+        // Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
+        let resolvedCommand: String
+        if let prefix = options?.commandPrefix {
+            resolvedCommand = "\(prefix)\n\(command)"
+        } else {
+            resolvedCommand = command
+        }
         let timeoutValue: Double? = doubleValue(params["timeout"])
         let operations: BashOperations = options?.operations ?? DefaultBashOperations()
         let outputState: LockedState<String> = LockedState("")
@@ -89,7 +99,7 @@ public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> PiSw
             onChunk = nil
         }
         let result: BashResult = try await operations.execute(
-            command,
+            resolvedCommand,
             options: BashExecutorOptions(onChunk: onChunk, signal: signal, timeoutSeconds: timeoutValue)
         )
         if result.cancelled {

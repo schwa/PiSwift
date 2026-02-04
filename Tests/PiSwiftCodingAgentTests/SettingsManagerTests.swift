@@ -68,3 +68,145 @@ import PiSwiftCodingAgent
     let reloaded = SettingsManager.create(tempDir, tempDir)
     #expect(reloaded.getQuietStartup() == true)
 }
+
+// MARK: - Packages tests
+
+@Test func settingsLocalExtensionsInExtensionPaths() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-ext-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"extensions":["/local/ext.swift","./relative/ext.swift"]}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+
+    #expect(manager.getPackages().isEmpty)
+    #expect(manager.getExtensionPaths() == ["/local/ext.swift", "./relative/ext.swift"])
+}
+
+@Test func settingsPackagesWithFilteringObjects() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-pkg-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"packages":["npm:simple-pkg",{"source":"npm:filtered-pkg","extensions":["ext/one.swift"],"skills":[]}]}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+
+    let packages = manager.getPackages()
+    #expect(packages.count == 2)
+
+    if case .simple(let first) = packages[0] {
+        #expect(first == "npm:simple-pkg")
+    } else {
+        #expect(Bool(false), "Expected first package to be a simple string")
+    }
+
+    if case .filtered(let filtered) = packages[1] {
+        #expect(filtered.source == "npm:filtered-pkg")
+        #expect(filtered.extensions == ["ext/one.swift"])
+        #expect(filtered.skills?.isEmpty == true)
+    } else {
+        #expect(Bool(false), "Expected second package to be a filtered object")
+    }
+}
+
+@Test func settingsPreservesEnableModelsOnThinkingLevelChange() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-models-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"theme":"dark","defaultModel":"claude-sonnet"}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+
+    // Simulate user editing settings.json externally to add enabledModels
+    let updated = """
+    {"theme":"dark","defaultModel":"claude-sonnet","enabledModels":["claude-opus-4-5","gpt-5.2-codex"]}
+    """
+    try updated.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    // User changes thinking level
+    manager.setDefaultThinkingLevel("high")
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    let enabledModels = json?["enabledModels"] as? [String]
+    #expect(enabledModels == ["claude-opus-4-5", "gpt-5.2-codex"])
+    #expect(json?["defaultThinkingLevel"] as? String == "high")
+    #expect(json?["theme"] as? String == "dark")
+    #expect(json?["defaultModel"] as? String == "claude-sonnet")
+}
+
+@Test func settingsInMemoryOverridesFileChanges() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-inmem-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"theme":"dark"}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+
+    // User externally sets thinking level to "low"
+    let external = """
+    {"theme":"dark","defaultThinkingLevel":"low"}
+    """
+    try external.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    // But then changes it via UI to "high"
+    manager.setDefaultThinkingLevel("high")
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["defaultThinkingLevel"] as? String == "high")
+}
+
+@Test func settingsShellCommandPrefix() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-prefix-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"shellCommandPrefix":"shopt -s expand_aliases"}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+    #expect(manager.getShellCommandPrefix() == "shopt -s expand_aliases")
+
+    // Test setting a new prefix
+    manager.setShellCommandPrefix("source ~/.bashrc")
+    #expect(manager.getShellCommandPrefix() == "source ~/.bashrc")
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["shellCommandPrefix"] as? String == "source ~/.bashrc")
+}

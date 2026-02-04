@@ -214,3 +214,80 @@ import PiSwiftAgent
 
     _ = try await task.value
 }
+
+@Test func thinkingBudgetsGetterSetter() async throws {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let receivedBudgets = LockedState<ThinkingBudgets?>(nil)
+    let streamFn: StreamFn = { model, _, options in
+        receivedBudgets.withLock { $0 = options.thinkingBudgets }
+        let stream = AssistantMessageEventStream()
+        Task {
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+                stopReason: .stop
+            )
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        }
+        return stream
+    }
+
+    let customBudgets: ThinkingBudgets = [.low: 1024, .medium: 4096]
+    let agent = Agent(AgentOptions(initialState: AgentState(model: model), streamFn: streamFn, thinkingBudgets: customBudgets))
+
+    #expect(agent.thinkingBudgets?[.low] == 1024)
+    #expect(agent.thinkingBudgets?[.medium] == 4096)
+
+    try await agent.prompt("Hello")
+    #expect(receivedBudgets.withLock { $0?[.low] } == 1024)
+
+    // Test setter
+    let newBudgets: ThinkingBudgets = [.high: 8192]
+    agent.thinkingBudgets = newBudgets
+    #expect(agent.thinkingBudgets?[.high] == 8192)
+
+    try await agent.prompt("Hello again")
+    #expect(receivedBudgets.withLock { $0?[.high] } == 8192)
+}
+
+@Test func getApiKeyCallback() async throws {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let receivedApiKey = LockedState<String?>(nil)
+    let providerRequested = LockedState<String?>(nil)
+
+    let streamFn: StreamFn = { model, _, options in
+        receivedApiKey.withLock { $0 = options.apiKey }
+        let stream = AssistantMessageEventStream()
+        Task {
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+                stopReason: .stop
+            )
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        }
+        return stream
+    }
+
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(model: model),
+        streamFn: streamFn,
+        getApiKey: { provider in
+            providerRequested.withLock { $0 = provider }
+            return "dynamic-api-key-\(provider)"
+        }
+    ))
+
+    try await agent.prompt("Hello")
+
+    #expect(providerRequested.withLock { $0 } == "openai")
+    #expect(receivedApiKey.withLock { $0 } == "dynamic-api-key-openai")
+}

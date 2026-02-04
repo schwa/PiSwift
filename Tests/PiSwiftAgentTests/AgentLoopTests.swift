@@ -376,3 +376,182 @@ private func makeStream(done message: AssistantMessage, reason: StopReason = .st
     }
     return stream
 }
+
+@Test func agentLoopContinueWithCustomMessageAsLast() async throws {
+    // Custom message that will be converted to user message by convertToLlm
+    let customMessage = AgentMessage.custom(AgentCustomMessage(role: "hook", payload: AnyCodable("Hook content")))
+
+    let context = AgentContext(systemPrompt: "You are helpful.", messages: [customMessage], tools: [])
+
+    let converted = LockedState<[Message]>([])
+    let config = AgentLoopConfig(
+        model: createModel(),
+        convertToLlm: { messages in
+            // Convert custom messages to user messages
+            let result = messages.compactMap { message -> Message? in
+                if case .custom(let custom) = message {
+                    // Convert custom to user message
+                    let text = (custom.payload?.value as? String) ?? ""
+                    return .user(UserMessage(content: .text(text), timestamp: custom.timestamp))
+                }
+                return message.asMessage
+            }
+            converted.withLock { $0 = result }
+            return result
+        }
+    )
+
+    let streamFn: StreamFn = { _, _, _ in
+        let message = createAssistantMessage(content: [.text(TextContent(text: "Response to custom message"))])
+        return makeStream(done: message)
+    }
+
+    // Should not throw - the custom message will be converted to user message by convertToLlm
+    let stream = try agentLoopContinue(context: context, config: config, streamFn: streamFn)
+
+    var events: [AgentEvent] = []
+    for await event in stream {
+        events.append(event)
+    }
+
+    let messages = await stream.result()
+    #expect(messages.count == 1)
+    #expect(messages.first?.role == "assistant")
+
+    // Verify the custom message was converted
+    #expect(converted.withLock { $0.count } == 1)
+    #expect(converted.withLock { $0.first?.role } == "user")
+}
+
+@Test func followUpMessagesProcessed() async {
+    let context = AgentContext(systemPrompt: "", messages: [], tools: [])
+    let userPrompt = createUserMessage("start")
+
+    let followUpDelivered = LockedState(false)
+    let callIndex = LockedState(0)
+
+    let config = AgentLoopConfig(
+        model: createModel(),
+        convertToLlm: identityConverter,
+        getFollowUpMessages: {
+            let index = callIndex.withLock { $0 }
+            // Return follow-up after first turn completes
+            let shouldDeliver = followUpDelivered.withLock { delivered in
+                if index == 1 && !delivered {
+                    delivered = true
+                    return true
+                }
+                return false
+            }
+            if shouldDeliver {
+                return [createUserMessage("follow-up")]
+            }
+            return []
+        }
+    )
+
+    let sawFollowUpInContext = LockedState(false)
+    let streamFn: StreamFn = { _, ctx, _ in
+        let index = callIndex.withLock { $0 }
+        if index == 1 {
+            // Check if follow-up message is in context on second call
+            let sawFollowUp = ctx.messages.contains { message in
+                if case .user(let user) = message, case .text(let text) = user.content {
+                    return text == "follow-up"
+                }
+                return false
+            }
+            sawFollowUpInContext.withLock { $0 = sawFollowUp }
+        }
+
+        let stream = AssistantMessageEventStream()
+        if index == 0 {
+            // First call: return response, no tool calls
+            let message = createAssistantMessage(content: [.text(TextContent(text: "first response"))])
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        } else {
+            // Second call: return final response
+            let message = createAssistantMessage(content: [.text(TextContent(text: "done"))])
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        }
+        callIndex.withLock { $0 += 1 }
+        return stream
+    }
+
+    var events: [AgentEvent] = []
+    let stream = agentLoop(prompts: [userPrompt], context: context, config: config, streamFn: streamFn)
+    for await event in stream {
+        events.append(event)
+    }
+
+    // Should have processed the follow-up message
+    #expect(sawFollowUpInContext.withLock { $0 })
+
+    // Should have two turn_start events (first turn + follow-up turn)
+    let turnStarts = events.filter { if case .turnStart = $0 { return true } else { return false } }
+    #expect(turnStarts.count == 2)
+
+    // Follow-up message should appear in events
+    let followUpEvent = events.first { event in
+        if case .messageStart(let message) = event {
+            if case .user(let user) = message, case .text(let text) = user.content {
+                return text == "follow-up"
+            }
+        }
+        return false
+    }
+    #expect(followUpEvent != nil)
+}
+
+@Test func steeringMessagesAtLoopStart() async {
+    // Test that steering messages are checked at the start of the loop
+    let context = AgentContext(systemPrompt: "", messages: [], tools: [])
+    let userPrompt = createUserMessage("start")
+    let steeringMessage = createUserMessage("early steering")
+
+    // Pre-queue a steering message before the loop starts
+    let steeringDelivered = LockedState(false)
+    let config = AgentLoopConfig(
+        model: createModel(),
+        convertToLlm: identityConverter,
+        getSteeringMessages: {
+            let shouldDeliver = steeringDelivered.withLock { delivered in
+                if !delivered {
+                    delivered = true
+                    return true
+                }
+                return false
+            }
+            if shouldDeliver {
+                return [steeringMessage]
+            }
+            return []
+        }
+    )
+
+    let sawSteeringInContext = LockedState(false)
+    let streamFn: StreamFn = { _, ctx, _ in
+        // Check if steering message is in context
+        let sawSteering = ctx.messages.contains { message in
+            if case .user(let user) = message, case .text(let text) = user.content {
+                return text == "early steering"
+            }
+            return false
+        }
+        sawSteeringInContext.withLock { $0 = sawSteering }
+
+        let stream = AssistantMessageEventStream()
+        let message = createAssistantMessage(content: [.text(TextContent(text: "response"))])
+        stream.push(.done(reason: .stop, message: message))
+        stream.end(message)
+        return stream
+    }
+
+    let stream = agentLoop(prompts: [userPrompt], context: context, config: config, streamFn: streamFn)
+    for await _ in stream {}
+
+    // Steering message should have been included in context for the LLM call
+    #expect(sawSteeringInContext.withLock { $0 })
+}

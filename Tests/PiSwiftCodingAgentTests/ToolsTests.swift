@@ -371,3 +371,236 @@ private func withTempDir(_ body: (String) async throws -> Void) async rethrows {
         #expect(content == "first\nREPLACED\nthird\n")
     }
 }
+
+// MARK: - Edit tool additional tests
+
+@Test func editToolFuzzyPrefersExactMatch() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("exact-preferred.txt").path
+        // File has both exact and fuzzy-matchable content
+        try "const x = 'exact';\nconst y = 'other';\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-fuzzy-6", [
+            "path": AnyCodable(testFile),
+            "oldText": AnyCodable("const x = 'exact';"),
+            "newText": AnyCodable("const x = 'changed';"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        let content = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(content == "const x = 'changed';\nconst y = 'other';\n")
+    }
+}
+
+@Test func editToolFuzzyStillFailsWhenNotFound() async {
+    await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("no-match.txt").path
+        try? "completely different content\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await runTool(editTool, "test-fuzzy-7", [
+                "path": AnyCodable(testFile),
+                "oldText": AnyCodable("this does not exist"),
+                "newText": AnyCodable("replacement"),
+            ])
+            #expect(Bool(false), "Expected edit to fail")
+        } catch {
+            #expect(error.localizedDescription.contains("Could not find the exact text"))
+        }
+    }
+}
+
+@Test func editToolFuzzyDuplicatesDetected() async {
+    await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("fuzzy-dups.txt").path
+        // Two lines that are identical after trailing whitespace is stripped
+        try? "hello world   \nhello world\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await runTool(editTool, "test-fuzzy-8", [
+                "path": AnyCodable(testFile),
+                "oldText": AnyCodable("hello world"),
+                "newText": AnyCodable("replaced"),
+            ])
+            #expect(Bool(false), "Expected duplicate error")
+        } catch {
+            #expect(error.localizedDescription.contains("Found 2 occurrences"))
+        }
+    }
+}
+
+@Test func editToolCRLFDuplicatesDetected() async {
+    await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("mixed-endings.txt").path
+        try? "hello\r\nworld\r\n---\r\nhello\nworld\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await runTool(editTool, "test-crlf-dup", [
+                "path": AnyCodable(testFile),
+                "oldText": AnyCodable("hello\nworld\n"),
+                "newText": AnyCodable("replaced\n"),
+            ])
+            #expect(Bool(false), "Expected duplicate error")
+        } catch {
+            #expect(error.localizedDescription.contains("Found 2 occurrences"))
+        }
+    }
+}
+
+// MARK: - BOM Preservation Tests
+
+@Test func editToolPreservesBOM() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("bom-test.txt").path
+        // Write file with BOM using Data to ensure it's written correctly
+        let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
+        let content = "first line\nsecond line\n"
+        var data = Data(bom)
+        data.append(content.data(using: .utf8)!)
+        try data.write(to: URL(fileURLWithPath: testFile))
+
+        let result = try await runTool(editTool, "test-bom-1", [
+            "path": AnyCodable(testFile),
+            "oldText": AnyCodable("first line"),
+            "newText": AnyCodable("modified line"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        // Verify BOM is preserved
+        let readData = try Data(contentsOf: URL(fileURLWithPath: testFile))
+        #expect(readData.prefix(3) == Data(bom))
+
+        let readContent = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(readContent.contains("modified line"))
+    }
+}
+
+// MARK: - Fuzzy Matching Tests
+
+@Test func editToolFuzzySmartQuotes() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("smart-quotes.txt").path
+        // File contains smart quotes (U+2018, U+2019)
+        try "const msg = \u{2018}hello world\u{2019};\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-smart-quotes", [
+            "path": AnyCodable(testFile),
+            // User provides straight quotes
+            "oldText": AnyCodable("const msg = 'hello world';"),
+            "newText": AnyCodable("const msg = 'goodbye world';"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        let content = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(content.contains("goodbye world"))
+    }
+}
+
+@Test func editToolFuzzyDoubleSmartQuotes() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("smart-dquotes.txt").path
+        // File contains smart double quotes (U+201C, U+201D)
+        try "const msg = \u{201C}hello world\u{201D};\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-smart-dquotes", [
+            "path": AnyCodable(testFile),
+            // User provides straight double quotes
+            "oldText": AnyCodable("const msg = \"hello world\";"),
+            "newText": AnyCodable("const msg = \"goodbye world\";"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+    }
+}
+
+@Test func editToolFuzzyUnicodeDashes() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("unicode-dash.txt").path
+        // File contains en-dash (U+2013)
+        try "range: 1\u{2013}10\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-unicode-dash", [
+            "path": AnyCodable(testFile),
+            // User provides regular hyphen
+            "oldText": AnyCodable("range: 1-10"),
+            "newText": AnyCodable("range: 1-20"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        let content = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(content.contains("1-20"))
+    }
+}
+
+@Test func editToolFuzzyNBSP() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("nbsp.txt").path
+        // File contains narrow no-break space (U+202F) before AM
+        try "Time: 10:00\u{202F}AM\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-nbsp", [
+            "path": AnyCodable(testFile),
+            // User provides regular space
+            "oldText": AnyCodable("Time: 10:00 AM"),
+            "newText": AnyCodable("Time: 11:00 AM"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        let content = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(content.contains("11:00"))
+    }
+}
+
+@Test func editToolFuzzyTrailingWhitespace() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("trailing-ws.txt").path
+        // File has trailing whitespace that user doesn't include
+        try "hello world   \ngoodbye\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = try await runTool(editTool, "test-trailing-ws", [
+            "path": AnyCodable(testFile),
+            // User doesn't include trailing whitespace
+            "oldText": AnyCodable("hello world\ngoodbye"),
+            "newText": AnyCodable("hello there\ngoodbye"),
+        ])
+        #expect(textOutput(result).contains("Successfully replaced"))
+
+        let content = try String(contentsOfFile: testFile, encoding: .utf8)
+        #expect(content.contains("hello there"))
+    }
+}
+
+// MARK: - Bash tool additional tests
+
+@Test func bashToolNonExistentCwd() async {
+    let nonexistentCwd = "/this/directory/definitely/does/not/exist/12345"
+    let bashWithBadCwd = createBashTool(cwd: nonexistentCwd)
+
+    do {
+        _ = try await bashWithBadCwd.execute("test-bad-cwd", ["command": AnyCodable("cd '\(nonexistentCwd)' && echo test")], nil, nil)
+        #expect(Bool(false), "Expected error for non-existent cwd")
+    } catch {
+        // The error will come from cd failing, which is expected
+        #expect(true)
+    }
+}
+
+@Test func bashToolCommandPrefix() async throws {
+    // Test that command prefix is prepended to commands
+    let bashWithPrefix = createBashTool(
+        cwd: FileManager.default.currentDirectoryPath,
+        options: BashToolOptions(commandPrefix: "export TEST_VAR=prefixed")
+    )
+
+    let result = try await bashWithPrefix.execute(
+        "test-prefix",
+        ["command": AnyCodable("echo $TEST_VAR")],
+        nil,
+        nil
+    )
+
+    if case .text(let textContent) = result.content.first {
+        #expect(textContent.text.contains("prefixed"))
+    } else {
+        #expect(Bool(false), "Expected text output")
+    }
+}

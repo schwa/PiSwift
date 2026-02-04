@@ -120,18 +120,78 @@ private func parseFrontmatter(_ content: String) -> FrontmatterResult {
 
     var frontmatter: [String: String] = [:]
     var keys: [String] = []
-    for line in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false) {
+    let lines = frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+    var i = 0
+
+    while i < lines.count {
+        let line = lines[i]
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { continue }
+        if trimmed.isEmpty {
+            i += 1
+            continue
+        }
+
         let parts = trimmed.split(separator: ":", maxSplits: 1).map { String($0) }
-        guard parts.count == 2 else { continue }
+        guard parts.count == 2 else {
+            i += 1
+            continue
+        }
+
         let key = parts[0].trimmingCharacters(in: .whitespaces)
         var value = parts[1].trimmingCharacters(in: .whitespaces)
+
+        // Handle YAML block scalars: | (literal) or > (folded)
+        if value == "|" || value == ">" {
+            let isFolded = value == ">"
+            var blockLines: [String] = []
+            i += 1
+
+            // Collect indented lines
+            while i < lines.count {
+                let nextLine = lines[i]
+                // Check if line is indented (starts with whitespace) or is empty
+                let hasIndent = nextLine.hasPrefix(" ") || nextLine.hasPrefix("\t")
+                let isEmpty = nextLine.trimmingCharacters(in: .whitespaces).isEmpty
+
+                if hasIndent || (isEmpty && i + 1 < lines.count) {
+                    // Strip common leading whitespace (YAML uses first indented line to determine indent)
+                    if blockLines.isEmpty && hasIndent {
+                        // First content line - trim leading whitespace
+                        blockLines.append(nextLine.trimmingCharacters(in: CharacterSet(charactersIn: " \t")))
+                    } else if isEmpty {
+                        blockLines.append("")
+                    } else {
+                        // Subsequent lines - try to strip same indent as first line
+                        blockLines.append(nextLine.trimmingCharacters(in: CharacterSet(charactersIn: " \t")))
+                    }
+                    i += 1
+                } else {
+                    break
+                }
+            }
+
+            // Join lines based on block style
+            if isFolded {
+                // Folded style: replace single newlines with spaces, preserve double newlines
+                value = blockLines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            } else {
+                // Literal style: preserve newlines
+                value = blockLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            keys.append(key)
+            frontmatter[key] = value
+            continue
+        }
+
+        // Handle quoted values
         if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
             value = String(value.dropFirst().dropLast())
         }
+
         keys.append(key)
         frontmatter[key] = value
+        i += 1
     }
 
     return FrontmatterResult(frontmatter: frontmatter, keys: keys, body: body)

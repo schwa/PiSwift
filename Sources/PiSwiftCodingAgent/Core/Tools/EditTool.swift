@@ -65,31 +65,41 @@ public func createEditTool(cwd: String) -> AgentTool {
             throw EditToolError.fileNotFound(path: path)
         }
 
-        let rawContent = try String(contentsOfFile: absolutePath, encoding: .utf8)
-        let stripped = stripBom(rawContent)
-        let content = stripped.text
-        let bom = stripped.bom
+        // Read file preserving BOM - Swift's String(contentsOfFile:) strips BOM automatically
+        let (bom, content) = try readFilePreservingBom(absolutePath)
 
         let originalEnding = detectLineEnding(content)
         let normalizedContent = normalizeToLF(content)
         let normalizedOldText = normalizeToLF(oldText)
         let normalizedNewText = normalizeToLF(newText)
 
-        guard normalizedContent.contains(normalizedOldText) else {
+        // Find the old text using fuzzy matching (tries exact match first, then fuzzy)
+        let matchResult = fuzzyFindText(normalizedContent, normalizedOldText)
+
+        guard matchResult.found else {
             throw EditToolError.exactTextNotFoundDetailed(path: path)
         }
 
-        let occurrences = normalizedContent.components(separatedBy: normalizedOldText).count - 1
+        // Count occurrences using fuzzy-normalized content for consistency
+        let fuzzyContent = normalizeForFuzzyMatch(normalizedContent)
+        let fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText)
+        let occurrences = fuzzyContent.components(separatedBy: fuzzyOldText).count - 1
+
         if occurrences > 1 {
             throw EditToolError.textNotUnique(path: path, occurrences: occurrences)
         }
 
-        guard let range = normalizedContent.range(of: normalizedOldText) else {
-            throw EditToolError.exactTextNotFound(path: path)
-        }
+        // Perform replacement using the matched text position
+        // When fuzzy matching was used, contentForReplacement is the normalized version
+        let baseContent = matchResult.contentForReplacement
+        let startIndex = baseContent.index(baseContent.startIndex, offsetBy: matchResult.index)
+        let endIndex = baseContent.index(startIndex, offsetBy: matchResult.matchLength)
+        let normalizedNewContent = baseContent.replacingCharacters(
+            in: startIndex..<endIndex,
+            with: normalizedNewText
+        )
 
-        let normalizedNewContent = normalizedContent.replacingCharacters(in: range, with: normalizedNewText)
-        if normalizedContent == normalizedNewContent {
+        if baseContent == normalizedNewContent {
             throw EditToolError.noChanges(path: path)
         }
 

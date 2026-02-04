@@ -102,6 +102,7 @@ public struct Settings: Sendable {
     public var retry: RetrySettings?
     public var hideThinkingBlock: Bool?
     public var shellPath: String?
+    public var shellCommandPrefix: String?
     public var quietStartup: Bool?
     public var collapseChangelog: Bool?
     public var packages: [PackageSource]?
@@ -382,6 +383,16 @@ public final class SettingsManager: Sendable {
     public func setShellPath(_ path: String?) {
         globalSettings.shellPath = path
         markModified("shellPath")
+        save()
+    }
+
+    public func getShellCommandPrefix() -> String? {
+        settings.shellCommandPrefix
+    }
+
+    public func setShellCommandPrefix(_ prefix: String?) {
+        globalSettings.shellCommandPrefix = prefix
+        markModified("shellCommandPrefix")
         save()
     }
 
@@ -675,6 +686,7 @@ public final class SettingsManager: Sendable {
         json["theme"] = settings.theme
         json["hideThinkingBlock"] = settings.hideThinkingBlock
         json["shellPath"] = settings.shellPath
+        json["shellCommandPrefix"] = settings.shellCommandPrefix
         json["quietStartup"] = settings.quietStartup
         json["collapseChangelog"] = settings.collapseChangelog
         if let packages = settings.packages {
@@ -767,6 +779,7 @@ public final class SettingsManager: Sendable {
         settings.theme = json["theme"] as? String
         settings.hideThinkingBlock = json["hideThinkingBlock"] as? Bool
         settings.shellPath = json["shellPath"] as? String
+        settings.shellCommandPrefix = json["shellCommandPrefix"] as? String
         settings.quietStartup = json["quietStartup"] as? Bool
         settings.collapseChangelog = json["collapseChangelog"] as? Bool
         if let packages = json["packages"] as? [Any] {
@@ -935,6 +948,7 @@ public final class SettingsManager: Sendable {
         json["theme"] = settings.theme
         json["hideThinkingBlock"] = settings.hideThinkingBlock
         json["shellPath"] = settings.shellPath
+        json["shellCommandPrefix"] = settings.shellCommandPrefix
         json["quietStartup"] = settings.quietStartup
         json["collapseChangelog"] = settings.collapseChangelog
         if let packages = settings.packages {
@@ -1041,6 +1055,7 @@ public final class SettingsManager: Sendable {
         if override.retry != nil { result.retry = override.retry }
         if override.hideThinkingBlock != nil { result.hideThinkingBlock = override.hideThinkingBlock }
         if override.shellPath != nil { result.shellPath = override.shellPath }
+        if override.shellCommandPrefix != nil { result.shellCommandPrefix = override.shellCommandPrefix }
         if override.quietStartup != nil { result.quietStartup = override.quietStartup }
         if override.collapseChangelog != nil { result.collapseChangelog = override.collapseChangelog }
         if override.packages != nil { result.packages = override.packages }

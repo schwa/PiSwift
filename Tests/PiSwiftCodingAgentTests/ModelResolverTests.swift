@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import PiSwiftAI
 import PiSwiftCodingAgent
@@ -162,4 +163,40 @@ private func mockModels() -> [Model] {
     #expect(trailing.model?.id == "claude-sonnet-4-5")
     #expect(trailing.warning?.contains("Invalid thinking level") == true)
     #expect(trailing.isThinkingExplicit == false)
+}
+
+@Test func defaultModelPerProviderVercelAiGateway() {
+    // Verify ai-gateway default is opus 4.5
+    let aiGatewayDefault = defaultModelPerProvider.first { $0.0 == .vercelAiGateway }
+    #expect(aiGatewayDefault?.1 == "anthropic/claude-opus-4.5")
+}
+
+@Test func selectDefaultModelWithAiGateway() async {
+    let aiGatewayModel = Model(
+        id: "anthropic/claude-opus-4.5",
+        name: "Claude Opus 4.5",
+        api: .anthropicMessages,
+        provider: "vercel-ai-gateway",
+        baseUrl: "https://ai-gateway.vercel.sh",
+        reasoning: true,
+        input: [.text, .image],
+        cost: ModelCost(input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5),
+        contextWindow: 200000,
+        maxTokens: 8192
+    )
+
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("model-resolver-test-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let authStorage = AuthStorage(URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path)
+    authStorage.setRuntimeApiKey("vercel-ai-gateway", "test-key")
+
+    let registry = ModelRegistry(authStorage, tempDir)
+
+    let result = await selectDefaultModel(available: [aiGatewayModel], registry: registry)
+    #expect(result?.provider == "vercel-ai-gateway")
+    #expect(result?.id == "anthropic/claude-opus-4.5")
 }
