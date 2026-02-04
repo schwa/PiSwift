@@ -13,7 +13,7 @@ enum SessionManagerError: LocalizedError, Sendable {
     }
 }
 
-public let CURRENT_SESSION_VERSION = 2
+public let CURRENT_SESSION_VERSION = 3
 
 public struct SessionHeader: Sendable {
     public var type: String = "session"
@@ -407,24 +407,33 @@ public func migrateSessionEntries(_ entries: inout [FileEntry]) {
         return
     }
 
-    var ids: Set<String> = Set()
-    var prevId: String? = nil
+    // v1 → v2: add id/parentId tree structure
+    if version < 2 {
+        var ids: Set<String> = Set()
+        var prevId: String? = nil
 
-    for i in 0..<entries.count {
-        switch entries[i] {
-        case .session:
-            header.version = CURRENT_SESSION_VERSION
-            entries[i] = .session(header)
-        case .entry(var entry):
-            if entry.id.isEmpty {
-                entry.id = generateId(existing: ids)
+        for i in 0..<entries.count {
+            switch entries[i] {
+            case .session:
+                continue
+            case .entry(var entry):
+                if entry.id.isEmpty {
+                    entry.id = generateId(existing: ids)
+                }
+                entry.parentId = prevId
+                prevId = entry.id
+                entries[i] = .entry(entry)
+                ids.insert(entry.id)
             }
-            entry.parentId = prevId
-            prevId = entry.id
-            entries[i] = .entry(entry)
-            ids.insert(entry.id)
         }
     }
+
+    // v2 → v3: rename hookMessage role to custom
+    // Note: This is handled during decoding - hookMessage is decoded as custom role
+
+    // Update header version
+    header.version = CURRENT_SESSION_VERSION
+    entries[headerIndex] = .session(header)
 }
 
 public func buildSessionContext(_ entries: [SessionEntry], _ leafId: String? = nil, _ byId: [String: SessionEntry]? = nil) -> SessionContext {
