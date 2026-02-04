@@ -91,6 +91,48 @@ public struct PromptOptions: Sendable {
     }
 }
 
+public struct ParsedSkillBlock: Sendable {
+    public var name: String
+    public var location: String
+    public var content: String
+    public var userMessage: String?
+
+    public init(name: String, location: String, content: String, userMessage: String? = nil) {
+        self.name = name
+        self.location = location
+        self.content = content
+        self.userMessage = userMessage
+    }
+}
+
+public func parseSkillBlock(_ text: String) -> ParsedSkillBlock? {
+    // Pattern: <skill name="..." location="...">content</skill> optionally followed by user message
+    let pattern = #"^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n</skill>(?:\n\n([\s\S]+))?$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+          let match = regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)),
+          match.numberOfRanges >= 4 else {
+        return nil
+    }
+
+    guard let nameRange = Range(match.range(at: 1), in: text),
+          let locationRange = Range(match.range(at: 2), in: text),
+          let contentRange = Range(match.range(at: 3), in: text) else {
+        return nil
+    }
+
+    let name = String(text[nameRange])
+    let location = String(text[locationRange])
+    let content = String(text[contentRange])
+
+    var userMessage: String?
+    if match.numberOfRanges >= 5, match.range(at: 4).location != NSNotFound,
+       let userMessageRange = Range(match.range(at: 4), in: text) {
+        userMessage = String(text[userMessageRange])
+    }
+
+    return ParsedSkillBlock(name: name, location: location, content: content, userMessage: userMessage)
+}
+
 public struct ForkableMessage: Sendable {
     public var entryId: String
     public var text: String

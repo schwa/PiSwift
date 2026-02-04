@@ -9,7 +9,8 @@ private enum SessionScope: String {
 
 public typealias SessionsLoader = @Sendable (_ onProgress: SessionListProgress?) async -> [SessionInfo]
 
-private func shortenPath(_ path: String) -> String {
+/// Shortens a path by replacing the home directory with ~
+func shortenPath(_ path: String) -> String {
     let home = NSHomeDirectory()
     guard !path.isEmpty else { return path }
     if path.hasPrefix(home) {
@@ -18,8 +19,13 @@ private func shortenPath(_ path: String) -> String {
     return path
 }
 
-private func formatSessionDate(_ date: Date) -> String {
-    let now = Date()
+/// Formats a session date as a relative time string
+func formatSessionDate(_ date: Date) -> String {
+    formatSessionDate(date, relativeTo: Date())
+}
+
+/// Formats a session date as a relative time string, relative to a reference date
+func formatSessionDate(_ date: Date, relativeTo now: Date) -> String {
     let diff = now.timeIntervalSince(date)
     let diffMins = Int(diff / 60)
     let diffHours = Int(diff / 3600)
