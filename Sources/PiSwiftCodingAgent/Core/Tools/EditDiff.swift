@@ -183,21 +183,294 @@ public func fuzzyFindText(_ content: String, _ oldText: String) -> EditFuzzyMatc
     )
 }
 
-public func generateDiffString(_ oldText: String, _ newText: String) -> (diff: String, firstChangedLine: Int?) {
-    let oldLines = oldText.split(separator: "\n", omittingEmptySubsequences: false)
-    let newLines = newText.split(separator: "\n", omittingEmptySubsequences: false)
-    let limit = min(oldLines.count, newLines.count)
-    var firstChanged: Int? = nil
-    for i in 0..<limit {
-        if oldLines[i] != newLines[i] {
-            firstChanged = i + 1
-            break
+// MARK: - Line Diff Algorithm
+
+/// Represents a part of a diff result
+public struct DiffPart: Sendable {
+    public enum Kind: Sendable {
+        case equal
+        case added
+        case removed
+    }
+    public var kind: Kind
+    public var value: String
+}
+
+/// Compute line-by-line diff between two strings using LCS algorithm
+public func diffLines(_ oldText: String, _ newText: String) -> [DiffPart] {
+    let oldLines = oldText.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+    let newLines = newText.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+
+    // Compute LCS (Longest Common Subsequence) table
+    let m = oldLines.count
+    let n = newLines.count
+    var lcs = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+
+    for i in 1...m {
+        for j in 1...n {
+            if oldLines[i - 1] == newLines[j - 1] {
+                lcs[i][j] = lcs[i - 1][j - 1] + 1
+            } else {
+                lcs[i][j] = max(lcs[i - 1][j], lcs[i][j - 1])
+            }
         }
     }
-    if firstChanged == nil && oldLines.count != newLines.count {
-        firstChanged = limit + 1
+
+    // Backtrack to find the diff
+    var result: [DiffPart] = []
+    var i = m
+    var j = n
+
+    var pendingEqual: [String] = []
+    var pendingRemoved: [String] = []
+    var pendingAdded: [String] = []
+
+    func flushPending() {
+        if !pendingRemoved.isEmpty {
+            result.append(DiffPart(kind: .removed, value: pendingRemoved.joined(separator: "\n")))
+            pendingRemoved = []
+        }
+        if !pendingAdded.isEmpty {
+            result.append(DiffPart(kind: .added, value: pendingAdded.joined(separator: "\n")))
+            pendingAdded = []
+        }
+        if !pendingEqual.isEmpty {
+            result.append(DiffPart(kind: .equal, value: pendingEqual.joined(separator: "\n")))
+            pendingEqual = []
+        }
     }
 
-    let diff = "- \(oldText)\n+ \(newText)"
-    return (diff, firstChanged)
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && oldLines[i - 1] == newLines[j - 1] {
+            // Flush non-equal parts first
+            if !pendingRemoved.isEmpty || !pendingAdded.isEmpty {
+                if !pendingRemoved.isEmpty {
+                    result.append(DiffPart(kind: .removed, value: pendingRemoved.reversed().joined(separator: "\n")))
+                    pendingRemoved = []
+                }
+                if !pendingAdded.isEmpty {
+                    result.append(DiffPart(kind: .added, value: pendingAdded.reversed().joined(separator: "\n")))
+                    pendingAdded = []
+                }
+            }
+            pendingEqual.insert(oldLines[i - 1], at: 0)
+            i -= 1
+            j -= 1
+        } else if j > 0 && (i == 0 || lcs[i][j - 1] >= lcs[i - 1][j]) {
+            // Flush equal parts first
+            if !pendingEqual.isEmpty {
+                result.append(DiffPart(kind: .equal, value: pendingEqual.joined(separator: "\n")))
+                pendingEqual = []
+            }
+            pendingAdded.insert(newLines[j - 1], at: 0)
+            j -= 1
+        } else if i > 0 {
+            // Flush equal parts first
+            if !pendingEqual.isEmpty {
+                result.append(DiffPart(kind: .equal, value: pendingEqual.joined(separator: "\n")))
+                pendingEqual = []
+            }
+            pendingRemoved.insert(oldLines[i - 1], at: 0)
+            i -= 1
+        }
+    }
+
+    // Flush any remaining
+    if !pendingRemoved.isEmpty {
+        result.append(DiffPart(kind: .removed, value: pendingRemoved.joined(separator: "\n")))
+    }
+    if !pendingAdded.isEmpty {
+        result.append(DiffPart(kind: .added, value: pendingAdded.joined(separator: "\n")))
+    }
+    if !pendingEqual.isEmpty {
+        result.append(DiffPart(kind: .equal, value: pendingEqual.joined(separator: "\n")))
+    }
+
+    return result
+}
+
+// MARK: - Edit Diff Result Types
+
+/// Result of a successful edit diff computation
+public struct EditDiffResult: Sendable {
+    public var diff: String
+    public var firstChangedLine: Int?
+
+    public init(diff: String, firstChangedLine: Int?) {
+        self.diff = diff
+        self.firstChangedLine = firstChangedLine
+    }
+}
+
+/// Error result from edit diff computation
+public struct EditDiffError: Sendable {
+    public var error: String
+
+    public init(error: String) {
+        self.error = error
+    }
+}
+
+/// Union type for edit diff results
+public enum EditDiffOutcome: Sendable {
+    case success(EditDiffResult)
+    case error(EditDiffError)
+}
+
+/// Compute the diff for an edit operation without applying it.
+/// Used for preview rendering in the TUI before the tool executes.
+public func computeEditDiff(path: String, oldText: String, newText: String, cwd: String) -> EditDiffOutcome {
+    let absolutePath = resolveToCwd(path, cwd: cwd)
+
+    // Check if file exists and is readable
+    guard FileManager.default.isReadableFile(atPath: absolutePath) else {
+        return .error(EditDiffError(error: "File not found: \(path)"))
+    }
+
+    do {
+        // Read the file preserving BOM
+        let (_, content) = try readFilePreservingBom(absolutePath)
+
+        let normalizedContent = normalizeToLF(content)
+        let normalizedOldText = normalizeToLF(oldText)
+        let normalizedNewText = normalizeToLF(newText)
+
+        // Find the old text using fuzzy matching (tries exact match first, then fuzzy)
+        let matchResult = fuzzyFindText(normalizedContent, normalizedOldText)
+
+        guard matchResult.found else {
+            return .error(EditDiffError(error: "Could not find the exact text in \(path). The old text must match exactly including all whitespace and newlines."))
+        }
+
+        // Count occurrences using fuzzy-normalized content for consistency
+        let fuzzyContent = normalizeForFuzzyMatch(normalizedContent)
+        let fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText)
+        let occurrences = fuzzyContent.components(separatedBy: fuzzyOldText).count - 1
+
+        if occurrences > 1 {
+            return .error(EditDiffError(error: "Found \(occurrences) occurrences of the text in \(path). The text must be unique. Please provide more context to make it unique."))
+        }
+
+        // Compute the new content using the matched position
+        let baseContent = matchResult.contentForReplacement
+        let startIndex = baseContent.index(baseContent.startIndex, offsetBy: matchResult.index)
+        let endIndex = baseContent.index(startIndex, offsetBy: matchResult.matchLength)
+        let newContent = baseContent.replacingCharacters(in: startIndex..<endIndex, with: normalizedNewText)
+
+        // Check if it would actually change anything
+        if baseContent == newContent {
+            return .error(EditDiffError(error: "No changes would be made to \(path). The replacement produces identical content."))
+        }
+
+        // Generate the diff
+        let result = generateDiffString(baseContent, newContent)
+        return .success(EditDiffResult(diff: result.diff, firstChangedLine: result.firstChangedLine))
+    } catch {
+        return .error(EditDiffError(error: error.localizedDescription))
+    }
+}
+
+/// Generate a unified diff string with line numbers and context.
+/// Returns both the diff string and the first changed line number (in the new file).
+public func generateDiffString(_ oldContent: String, _ newContent: String, contextLines: Int = 4) -> (diff: String, firstChangedLine: Int?) {
+    let parts = diffLines(oldContent, newContent)
+    var output: [String] = []
+
+    let oldLines = oldContent.split(separator: "\n", omittingEmptySubsequences: false)
+    let newLines = newContent.split(separator: "\n", omittingEmptySubsequences: false)
+    let maxLineNum = max(oldLines.count, newLines.count)
+    let lineNumWidth = String(maxLineNum).count
+
+    var oldLineNum = 1
+    var newLineNum = 1
+    var lastWasChange = false
+    var firstChangedLine: Int? = nil
+
+    for i in 0..<parts.count {
+        let part = parts[i]
+        var raw = part.value.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+        if raw.last == "" && !part.value.isEmpty && !part.value.hasSuffix("\n") {
+            // Don't remove empty string if it's meaningful
+        } else if raw.last == "" && raw.count > 1 {
+            raw.removeLast()
+        }
+
+        switch part.kind {
+        case .added, .removed:
+            // Capture the first changed line (in the new file)
+            if firstChangedLine == nil {
+                firstChangedLine = newLineNum
+            }
+
+            // Show the change
+            for line in raw {
+                if part.kind == .added {
+                    let lineNum = String(newLineNum).padding(toLength: lineNumWidth, withPad: " ", startingAt: 0)
+                    let padded = String(repeating: " ", count: lineNumWidth - lineNum.trimmingCharacters(in: .whitespaces).count) + lineNum.trimmingCharacters(in: .whitespaces)
+                    output.append("+\(padded) \(line)")
+                    newLineNum += 1
+                } else {
+                    let lineNum = String(oldLineNum).padding(toLength: lineNumWidth, withPad: " ", startingAt: 0)
+                    let padded = String(repeating: " ", count: lineNumWidth - lineNum.trimmingCharacters(in: .whitespaces).count) + lineNum.trimmingCharacters(in: .whitespaces)
+                    output.append("-\(padded) \(line)")
+                    oldLineNum += 1
+                }
+            }
+            lastWasChange = true
+
+        case .equal:
+            // Context lines - only show a few before/after changes
+            let nextPartIsChange = i < parts.count - 1 && (parts[i + 1].kind == .added || parts[i + 1].kind == .removed)
+
+            if lastWasChange || nextPartIsChange {
+                var linesToShow = raw
+                var skipStart = 0
+                var skipEnd = 0
+
+                if !lastWasChange {
+                    // Show only last N lines as leading context
+                    skipStart = max(0, raw.count - contextLines)
+                    linesToShow = Array(raw.suffix(from: skipStart))
+                }
+
+                if !nextPartIsChange && linesToShow.count > contextLines {
+                    // Show only first N lines as trailing context
+                    skipEnd = linesToShow.count - contextLines
+                    linesToShow = Array(linesToShow.prefix(contextLines))
+                }
+
+                // Add ellipsis if we skipped lines at start
+                if skipStart > 0 {
+                    let padding = String(repeating: " ", count: lineNumWidth)
+                    output.append(" \(padding) ...")
+                    oldLineNum += skipStart
+                    newLineNum += skipStart
+                }
+
+                for line in linesToShow {
+                    let lineNum = String(oldLineNum)
+                    let padded = String(repeating: " ", count: lineNumWidth - lineNum.count) + lineNum
+                    output.append(" \(padded) \(line)")
+                    oldLineNum += 1
+                    newLineNum += 1
+                }
+
+                // Add ellipsis if we skipped lines at end
+                if skipEnd > 0 {
+                    let padding = String(repeating: " ", count: lineNumWidth)
+                    output.append(" \(padding) ...")
+                    oldLineNum += skipEnd
+                    newLineNum += skipEnd
+                }
+            } else {
+                // Skip these context lines entirely
+                oldLineNum += raw.count
+                newLineNum += raw.count
+            }
+
+            lastWasChange = false
+        }
+    }
+
+    return (output.joined(separator: "\n"), firstChangedLine)
 }

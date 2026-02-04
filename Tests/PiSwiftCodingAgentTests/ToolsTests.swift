@@ -604,3 +604,78 @@ private func withTempDir(_ body: (String) async throws -> Void) async rethrows {
         #expect(Bool(false), "Expected text output")
     }
 }
+
+// MARK: - computeEditDiff tests
+
+@Test func computeEditDiffSuccess() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("diff-test.txt").path
+        try "line one\nline two\nline three\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = computeEditDiff(path: testFile, oldText: "line two", newText: "modified line", cwd: dir)
+
+        if case .success(let diffResult) = result {
+            #expect(diffResult.diff.contains("-"))
+            #expect(diffResult.diff.contains("+"))
+            #expect(diffResult.diff.contains("line two") || diffResult.diff.contains("modified"))
+            #expect(diffResult.firstChangedLine != nil)
+        } else {
+            #expect(Bool(false), "Expected success result")
+        }
+    }
+}
+
+@Test func computeEditDiffFileNotFound() {
+    let result = computeEditDiff(path: "/nonexistent/file.txt", oldText: "foo", newText: "bar", cwd: "/tmp")
+
+    if case .error(let err) = result {
+        #expect(err.error.contains("File not found"))
+    } else {
+        #expect(Bool(false), "Expected error result")
+    }
+}
+
+@Test func computeEditDiffTextNotFound() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("diff-notfound.txt").path
+        try "some content here\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = computeEditDiff(path: testFile, oldText: "does not exist", newText: "replacement", cwd: dir)
+
+        if case .error(let err) = result {
+            #expect(err.error.contains("Could not find"))
+        } else {
+            #expect(Bool(false), "Expected error result")
+        }
+    }
+}
+
+@Test func computeEditDiffMultipleOccurrences() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("diff-multi.txt").path
+        try "hello world\nhello world\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = computeEditDiff(path: testFile, oldText: "hello world", newText: "hi world", cwd: dir)
+
+        if case .error(let err) = result {
+            #expect(err.error.contains("2 occurrences"))
+        } else {
+            #expect(Bool(false), "Expected error result")
+        }
+    }
+}
+
+@Test func computeEditDiffNoChanges() async throws {
+    try await withTempDir { dir in
+        let testFile = URL(fileURLWithPath: dir).appendingPathComponent("diff-nochange.txt").path
+        try "same text\n".write(toFile: testFile, atomically: true, encoding: .utf8)
+
+        let result = computeEditDiff(path: testFile, oldText: "same text", newText: "same text", cwd: dir)
+
+        if case .error(let err) = result {
+            #expect(err.error.contains("No changes"))
+        } else {
+            #expect(Bool(false), "Expected error result")
+        }
+    }
+}
