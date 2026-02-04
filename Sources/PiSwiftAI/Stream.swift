@@ -5,7 +5,8 @@ public func createAssistantMessageEventStream() -> AssistantMessageEventStream {
 }
 
 public func resetApiProviders() {
-    // No-op in Swift port (providers are static)
+    clearApiProviders()
+    registerBuiltInProviders()
 }
 
 private func shouldLogApiKeyDebug() -> Bool {
@@ -221,7 +222,7 @@ public func complete(model: Model, context: Context, options: StreamOptions? = n
 
 public func streamSimple(model: Model, context: Context, options: SimpleStreamOptions? = nil) throws -> AssistantMessageEventStream {
     if model.api == .bedrockConverseStream {
-        let providerOptions = mapBedrockOptions(model: model, options: options)
+        let providerOptions = mapBedrockSimpleOptions(model: model, options: options)
         return streamBedrock(model: model, context: context, options: providerOptions)
     }
 
@@ -234,27 +235,27 @@ public func streamSimple(model: Model, context: Context, options: SimpleStreamOp
 
     switch model.api {
     case .bedrockConverseStream:
-        let providerOptions = mapBedrockOptions(model: model, options: options)
+        let providerOptions = mapBedrockSimpleOptions(model: model, options: options)
         return streamBedrock(model: model, context: context, options: providerOptions)
     case .anthropicMessages:
-        let providerOptions = mapAnthropicOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapAnthropicSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamAnthropic(model: model, context: context, options: providerOptions)
     case .openAICompletions:
-        let providerOptions = mapOpenAICompletionsOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapOpenAICompletionsSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamOpenAICompletions(model: model, context: context, options: providerOptions)
     case .openAIResponses:
-        let providerOptions = mapOpenAIResponsesOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapOpenAIResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamOpenAIResponses(model: model, context: context, options: providerOptions)
     case .azureOpenAIResponses:
-        let providerOptions = mapAzureOpenAIResponsesOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapAzureOpenAIResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamAzureOpenAIResponses(model: model, context: context, options: providerOptions)
     case .googleGenerativeAI:
-        let providerOptions = mapGoogleOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapGoogleSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamGoogle(model: model, context: context, options: providerOptions)
     case .googleGeminiCli:
         return streamSimpleGoogleGeminiCli(model: model, context: context, options: options)
     case .googleVertex:
-        let providerOptions = mapGoogleVertexOptions(model: model, options: options, apiKey: apiKey)
+        let providerOptions = mapGoogleVertexSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamGoogleVertex(model: model, context: context, options: providerOptions)
     }
 }
@@ -264,7 +265,7 @@ public func completeSimple(model: Model, context: Context, options: SimpleStream
     return await stream.result()
 }
 
-private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> AnthropicOptions {
+func mapAnthropicSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> AnthropicOptions {
     let baseMaxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
 
     if options?.reasoning == nil {
@@ -297,7 +298,7 @@ private func mapAnthropicOptions(model: Model, options: SimpleStreamOptions?, ap
     )
 }
 
-private func clampThinkingLevel(_ effort: ThinkingLevel?) -> ThinkingLevel? {
+func clampThinkingLevel(_ effort: ThinkingLevel?) -> ThinkingLevel? {
     guard let effort else { return nil }
     if effort == .xhigh {
         return .high
@@ -305,7 +306,7 @@ private func clampThinkingLevel(_ effort: ThinkingLevel?) -> ThinkingLevel? {
     return effort
 }
 
-private func mapOpenAICompletionsOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAICompletionsOptions {
+func mapOpenAICompletionsSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAICompletionsOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
     return OpenAICompletionsOptions(
@@ -318,7 +319,7 @@ private func mapOpenAICompletionsOptions(model: Model, options: SimpleStreamOpti
     )
 }
 
-private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAIResponsesOptions {
+func mapOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAIResponsesOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
     return OpenAIResponsesOptions(
@@ -332,7 +333,7 @@ private func mapOpenAIResponsesOptions(model: Model, options: SimpleStreamOption
     )
 }
 
-private func mapAzureOpenAIResponsesOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> AzureOpenAIResponsesOptions {
+func mapAzureOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> AzureOpenAIResponsesOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
     return AzureOpenAIResponsesOptions(
@@ -346,7 +347,7 @@ private func mapAzureOpenAIResponsesOptions(model: Model, options: SimpleStreamO
     )
 }
 
-private func mapGoogleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> GoogleOptions {
+func mapGoogleSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> GoogleOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let thinking = buildGoogleThinkingConfig(model: model, options: options)
     return GoogleOptions(
@@ -359,7 +360,7 @@ private func mapGoogleOptions(model: Model, options: SimpleStreamOptions?, apiKe
     )
 }
 
-private func mapGoogleVertexOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> GoogleVertexOptions {
+func mapGoogleVertexSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> GoogleVertexOptions {
     let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let thinking = buildGoogleThinkingConfig(model: model, options: options)
     return GoogleVertexOptions(
@@ -372,7 +373,7 @@ private func mapGoogleVertexOptions(model: Model, options: SimpleStreamOptions?,
     )
 }
 
-private func buildGoogleThinkingConfig(model: Model, options: SimpleStreamOptions?) -> GoogleOptions.ThinkingConfig? {
+func buildGoogleThinkingConfig(model: Model, options: SimpleStreamOptions?) -> GoogleOptions.ThinkingConfig? {
     guard model.reasoning else { return nil }
     guard let reasoning = options?.reasoning else { return nil }
     let clamped = supportsXhigh(model: model) ? reasoning : clampThinkingLevel(reasoning) ?? reasoning
@@ -391,7 +392,7 @@ private func buildGoogleThinkingConfig(model: Model, options: SimpleStreamOption
     )
 }
 
-private func googleThinkingBudget(modelId: String, effort: ThinkingLevel, customBudgets: ThinkingBudgets?) -> Int {
+func googleThinkingBudget(modelId: String, effort: ThinkingLevel, customBudgets: ThinkingBudgets?) -> Int {
     if let custom = customBudgets?[effort] {
         return custom
     }
@@ -417,7 +418,7 @@ private func googleThinkingBudget(modelId: String, effort: ThinkingLevel, custom
     return -1
 }
 
-private func mapBedrockOptions(model: Model, options: SimpleStreamOptions?) -> BedrockOptions {
+func mapBedrockSimpleOptions(model: Model, options: SimpleStreamOptions?) -> BedrockOptions {
     let baseMaxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
     let reasoning = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
 
@@ -448,7 +449,7 @@ private func mapBedrockOptions(model: Model, options: SimpleStreamOptions?) -> B
     )
 }
 
-private func adjustMaxTokensForThinking(
+func adjustMaxTokensForThinking(
     baseMaxTokens: Int,
     modelMaxTokens: Int,
     reasoningLevel: ThinkingLevel,
@@ -471,7 +472,7 @@ private func adjustMaxTokensForThinking(
     return (maxTokens, thinkingBudget)
 }
 
-private func mergeThinkingBudgets(_ budgets: ThinkingBudgets?, reasoning: ThinkingLevel, thinkingBudget: Int) -> ThinkingBudgets? {
+func mergeThinkingBudgets(_ budgets: ThinkingBudgets?, reasoning: ThinkingLevel, thinkingBudget: Int) -> ThinkingBudgets? {
     var merged = budgets ?? [:]
     let clamped = clampThinkingLevel(reasoning) ?? reasoning
     merged[clamped] = thinkingBudget

@@ -387,6 +387,7 @@ public final class InteractiveMode {
 
         let slashCommands: [SlashCommand] = [
             SlashCommand(name: "settings", description: "Open settings menu"),
+            SlashCommand(name: "config", description: "Configure resources"),
             SlashCommand(name: "model", description: "Select model"),
             SlashCommand(name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling"),
             SlashCommand(name: "theme", description: "Select theme"),
@@ -2310,6 +2311,11 @@ public final class InteractiveMode {
             editor.setText("")
             return
         }
+        if trimmed == "/config" {
+            editor.setText("")
+            await showConfigSelector()
+            return
+        }
         if trimmed == "/scoped-models" {
             editor.setText("")
             await showModelsSelector()
@@ -2750,6 +2756,62 @@ public final class InteractiveMode {
 
             let selector = SettingsSelectorComponent(config: config, callbacks: callbacks)
             return (component: selector, focus: selector.getSettingsList())
+        }
+    }
+
+    @MainActor
+    private func showConfigSelector() async {
+        guard let session, let tui, let editorContainer, let currentEditor = editor else { return }
+        if session.isStreaming {
+            showWarning("Wait for the current response to finish before opening config.")
+            return
+        }
+        if session.isCompacting {
+            showWarning("Wait for compaction to finish before opening config.")
+            return
+        }
+
+        let loader = BorderedLoader(tui: tui, theme: theme, message: "Loading resources...")
+        editorContainer.clear()
+        editorContainer.addChild(loader)
+        tui.setFocus(loader)
+        ui.requestRender()
+
+        let cwd = FileManager.default.currentDirectoryPath
+        let agentDir = getAgentDir()
+        let packageManager = DefaultPackageManager(cwd: cwd, agentDir: agentDir, settingsManager: session.settingsManager)
+
+        let resolvedPaths: ResolvedPaths
+        do {
+            resolvedPaths = try await packageManager.resolve(onMissing: nil)
+        } catch {
+            loader.dispose()
+            editorContainer.clear()
+            editorContainer.addChild(currentEditor)
+            tui.setFocus(currentEditor)
+            ui.requestRender()
+            showError("Failed to load resources: \(error.localizedDescription)")
+            return
+        }
+
+        loader.dispose()
+        showSelector { done in
+            let selector = ConfigSelectorComponent(
+                resolvedPaths: resolvedPaths,
+                settingsManager: session.settingsManager,
+                cwd: cwd,
+                agentDir: agentDir,
+                onClose: {
+                    done()
+                },
+                onExit: {
+                    done()
+                },
+                requestRender: { [weak self] in
+                    self?.ui.requestRender()
+                }
+            )
+            return (component: selector, focus: selector.getResourceList())
         }
     }
 

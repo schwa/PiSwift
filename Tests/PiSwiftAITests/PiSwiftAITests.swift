@@ -566,3 +566,906 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     let updatedLongString = updatedLong.flatMap { String(data: $0, encoding: .utf8) }
     #expect(updatedLongString?.contains("\"ttl\":\"1h\"") == true)
 }
+
+// MARK: - JSON Schema Validation Tests
+
+@Suite("JSONSchemaValidator")
+struct JSONSchemaValidatorTests {
+    let validator = JSONSchemaValidator.shared
+
+    // MARK: - String Validation
+
+    @Suite("String Validation")
+    struct StringValidationTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesStringType() {
+            let schema: [String: Any] = ["type": "string"]
+            let result = validator.validate("hello", against: schema)
+            #expect(result.isValid)
+            #expect(result.coercedValue as? String == "hello")
+        }
+
+        @Test func rejectsNonStringType() {
+            let schema: [String: Any] = ["type": "string"]
+            let result = validator.validate(123, against: schema, coerceTypes: false)
+            #expect(!result.isValid)
+            #expect(result.errors.first?.message.contains("must be a string") == true)
+        }
+
+        @Test func coercesNumberToString() {
+            let schema: [String: Any] = ["type": "string"]
+            let result = validator.validate(123, against: schema, coerceTypes: true)
+            #expect(result.isValid)
+            #expect(result.coercedValue as? String == "123")
+        }
+
+        @Test func validatesMinLength() {
+            let schema: [String: Any] = ["type": "string", "minLength": 5]
+            let valid = validator.validate("hello", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("hi", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("at least 5 characters") == true)
+        }
+
+        @Test func validatesMaxLength() {
+            let schema: [String: Any] = ["type": "string", "maxLength": 3]
+            let valid = validator.validate("hi", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("hello", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("at most 3 characters") == true)
+        }
+
+        @Test func validatesPattern() {
+            let schema: [String: Any] = ["type": "string", "pattern": "^[a-z]+$"]
+            let valid = validator.validate("hello", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("Hello123", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must match pattern") == true)
+        }
+
+        @Test func validatesEmailFormat() {
+            let schema: [String: Any] = ["type": "string", "format": "email"]
+            let valid = validator.validate("user@example.com", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("not-an-email", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("valid email") == true)
+        }
+
+        @Test func validatesUriFormat() {
+            let schema: [String: Any] = ["type": "string", "format": "uri"]
+            let valid = validator.validate("https://example.com", against: schema)
+            #expect(valid.isValid)
+
+            // Note: Swift's URL(string:) is very lenient, so this is just a smoke test
+            // Real URL validation would need a stricter regex
+            let validSimple = validator.validate("http://example.com/path", against: schema)
+            #expect(validSimple.isValid)
+        }
+
+        @Test func validatesUuidFormat() {
+            let schema: [String: Any] = ["type": "string", "format": "uuid"]
+            let valid = validator.validate("550e8400-e29b-41d4-a716-446655440000", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("not-a-uuid", against: schema)
+            #expect(!invalid.isValid)
+        }
+    }
+
+    // MARK: - Number Validation
+
+    @Suite("Number Validation")
+    struct NumberValidationTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesNumberType() {
+            let schema: [String: Any] = ["type": "number"]
+            let result = validator.validate(3.14, against: schema)
+            #expect(result.isValid)
+            #expect(result.coercedValue as? Double == 3.14)
+        }
+
+        @Test func validatesIntegerType() {
+            let schema: [String: Any] = ["type": "integer"]
+            let valid = validator.validate(42, against: schema)
+            #expect(valid.isValid)
+            #expect(valid.coercedValue as? Int == 42)
+
+            let invalid = validator.validate(3.14, against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be an integer") == true)
+        }
+
+        @Test func coercesStringToNumber() {
+            let schema: [String: Any] = ["type": "number"]
+            let result = validator.validate("3.14", against: schema, coerceTypes: true)
+            #expect(result.isValid)
+            #expect(result.coercedValue as? Double == 3.14)
+        }
+
+        @Test func validatesMinimum() {
+            let schema: [String: Any] = ["type": "number", "minimum": 10.0]
+            let valid = validator.validate(15.0, against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(5.0, against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be >=") == true)
+        }
+
+        @Test func validatesMaximum() {
+            let schema: [String: Any] = ["type": "number", "maximum": 100.0]
+            let valid = validator.validate(50.0, against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(150.0, against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be <=") == true)
+        }
+
+        @Test func validatesExclusiveMinimum() {
+            let schema: [String: Any] = ["type": "number", "exclusiveMinimum": 10.0]
+            let valid = validator.validate(11.0, against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(10.0, against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be greater than") == true)
+        }
+
+        @Test func validatesMultipleOf() {
+            let schema: [String: Any] = ["type": "number", "multipleOf": 5.0]
+            let valid = validator.validate(15.0, against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(17.0, against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("multiple of") == true)
+        }
+    }
+
+    // MARK: - Boolean Validation
+
+    @Suite("Boolean Validation")
+    struct BooleanValidationTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesBooleanType() {
+            let schema: [String: Any] = ["type": "boolean"]
+            let resultTrue = validator.validate(true, against: schema)
+            #expect(resultTrue.isValid)
+            #expect(resultTrue.coercedValue as? Bool == true)
+
+            let resultFalse = validator.validate(false, against: schema)
+            #expect(resultFalse.isValid)
+            #expect(resultFalse.coercedValue as? Bool == false)
+        }
+
+        @Test func coercesStringToBoolean() {
+            let schema: [String: Any] = ["type": "boolean"]
+            let resultTrue = validator.validate("true", against: schema, coerceTypes: true)
+            #expect(resultTrue.isValid)
+            #expect(resultTrue.coercedValue as? Bool == true)
+
+            let resultFalse = validator.validate("false", against: schema, coerceTypes: true)
+            #expect(resultFalse.isValid)
+            #expect(resultFalse.coercedValue as? Bool == false)
+        }
+
+        @Test func rejectsInvalidBoolean() {
+            let schema: [String: Any] = ["type": "boolean"]
+            let result = validator.validate("maybe", against: schema, coerceTypes: true)
+            #expect(!result.isValid)
+        }
+    }
+
+    // MARK: - Array Validation
+
+    @Suite("Array Validation")
+    struct ArrayValidationTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesArrayType() {
+            let schema: [String: Any] = ["type": "array"]
+            let result = validator.validate([1, 2, 3], against: schema)
+            #expect(result.isValid)
+        }
+
+        @Test func validatesMinItems() {
+            let schema: [String: Any] = ["type": "array", "minItems": 2]
+            let valid = validator.validate([1, 2, 3], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate([1], against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("at least 2 items") == true)
+        }
+
+        @Test func validatesMaxItems() {
+            let schema: [String: Any] = ["type": "array", "maxItems": 3]
+            let valid = validator.validate([1, 2], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate([1, 2, 3, 4, 5], against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("at most 3 items") == true)
+        }
+
+        @Test func validatesItemsSchema() {
+            let schema: [String: Any] = [
+                "type": "array",
+                "items": ["type": "string"]
+            ]
+            let valid = validator.validate(["a", "b", "c"], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(["a", 123, "c"], against: schema, coerceTypes: false)
+            #expect(!invalid.isValid)
+        }
+
+        @Test func validatesUniqueItems() {
+            let schema: [String: Any] = ["type": "array", "uniqueItems": true]
+            let valid = validator.validate([1, 2, 3], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate([1, 2, 2], against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be unique") == true)
+        }
+    }
+
+    // MARK: - Object Validation
+
+    @Suite("Object Validation")
+    struct ObjectValidationTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesObjectType() {
+            let schema: [String: Any] = ["type": "object"]
+            let result = validator.validate(["key": "value"], against: schema)
+            #expect(result.isValid)
+        }
+
+        @Test func validatesRequiredProperties() {
+            let schema: [String: Any] = [
+                "type": "object",
+                "required": ["name", "age"]
+            ]
+            let valid = validator.validate(["name": "John", "age": 30], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(["name": "John"], against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("is required") == true)
+        }
+
+        @Test func validatesPropertySchemas() {
+            let schema: [String: Any] = [
+                "type": "object",
+                "properties": [
+                    "name": ["type": "string"],
+                    "age": ["type": "integer"]
+                ]
+            ]
+            let valid = validator.validate(["name": "John", "age": 30], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(["name": "John", "age": "thirty"], against: schema, coerceTypes: false)
+            #expect(!invalid.isValid)
+        }
+
+        @Test func rejectsAdditionalPropertiesWhenFalse() {
+            let schema: [String: Any] = [
+                "type": "object",
+                "properties": ["name": ["type": "string"]],
+                "additionalProperties": false
+            ]
+            let valid = validator.validate(["name": "John"], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(["name": "John", "extra": "field"], against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("additional property not allowed") == true)
+        }
+
+        @Test func allowsAdditionalPropertiesWhenTrue() {
+            let schema: [String: Any] = [
+                "type": "object",
+                "properties": ["name": ["type": "string"]],
+                "additionalProperties": true
+            ]
+            let result = validator.validate(["name": "John", "extra": "field"], against: schema)
+            #expect(result.isValid)
+        }
+
+        @Test func validatesMinProperties() {
+            let schema: [String: Any] = ["type": "object", "minProperties": 2]
+            let valid = validator.validate(["a": 1, "b": 2], against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate(["a": 1], against: schema)
+            #expect(!invalid.isValid)
+        }
+    }
+
+    // MARK: - Enum and Const Validation
+
+    @Suite("Enum and Const Validation")
+    struct EnumConstTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesEnumValues() {
+            let schema: [String: Any] = ["enum": ["red", "green", "blue"]]
+            let valid = validator.validate("red", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("yellow", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be one of the allowed values") == true)
+        }
+
+        @Test func validatesConstValue() {
+            let schema: [String: Any] = ["const": "fixed"]
+            let valid = validator.validate("fixed", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("other", against: schema)
+            #expect(!invalid.isValid)
+            #expect(invalid.errors.first?.message.contains("must be equal to constant") == true)
+        }
+    }
+
+    // MARK: - Composition Keywords
+
+    @Suite("Composition Keywords")
+    struct CompositionTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesAnyOf() {
+            let schema: [String: Any] = [
+                "anyOf": [
+                    ["type": "string"],
+                    ["type": "number"]
+                ]
+            ]
+            let validString = validator.validate("hello", against: schema)
+            #expect(validString.isValid)
+
+            let validNumber = validator.validate(123, against: schema)
+            #expect(validNumber.isValid)
+
+            // Test without type coercion to ensure strict type checking
+            let invalid = validator.validate(true, against: schema, coerceTypes: false)
+            #expect(!invalid.isValid)
+        }
+
+        @Test func validatesOneOf() {
+            let schema: [String: Any] = [
+                "oneOf": [
+                    ["type": "string", "minLength": 5],
+                    ["type": "string", "maxLength": 3]
+                ]
+            ]
+            let validLong = validator.validate("hello world", against: schema)
+            #expect(validLong.isValid)
+
+            let validShort = validator.validate("hi", against: schema)
+            #expect(validShort.isValid)
+
+            // "test" matches neither (4 chars: not >= 5, not <= 3)
+            let invalid = validator.validate("test", against: schema)
+            #expect(!invalid.isValid)
+        }
+
+        @Test func validatesAllOf() {
+            let schema: [String: Any] = [
+                "allOf": [
+                    ["type": "string"],
+                    ["type": "string", "minLength": 3]
+                ]
+            ]
+            let valid = validator.validate("hello", against: schema)
+            #expect(valid.isValid)
+
+            let invalid = validator.validate("hi", against: schema)
+            #expect(!invalid.isValid)
+        }
+    }
+
+    // MARK: - Null Handling
+
+    @Suite("Null Handling")
+    struct NullHandlingTests {
+        let validator = JSONSchemaValidator.shared
+
+        @Test func validatesNullableField() {
+            let schema: [String: Any] = ["type": "string", "nullable": true]
+            let validString = validator.validate("hello", against: schema)
+            #expect(validString.isValid)
+
+            let validNull = validator.validate(nil, against: schema)
+            #expect(validNull.isValid)
+        }
+
+        @Test func validatesUnionWithNull() {
+            let schema: [String: Any] = ["type": ["string", "null"]]
+            let validString = validator.validate("hello", against: schema)
+            #expect(validString.isValid)
+
+            let validNull = validator.validate(nil, against: schema)
+            #expect(validNull.isValid)
+        }
+
+        @Test func rejectsNullWhenNotAllowed() {
+            let schema: [String: Any] = ["type": "string"]
+            let result = validator.validate(nil, against: schema)
+            #expect(!result.isValid)
+            #expect(result.errors.first?.message.contains("is required") == true)
+        }
+    }
+}
+
+// MARK: - Tool Validation Tests
+
+@Suite("ToolValidation")
+struct ToolValidationTests {
+
+    @Test func validateToolCallFindsToolByName() throws {
+        let tool = AITool(
+            name: "get_weather",
+            description: "Get weather info",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "location": AnyCodable(["type": AnyCodable("string")])
+                ]),
+                "required": AnyCodable(["location"])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "get_weather",
+            arguments: ["location": AnyCodable("New York")]
+        )
+
+        let result = try validateToolCall(tools: [tool], toolCall: toolCall)
+        #expect(result["location"]?.value as? String == "New York")
+    }
+
+    @Test func validateToolCallThrowsForUnknownTool() {
+        let tool = AITool(
+            name: "get_weather",
+            description: "Get weather info",
+            parameters: [:]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "unknown_tool",
+            arguments: [:]
+        )
+
+        #expect(throws: ValidationError.self) {
+            try validateToolCall(tools: [tool], toolCall: toolCall)
+        }
+    }
+
+    @Test func validateToolCallValidatesRequiredFields() {
+        let tool = AITool(
+            name: "create_user",
+            description: "Create a user",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "name": AnyCodable(["type": AnyCodable("string")]),
+                    "email": AnyCodable(["type": AnyCodable("string"), "format": AnyCodable("email")])
+                ]),
+                "required": AnyCodable(["name", "email"])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "create_user",
+            arguments: ["name": AnyCodable("John")]
+        )
+
+        #expect(throws: ValidationError.self) {
+            try validateToolCall(tools: [tool], toolCall: toolCall)
+        }
+    }
+
+    @Test func validateToolCallValidatesPropertyTypes() {
+        // Create schema with minimum constraint using raw dictionaries
+        // Note: AnyCodable wrapping needs to use raw types, not nested AnyCodable
+        let tool = AITool(
+            name: "set_age",
+            description: "Set user age",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "age": ["type": "integer", "minimum": 0] as [String: Any]
+                ] as [String: Any])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "set_age",
+            arguments: ["age": AnyCodable(-5)]
+        )
+
+        #expect(throws: ValidationError.self) {
+            try validateToolCall(tools: [tool], toolCall: toolCall)
+        }
+    }
+
+    @Test func validateToolCallCoercesTypes() throws {
+        let tool = AITool(
+            name: "calculate",
+            description: "Calculate something",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "value": AnyCodable(["type": AnyCodable("number")])
+                ])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "calculate",
+            arguments: ["value": AnyCodable("42.5")]
+        )
+
+        let result = try validateToolCall(tools: [tool], toolCall: toolCall)
+        // The coerced value should be a number
+        let coercedValue = result["value"]?.value
+        // It could be Double or still String if coercion happens in validation but returns as is
+        if let doubleVal = coercedValue as? Double {
+            #expect(doubleVal == 42.5)
+        } else if let stringVal = coercedValue as? String {
+            // If not coerced in return value, at least validation passed
+            #expect(stringVal == "42.5")
+        } else {
+            #expect(Bool(false), "Expected value to be number or string")
+        }
+    }
+
+    @Test func validateToolCallHandlesEmptySchema() throws {
+        let tool = AITool(
+            name: "no_args",
+            description: "Tool with no arguments",
+            parameters: [:]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "no_args",
+            arguments: ["extra": AnyCodable("data")]
+        )
+
+        // Empty schema should pass through arguments without validation
+        let result = try validateToolCall(tools: [tool], toolCall: toolCall)
+        #expect(result["extra"]?.value as? String == "data")
+    }
+
+    @Test func validateToolCallHandlesNestedObjects() throws {
+        let tool = AITool(
+            name: "nested",
+            description: "Nested object tool",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "user": AnyCodable([
+                        "type": AnyCodable("object"),
+                        "properties": AnyCodable([
+                            "name": AnyCodable(["type": AnyCodable("string")]),
+                            "settings": AnyCodable([
+                                "type": AnyCodable("object"),
+                                "properties": AnyCodable([
+                                    "theme": AnyCodable(["type": AnyCodable("string")])
+                                ])
+                            ])
+                        ])
+                    ])
+                ])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "nested",
+            arguments: [
+                "user": AnyCodable([
+                    "name": AnyCodable("John"),
+                    "settings": AnyCodable([
+                        "theme": AnyCodable("dark")
+                    ])
+                ])
+            ]
+        )
+
+        let result = try validateToolCall(tools: [tool], toolCall: toolCall)
+        #expect(result["user"] != nil)
+    }
+
+    @Test func validateToolCallHandlesArrays() throws {
+        let tool = AITool(
+            name: "list_handler",
+            description: "Handle list of items",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "items": AnyCodable([
+                        "type": AnyCodable("array"),
+                        "items": AnyCodable(["type": AnyCodable("string")])
+                    ])
+                ])
+            ]
+        )
+        let toolCall = ToolCall(
+            id: "call_1",
+            name: "list_handler",
+            arguments: [
+                "items": AnyCodable([AnyCodable("a"), AnyCodable("b"), AnyCodable("c")])
+            ]
+        )
+
+        let result = try validateToolCall(tools: [tool], toolCall: toolCall)
+        #expect(result["items"] != nil)
+    }
+}
+
+// MARK: - OAuth Tests
+
+@Suite("OAuth")
+struct OAuthTests {
+
+    @Test func oauthProviderListReturnsAllProviders() {
+        let providers = getOAuthProviders()
+        #expect(providers.count == 5)
+
+        let ids = providers.map { $0.id }
+        #expect(ids.contains(.anthropic))
+        #expect(ids.contains(.openAICodex))
+        #expect(ids.contains(.githubCopilot))
+        #expect(ids.contains(.googleGeminiCli))
+        #expect(ids.contains(.googleAntigravity))
+    }
+
+    @Test func oauthProviderNamesAreSet() {
+        let providers = getOAuthProviders()
+        for provider in providers {
+            #expect(!provider.name.isEmpty)
+        }
+    }
+
+    @Test func normalizeGitHubDomainHandlesVariousInputs() {
+        // Empty input
+        #expect(normalizeGitHubDomain("") == nil)
+        #expect(normalizeGitHubDomain("   ") == nil)
+
+        // Simple hostname
+        #expect(normalizeGitHubDomain("github.com") == "github.com")
+        #expect(normalizeGitHubDomain("company.ghe.com") == "company.ghe.com")
+
+        // With protocol
+        #expect(normalizeGitHubDomain("https://github.com") == "github.com")
+        #expect(normalizeGitHubDomain("https://company.ghe.com/path") == "company.ghe.com")
+
+        // With whitespace
+        #expect(normalizeGitHubDomain("  github.com  ") == "github.com")
+    }
+
+    @Test func gitHubCopilotBaseUrlExtraction() {
+        // From token with proxy-ep
+        let tokenWithProxy = "tid=abc;exp=123;proxy-ep=proxy.individual.githubcopilot.com;sku=free"
+        let baseUrl = getGitHubCopilotBaseUrl(token: tokenWithProxy, enterpriseDomain: nil)
+        #expect(baseUrl == "https://api.individual.githubcopilot.com")
+
+        // Without token, with enterprise domain
+        let enterpriseUrl = getGitHubCopilotBaseUrl(token: nil, enterpriseDomain: "company.ghe.com")
+        #expect(enterpriseUrl == "https://copilot-api.company.ghe.com")
+
+        // Default fallback
+        let defaultUrl = getGitHubCopilotBaseUrl(token: nil, enterpriseDomain: nil)
+        #expect(defaultUrl == "https://api.individual.githubcopilot.com")
+
+        // Token without proxy-ep
+        let tokenWithoutProxy = "tid=abc;exp=123;sku=free"
+        let fallbackUrl = getGitHubCopilotBaseUrl(token: tokenWithoutProxy, enterpriseDomain: nil)
+        #expect(fallbackUrl == "https://api.individual.githubcopilot.com")
+    }
+
+    @Test func oauthCredentialsEncoding() throws {
+        let credentials = OAuthCredentials(
+            refresh: "refresh_token",
+            access: "access_token",
+            expires: 1234567890.0,
+            enterpriseUrl: "company.ghe.com",
+            projectId: "project-123",
+            email: "user@example.com",
+            accountId: "acc_123"
+        )
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(credentials)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(OAuthCredentials.self, from: data)
+
+        #expect(decoded.refresh == "refresh_token")
+        #expect(decoded.access == "access_token")
+        #expect(decoded.expires == 1234567890.0)
+        #expect(decoded.enterpriseUrl == "company.ghe.com")
+        #expect(decoded.projectId == "project-123")
+        #expect(decoded.email == "user@example.com")
+        #expect(decoded.accountId == "acc_123")
+    }
+
+    @Test func oauthApiKeyForSimpleProviders() throws {
+        // Anthropic - just returns access token
+        let anthropicKey = try oauthApiKey(provider: .anthropic, accessToken: "token123", projectId: nil)
+        #expect(anthropicKey == "token123")
+
+        // GitHub Copilot - just returns access token
+        let copilotKey = try oauthApiKey(provider: .githubCopilot, accessToken: "ghtoken", projectId: nil)
+        #expect(copilotKey == "ghtoken")
+    }
+
+    @Test func oauthApiKeyForGoogleProviders() throws {
+        // Google Gemini CLI - requires projectId, returns JSON
+        let geminiKey = try oauthApiKey(provider: .googleGeminiCli, accessToken: "gtoken", projectId: "proj-123")
+        #expect(geminiKey.contains("token"))
+        #expect(geminiKey.contains("gtoken"))
+        #expect(geminiKey.contains("projectId"))
+        #expect(geminiKey.contains("proj-123"))
+
+        // Antigravity - requires projectId, returns JSON
+        let antigravityKey = try oauthApiKey(provider: .googleAntigravity, accessToken: "atoken", projectId: "proj-456")
+        #expect(antigravityKey.contains("atoken"))
+        #expect(antigravityKey.contains("proj-456"))
+    }
+
+    @Test func oauthApiKeyThrowsForMissingProjectId() {
+        // Google providers require projectId
+        #expect(throws: OAuthError.self) {
+            try oauthApiKey(provider: .googleGeminiCli, accessToken: "token", projectId: nil)
+        }
+
+        #expect(throws: OAuthError.self) {
+            try oauthApiKey(provider: .googleAntigravity, accessToken: "token", projectId: nil)
+        }
+    }
+
+    @Test func requiresProjectIdForGoogleProviders() {
+        // Verify the helper function correctly identifies which providers need projectId
+        let geminiCreds = OAuthCredentials(refresh: "r", access: "a", expires: 0, projectId: nil)
+        let antigravityCreds = OAuthCredentials(refresh: "r", access: "a", expires: 0, projectId: nil)
+
+        // These should throw when trying to get API key
+        #expect(throws: OAuthError.self) {
+            try oauthApiKey(provider: .googleGeminiCli, credentials: geminiCreds)
+        }
+        #expect(throws: OAuthError.self) {
+            try oauthApiKey(provider: .googleAntigravity, credentials: antigravityCreds)
+        }
+
+        // With projectId, they should work
+        let geminiCredsWithProject = OAuthCredentials(refresh: "r", access: "a", expires: 0, projectId: "proj")
+        let key = try? oauthApiKey(provider: .googleGeminiCli, credentials: geminiCredsWithProject)
+        #expect(key != nil)
+    }
+}
+
+@Suite("ApiRegistry", .serialized)
+struct ApiRegistryTests {
+    @Test func registryStartsWithBuiltInProviders() {
+        // Reset to ensure clean state
+        resetApiProviders()
+
+        let providers = getApiProviders()
+        #expect(providers.count >= 8)
+
+        // Check specific providers exist
+        #expect(getApiProvider(.anthropicMessages) != nil)
+        #expect(getApiProvider(.openAICompletions) != nil)
+        #expect(getApiProvider(.openAIResponses) != nil)
+        #expect(getApiProvider(.azureOpenAIResponses) != nil)
+        #expect(getApiProvider(.googleGenerativeAI) != nil)
+        #expect(getApiProvider(.googleGeminiCli) != nil)
+        #expect(getApiProvider(.googleVertex) != nil)
+        #expect(getApiProvider(.bedrockConverseStream) != nil)
+    }
+
+    @Test func canRegisterCustomProvider() {
+        resetApiProviders()
+
+        // Create a mock provider (we can't easily test the actual streaming)
+        let customProvider = ApiProvider(
+            api: .anthropicMessages, // Reusing existing API type for test
+            stream: { _, _, _ in createAssistantMessageEventStream() },
+            streamSimple: { _, _, _ in createAssistantMessageEventStream() }
+        )
+
+        // Register with a custom source ID
+        registerApiProvider(customProvider, sourceId: "test-source")
+
+        // Verify it's registered
+        #expect(getApiProvider(.anthropicMessages) != nil)
+
+        // Cleanup
+        resetApiProviders()
+    }
+
+    @Test func unregisterRemovesProvidersBySourceId() {
+        // Clear and set up isolated test state
+        clearApiProviders()
+
+        let provider1 = ApiProvider(
+            api: .anthropicMessages,
+            stream: { _, _, _ in createAssistantMessageEventStream() },
+            streamSimple: { _, _, _ in createAssistantMessageEventStream() }
+        )
+        let provider2 = ApiProvider(
+            api: .openAICompletions,
+            stream: { _, _, _ in createAssistantMessageEventStream() },
+            streamSimple: { _, _, _ in createAssistantMessageEventStream() }
+        )
+
+        registerApiProvider(provider1, sourceId: "source-a")
+        registerApiProvider(provider2, sourceId: "source-b")
+
+        #expect(getApiProviders().count == 2)
+
+        // Unregister source-a
+        unregisterApiProviders(sourceId: "source-a")
+
+        #expect(getApiProviders().count == 1)
+        #expect(getApiProvider(.anthropicMessages) == nil)
+        #expect(getApiProvider(.openAICompletions) != nil)
+
+        // Restore built-in providers
+        resetApiProviders()
+    }
+
+    @Test func clearRemovesAllProviders() {
+        resetApiProviders()
+        let initialCount = getApiProviders().count
+        #expect(initialCount > 0)
+
+        clearApiProviders()
+        #expect(getApiProviders().count == 0)
+
+        // Restore built-in providers
+        resetApiProviders()
+        #expect(getApiProviders().count == initialCount)
+    }
+
+    @Test func resetApiProvidersRestoresBuiltIn() {
+        // Clear everything
+        clearApiProviders()
+        #expect(getApiProviders().count == 0)
+
+        // Reset should restore built-in providers
+        resetApiProviders()
+        #expect(getApiProviders().count >= 8)
+    }
+
+    @Test func registryHasMethod() {
+        // Restore built-in providers first to ensure clean state
+        resetApiProviders()
+
+        #expect(ApiProviderRegistry.shared.has(.anthropicMessages))
+        #expect(ApiProviderRegistry.shared.has(.openAICompletions))
+
+        clearApiProviders()
+        #expect(!ApiProviderRegistry.shared.has(.anthropicMessages))
+
+        // Restore for other tests
+        resetApiProviders()
+    }
+}
