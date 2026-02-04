@@ -188,7 +188,7 @@ public func buildSystemPrompt(_ options: BuildSystemPromptOptions = BuildSystemP
     let examplesPath = getExamplesPath()
 
     let tools = options.selectedTools ?? [.read, .bash, .edit, .write]
-    let toolsList = tools.map { "- \($0.rawValue): \(toolDescriptions[$0] ?? "")" }.joined(separator: "\n")
+    let toolsList = tools.isEmpty ? "(none)" : tools.map { "- \($0.rawValue): \(toolDescriptions[$0] ?? "")" }.joined(separator: "\n")
 
     var guidelinesList: [String] = []
 
