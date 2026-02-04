@@ -93,7 +93,8 @@ private let safeCommandPatterns: [NSRegularExpression] = [
     regex(#"^\s*exa\b"#),
 ]
 
-private struct TodoItem: Sendable {
+/// A todo item extracted from a plan
+struct TodoItem: Sendable {
     var step: Int
     var text: String
     var completed: Bool
@@ -529,7 +530,8 @@ private func matchesAny(_ regexes: [NSRegularExpression], _ text: String) -> Boo
     return regexes.contains { $0.firstMatch(in: text, range: range) != nil }
 }
 
-private func isSafeCommand(_ command: String) -> Bool {
+/// Checks if a command is safe to run in plan mode (read-only)
+func isSafeCommand(_ command: String) -> Bool {
     if matchesAny(safeCommandPatterns, command) && !matchesAny(destructivePatterns, command) {
         return true
     }
@@ -539,7 +541,8 @@ private func isSafeCommand(_ command: String) -> Bool {
     return true
 }
 
-private func cleanStepText(_ text: String) -> String {
+/// Cleans step text by removing markdown, action words, and truncating
+func cleanStepText(_ text: String) -> String {
     var cleaned = text
     cleaned = regexReplace(#"\*{1,2}([^*]+)\*{1,2}"#, in: cleaned, with: "$1")
     cleaned = regexReplace(#"`([^`]+)`"#, in: cleaned, with: "$1")
@@ -564,7 +567,8 @@ private func cleanStepText(_ text: String) -> String {
     return cleaned
 }
 
-private func extractTodoItems(_ message: String) -> [TodoItem] {
+/// Extracts todo items from a plan message
+func extractTodoItems(_ message: String) -> [TodoItem] {
     var items: [TodoItem] = []
 
     let numberedRegex = regex(#"^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)"#, [.anchorsMatchLines])
@@ -600,6 +604,32 @@ private func extractTodoItems(_ message: String) -> [TodoItem] {
     }
 
     return items
+}
+
+/// Extracts step numbers from [DONE:N] markers in a message
+func extractDoneSteps(_ message: String) -> [Int] {
+    let pattern = #"\[done:(\d+)\]"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return []
+    }
+    let range = NSRange(message.startIndex..<message.endIndex, in: message)
+    let matches = regex.matches(in: message, range: range)
+    return matches.compactMap { match -> Int? in
+        guard let numRange = Range(match.range(at: 1), in: message) else { return nil }
+        return Int(message[numRange])
+    }
+}
+
+/// Marks todo items as completed based on [DONE:N] markers in a message
+/// Returns the count of markers found (not the count of items marked)
+func markCompletedSteps(_ message: String, _ items: inout [TodoItem]) -> Int {
+    let doneSteps = extractDoneSteps(message)
+    for step in doneSteps {
+        if let index = items.firstIndex(where: { $0.step == step }) {
+            items[index].completed = true
+        }
+    }
+    return doneSteps.count
 }
 
 private func extractLastAssistantText(from messages: [AgentMessage]) -> String? {
