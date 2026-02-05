@@ -246,14 +246,28 @@ public func streamAzureOpenAIResponses(
                         case .functionToolCall(let toolCall):
                             let idPart = toolCall.id ?? ""
                             let combinedId = "\(toolCall.callId)|\(idPart)"
-                            let arguments = parseJSONStringArguments(toolCall.arguments)
-                            let call = ToolCall(id: combinedId, name: toolCall.name, arguments: arguments)
+                            let preferredArgs = currentToolCallArgs.trimmingCharacters(in: .whitespacesAndNewlines)
+                            var arguments = preferredArgs.isEmpty ? [:] : parseStreamingJSON(preferredArgs)
+                            if arguments.isEmpty {
+                                arguments = parseJSONStringArguments(toolCall.arguments)
+                            }
+                            var resolvedName = toolCall.name
+                            if let index = currentBlockIndex, case .toolCall(let existing) = output.content[index] {
+                                if resolvedName.isEmpty {
+                                    resolvedName = existing.name
+                                }
+                                if arguments.isEmpty, !existing.arguments.isEmpty {
+                                    arguments = existing.arguments
+                                }
+                            }
+                            let call = ToolCall(id: combinedId, name: resolvedName, arguments: arguments)
                             if let index = currentBlockIndex {
                                 output.content[index] = .toolCall(call)
                                 stream.push(.toolCallEnd(contentIndex: index, toolCall: call, partial: output))
-                                currentBlockIndex = nil
-                                currentBlockKind = nil
                             }
+                            currentBlockIndex = nil
+                            currentBlockKind = nil
+                            currentToolCallArgs = ""
                         default:
                             break
                         }

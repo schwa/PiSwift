@@ -1,4 +1,5 @@
 import Foundation
+import OpenAI
 import Testing
 @testable import PiSwiftAI
 
@@ -49,6 +50,7 @@ private func codexTestEvent(type: String, payload: [String: Any]) -> String {
     }
     return string
 }
+
 
 private func readRequestBody(_ request: URLRequest) -> Data? {
     if let body = request.httpBody {
@@ -108,6 +110,129 @@ private struct CodexRequestCapture: Sendable {
     let sessionId: String?
     let promptCacheKey: String?
 }
+
+private func runCodexToolCallRequest() async throws -> AssistantMessage {
+    try await codexRequestLock.withLock {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("pi-codex-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousAgentDir = ProcessInfo.processInfo.environment["PI_CODING_AGENT_DIR"]
+        setenv("PI_CODING_AGENT_DIR", tempDir.path, 1)
+        defer {
+            if let previousAgentDir {
+                setenv("PI_CODING_AGENT_DIR", previousAgentDir, 1)
+            } else {
+                unsetenv("PI_CODING_AGENT_DIR")
+            }
+        }
+
+        let payload: [String: Any] = ["https://api.openai.com/auth": ["chatgpt_account_id": "acc_test"]]
+        let payloadData = try JSONSerialization.data(withJSONObject: payload)
+        let payloadBase64 = payloadData.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let token = "aaa.\(payloadBase64).bbb"
+
+        MockURLProtocol.allowedHosts.withLock { $0 = ["api.github.com", "raw.githubusercontent.com", "chatgpt.com"] }
+        MockURLProtocol.requestHandler.withLock { $0 = { request in
+            guard let url = request.url else {
+                throw URLError(.badURL)
+            }
+
+            let urlString = url.absoluteString
+            if urlString == "https://api.github.com/repos/openai/codex/releases/latest" {
+                let data = try JSONSerialization.data(withJSONObject: ["tag_name": "rust-v0.0.0"])
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, data)
+            }
+
+            if urlString.hasPrefix("https://raw.githubusercontent.com/openai/codex/") {
+                let data = Data("PROMPT".utf8)
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["etag": "\"etag\""])!
+                return (response, data)
+            }
+
+            if urlString == "https://chatgpt.com/backend-api/codex/responses" {
+                let outputItemAdded = codexTestEvent(
+                    type: "response.output_item.added",
+                    payload: [
+                        "item": [
+                            "type": "function_call",
+                            "id": "tool_1",
+                            "call_id": "call_1",
+                            "name": "read",
+                            "arguments": "",
+                        ],
+                    ]
+                )
+                let argumentsDelta = codexTestEvent(
+                    type: "response.function_call_arguments.delta",
+                    payload: ["delta": "{\"path\":\"x\"}"]
+                )
+                let outputItemDone = codexTestEvent(
+                    type: "response.output_item.done",
+                    payload: [
+                        "item": [
+                            "type": "function_call",
+                            "id": "tool_1",
+                            "call_id": "call_1",
+                            "name": "",
+                            "arguments": "",
+                        ],
+                    ]
+                )
+                let responseCompleted = codexTestEvent(
+                    type: "response.completed",
+                    payload: [
+                        "response": [
+                            "status": "completed",
+                            "usage": [
+                                "input_tokens": 5,
+                                "output_tokens": 3,
+                                "total_tokens": 8,
+                                "input_tokens_details": ["cached_tokens": 0],
+                            ],
+                        ],
+                    ]
+                )
+
+                let sseEvents = [
+                    "data: \(outputItemAdded)",
+                    "data: \(argumentsDelta)",
+                    "data: \(outputItemDone)",
+                    "data: \(responseCompleted)",
+                ].joined(separator: "\n\n") + "\n\n"
+                let data = Data(sseEvents.utf8)
+                let response = HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["content-type": "text/event-stream"]
+                )!
+                return (response, data)
+            }
+
+            throw URLError(.unsupportedURL)
+        } }
+
+        URLProtocol.registerClass(MockURLProtocol.self)
+        defer {
+            MockURLProtocol.requestHandler.withLock { $0 = nil }
+            MockURLProtocol.allowedHosts.withLock { $0 = [] }
+            URLProtocol.unregisterClass(MockURLProtocol.self)
+        }
+
+        let model = getModel(provider: .openaiCodex, modelId: "gpt-5.1")
+        let context = Context(messages: [.user(UserMessage(content: .text("Use read tool")))])
+        let stream = streamOpenAICodexResponses(
+            model: model,
+            context: context,
+            options: OpenAICodexResponsesOptions(apiKey: token)
+        )
+        return await stream.result()
+    }
+}
+
 
 private func runCodexSessionRequest(sessionId: String?) async throws -> CodexRequestCapture {
     try await codexRequestLock.withLock {
@@ -418,6 +543,73 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(capture.conversationId == nil)
     #expect(capture.sessionId == nil)
     #expect(capture.promptCacheKey == nil)
+}
+
+@Test func openAICodexToolCallUsesStreamingArguments() async throws {
+    let message = try await runCodexToolCallRequest()
+    let toolCall = message.content.compactMap { block -> ToolCall? in
+        if case .toolCall(let call) = block { return call }
+        return nil
+    }.first
+    #expect(toolCall != nil)
+    #expect(toolCall?.name == "read")
+    let path = toolCall?.arguments["path"]?.value as? String
+    #expect(path == "x")
+}
+
+@Test func openAICompletionsToolCallIdResolutionUsesIndexMapping() async throws {
+    var toolCallIdByIndex: [Int: String] = [:]
+    let firstFunction = ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall.ChoiceDeltaToolCallFunction(
+        arguments: nil,
+        name: "bash"
+    )
+    let first = ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall(
+        index: 0,
+        id: "call_1",
+        function: firstFunction
+    )
+    let resolvedFirst = resolveToolCallIdentity(
+        toolCall: first,
+        currentToolCallId: nil,
+        currentToolCallIndex: nil,
+        toolCallIdByIndex: &toolCallIdByIndex,
+        requiresMistral: false
+    )
+    #expect(resolvedFirst.id == "call_1")
+    #expect(toolCallIdByIndex[0] == "call_1")
+
+    let secondFunction = ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall.ChoiceDeltaToolCallFunction(
+        arguments: "{\"command\":\"ls\"}",
+        name: nil
+    )
+    let second = ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall(
+        index: 0,
+        id: nil,
+        function: secondFunction
+    )
+    let resolvedSecond = resolveToolCallIdentity(
+        toolCall: second,
+        currentToolCallId: resolvedFirst.id,
+        currentToolCallIndex: resolvedFirst.index,
+        toolCallIdByIndex: &toolCallIdByIndex,
+        requiresMistral: false
+    )
+    #expect(resolvedSecond.id == "call_1")
+
+    var emptyMap: [Int: String] = [:]
+    let third = ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall(
+        index: 2,
+        id: nil,
+        function: nil
+    )
+    let resolvedThird = resolveToolCallIdentity(
+        toolCall: third,
+        currentToolCallId: nil,
+        currentToolCallIndex: nil,
+        toolCallIdByIndex: &emptyMap,
+        requiresMistral: false
+    )
+    #expect(resolvedThird.id == "toolcall_2")
 }
 
 @Test func openAICompletionsSmoke() async throws {

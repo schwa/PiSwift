@@ -210,10 +210,22 @@ public func streamOpenAICodexResponses(
                     } else if type == "function_call" {
                         let callId = item["call_id"] as? String ?? ""
                         let itemId = item["id"] as? String ?? ""
-                        let name = item["name"] as? String ?? ""
                         let combinedId = "\(callId)|\(itemId)"
-                        let arguments = parseCodexArguments(item["arguments"])
-                        let toolCall = ToolCall(id: combinedId, name: name, arguments: arguments)
+                        let preferredArgs = currentToolCallPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+                        var arguments = preferredArgs.isEmpty ? [:] : parseStreamingJSON(preferredArgs)
+                        if arguments.isEmpty {
+                            arguments = parseCodexArguments(item["arguments"])
+                        }
+                        var resolvedName = item["name"] as? String ?? ""
+                        if let index = currentBlockIndex, case .toolCall(let existing) = output.content[index] {
+                            if resolvedName.isEmpty {
+                                resolvedName = existing.name
+                            }
+                            if arguments.isEmpty, !existing.arguments.isEmpty {
+                                arguments = existing.arguments
+                            }
+                        }
+                        let toolCall = ToolCall(id: combinedId, name: resolvedName, arguments: arguments)
                         if let index = currentBlockIndex {
                             output.content[index] = .toolCall(toolCall)
                             stream.push(.toolCallEnd(contentIndex: index, toolCall: toolCall, partial: output))
@@ -662,6 +674,9 @@ private func extractCodexMessageText(_ item: [String: Any]) -> String {
 }
 
 private func parseCodexArguments(_ value: Any?) -> [String: AnyCodable] {
+    if let dict = value as? [String: Any] {
+        return dict.mapValues { AnyCodable($0) }
+    }
     guard let string = value as? String else {
         return [:]
     }

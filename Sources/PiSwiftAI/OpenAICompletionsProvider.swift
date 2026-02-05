@@ -40,6 +40,8 @@ public func streamOpenAICompletions(
             var currentBlockKind: String? = nil
             var currentToolCallArgs = ""
             var currentToolCallId: String? = nil
+            var currentToolCallIndex: Int? = nil
+            var toolCallIdByIndex: [Int: String] = [:]
 
             func finishCurrentBlock() {
                 guard let index = currentBlockIndex else { return }
@@ -60,6 +62,7 @@ public func streamOpenAICompletions(
                 currentBlockKind = nil
                 currentToolCallArgs = ""
                 currentToolCallId = nil
+                currentToolCallIndex = nil
             }
 
             for try await chunk in openAIStream {
@@ -124,8 +127,16 @@ public func streamOpenAICompletions(
 
                 if let toolCalls = delta.toolCalls {
                     for toolCall in toolCalls {
-                        let rawId = toolCall.id ?? "toolcall_\(toolCall.index ?? 0)"
-                        let normalizedId = normalizeMistralToolId(rawId, requiresMistral: compat.requiresMistralToolIds)
+                        let resolved = resolveToolCallIdentity(
+                            toolCall: toolCall,
+                            currentToolCallId: currentToolCallId,
+                            currentToolCallIndex: currentToolCallIndex,
+                            toolCallIdByIndex: &toolCallIdByIndex,
+                            requiresMistral: compat.requiresMistralToolIds
+                        )
+                        let index = resolved.index
+                        let normalizedId = resolved.id
+
                         if currentBlockKind != "toolCall" || currentToolCallId != normalizedId {
                             finishCurrentBlock()
                             let tool = ToolCall(id: normalizedId, name: toolCall.function?.name ?? "", arguments: [:])
@@ -134,6 +145,7 @@ public func streamOpenAICompletions(
                             currentBlockKind = "toolCall"
                             currentToolCallArgs = ""
                             currentToolCallId = normalizedId
+                            currentToolCallIndex = index
                             stream.push(.toolCallStart(contentIndex: currentBlockIndex!, partial: output))
                         }
 
@@ -260,6 +272,30 @@ private func normalizeMistralToolId(_ id: String, requiresMistral: Bool) -> Stri
         return filtered + padding.prefix(9 - filtered.count)
     }
     return String(filtered.prefix(9))
+}
+
+func resolveToolCallIdentity(
+    toolCall: ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall,
+    currentToolCallId: String?,
+    currentToolCallIndex: Int?,
+    toolCallIdByIndex: inout [Int: String],
+    requiresMistral: Bool
+) -> (id: String, index: Int) {
+    let index = toolCall.index ?? currentToolCallIndex ?? 0
+    if let id = toolCall.id, !id.isEmpty {
+        let resolved = normalizeMistralToolId(id, requiresMistral: requiresMistral)
+        toolCallIdByIndex[index] = resolved
+        return (resolved, index)
+    }
+    if let existing = toolCallIdByIndex[index] {
+        return (existing, index)
+    }
+    if let current = currentToolCallId, currentToolCallIndex == index {
+        return (current, index)
+    }
+    let fallback = normalizeMistralToolId("toolcall_\(index)", requiresMistral: requiresMistral)
+    toolCallIdByIndex[index] = fallback
+    return (fallback, index)
 }
 
 private func hasToolHistory(_ messages: [Message]) -> Bool {
