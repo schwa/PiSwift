@@ -269,4 +269,4 @@ private struct Utf8StreamDecoder: Sendable {
         return decoded
     }
 }
-#endif
+

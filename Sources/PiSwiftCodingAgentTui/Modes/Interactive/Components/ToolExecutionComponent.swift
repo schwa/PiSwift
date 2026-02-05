@@ -212,7 +212,13 @@ public final class ToolExecutionComponent: Container {
             if expanded {
                 contentBox.addChild(Text("\n" + styled, paddingX: 0, paddingY: 0))
             } else {
-                let truncation = truncateToVisualLines("\n" + styled, maxVisualLines: bashPreviewLines, width: ui.terminal.columns, paddingX: 0)
+                let contentWidth = max(1, ui.terminal.columns - 2)
+                let truncation = truncateToVisualLines(
+                    "\n" + styled,
+                    maxVisualLines: bashPreviewLines,
+                    width: contentWidth,
+                    paddingX: 0
+                )
                 contentBox.addChild(StaticLines(truncation.visualLines))
                 if truncation.skippedCount > 0 {
                     let hint = theme.fg(.dim, "... \(truncation.skippedCount) more lines (ctrl+o to expand)")
