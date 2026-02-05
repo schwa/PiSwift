@@ -1,4 +1,3 @@
-#if !canImport(UIKit)
 import Foundation
 import PiSwiftAI
 import PiSwiftAgent
@@ -114,4 +113,3 @@ public func createBashTool(cwd: String, options: BashToolOptions? = nil) -> PiSw
 }
 
 public let bashTool = createBashTool(cwd: FileManager.default.currentDirectoryPath)
-#endif

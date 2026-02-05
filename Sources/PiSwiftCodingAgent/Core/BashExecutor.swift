@@ -29,6 +29,35 @@ public struct BashResult: Sendable {
     }
 }
 
+public struct BashExecutorProvider: Sendable {
+    public let execute: @Sendable (String, BashExecutorOptions?) async throws -> BashResult
+    public let isAvailable: @Sendable () -> Bool
+
+    public init(
+        execute: @escaping @Sendable (String, BashExecutorOptions?) async throws -> BashResult,
+        isAvailable: @escaping @Sendable () -> Bool = { true }
+    ) {
+        self.execute = execute
+        self.isAvailable = isAvailable
+    }
+}
+
+public enum BashExecutorRegistry {
+    private static let state = LockedState<BashExecutorProvider>(defaultBashProvider)
+
+    public static func register(_ provider: BashExecutorProvider) {
+        state.withLock { $0 = provider }
+    }
+
+    public static func provider() -> BashExecutorProvider {
+        state.withLock { $0 }
+    }
+
+    public static func isAvailable() -> Bool {
+        provider().isAvailable()
+    }
+}
+
 public func executeBashWithOperations(
     _ command: String,
     operations: BashOperations,
@@ -37,13 +66,30 @@ public func executeBashWithOperations(
     try await operations.execute(command, options: options)
 }
 
-
-#if canImport(UIKit)
 public func executeBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {
-    return BashResult(output: "Not available on iOS", exitCode: 1, cancelled: false, truncated: false)
+    try await BashExecutorRegistry.provider().execute(command, options)
 }
-#else
-public func executeBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {
+
+private let defaultBashProvider: BashExecutorProvider = {
+    #if canImport(UIKit)
+    return BashExecutorProvider(
+        execute: { _, _ in
+            BashResult(output: "Not available on iOS", exitCode: 1, cancelled: false, truncated: false)
+        },
+        isAvailable: { false }
+    )
+    #else
+    return BashExecutorProvider(
+        execute: { command, options in
+            try await executeSystemBash(command, options: options)
+        },
+        isAvailable: { true }
+    )
+    #endif
+}()
+
+#if !canImport(UIKit)
+private func executeSystemBash(_ command: String, options: BashExecutorOptions? = nil) async throws -> BashResult {
     let process = Process()
     let shellConfig = try getShellConfig()
     process.executableURL = URL(fileURLWithPath: shellConfig.shell)
@@ -141,6 +187,7 @@ public func executeBash(_ command: String, options: BashExecutorOptions? = nil) 
         }
     }
 }
+#endif
 
 private final class ManagedAtomic: Sendable {
     private let state: LockedState<Bool>
