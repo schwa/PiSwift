@@ -609,6 +609,7 @@ private func buildBedrockRequest(
 
     let encoder = JSONEncoder()
     let body = try encoder.encode(requestBody)
+    emitPayload(options.onPayload, payload: requestBody)
 
     var request = URLRequest(url: url)
     request.httpMethod = "POST"

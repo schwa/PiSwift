@@ -125,7 +125,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamBedrock(model: model, context: context, options: providerOptions)
     }
@@ -143,7 +144,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamBedrock(model: model, context: context, options: providerOptions)
     case .openAICompletions:
@@ -152,7 +154,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamOpenAICompletions(model: model, context: context, options: providerOptions)
     case .openAIResponses:
@@ -162,9 +165,21 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             signal: options?.signal,
             apiKey: apiKey,
             sessionId: options?.sessionId,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamOpenAIResponses(model: model, context: context, options: providerOptions)
+    case .openAICodexResponses:
+        let providerOptions = OpenAICodexResponsesOptions(
+            temperature: options?.temperature,
+            maxTokens: options?.maxTokens,
+            signal: options?.signal,
+            apiKey: apiKey,
+            sessionId: options?.sessionId,
+            headers: options?.headers,
+            onPayload: options?.onPayload
+        )
+        return streamOpenAICodexResponses(model: model, context: context, options: providerOptions)
     case .azureOpenAIResponses:
         let providerOptions = AzureOpenAIResponsesOptions(
             temperature: options?.temperature,
@@ -172,7 +187,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             signal: options?.signal,
             apiKey: apiKey,
             sessionId: options?.sessionId,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamAzureOpenAIResponses(model: model, context: context, options: providerOptions)
     case .anthropicMessages:
@@ -181,7 +197,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamAnthropic(model: model, context: context, options: providerOptions)
     case .googleGenerativeAI:
@@ -190,7 +207,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamGoogle(model: model, context: context, options: providerOptions)
     case .googleGeminiCli:
@@ -200,7 +218,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             signal: options?.signal,
             apiKey: apiKey,
             headers: options?.headers,
-            sessionId: options?.sessionId
+            sessionId: options?.sessionId,
+            onPayload: options?.onPayload
         )
         return streamGoogleGeminiCli(model: model, context: context, options: providerOptions)
     case .googleVertex:
@@ -209,7 +228,8 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
         return streamGoogleVertex(model: model, context: context, options: providerOptions)
     }
@@ -246,6 +266,9 @@ public func streamSimple(model: Model, context: Context, options: SimpleStreamOp
     case .openAIResponses:
         let providerOptions = mapOpenAIResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamOpenAIResponses(model: model, context: context, options: providerOptions)
+    case .openAICodexResponses:
+        let providerOptions = mapOpenAICodexResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
+        return streamOpenAICodexResponses(model: model, context: context, options: providerOptions)
     case .azureOpenAIResponses:
         let providerOptions = mapAzureOpenAIResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
         return streamAzureOpenAIResponses(model: model, context: context, options: providerOptions)
@@ -275,7 +298,8 @@ func mapAnthropicSimpleOptions(model: Model, options: SimpleStreamOptions?, apiK
             signal: options?.signal,
             apiKey: apiKey,
             thinkingEnabled: false,
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
     }
 
@@ -294,7 +318,8 @@ func mapAnthropicSimpleOptions(model: Model, options: SimpleStreamOptions?, apiK
         apiKey: apiKey,
         thinkingEnabled: true,
         thinkingBudgetTokens: adjusted.thinkingBudget,
-        headers: options?.headers
+        headers: options?.headers,
+        onPayload: options?.onPayload
     )
 }
 
@@ -315,7 +340,8 @@ func mapOpenAICompletionsSimpleOptions(model: Model, options: SimpleStreamOption
         signal: options?.signal,
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
-        headers: options?.headers
+        headers: options?.headers,
+        onPayload: options?.onPayload
     )
 }
 
@@ -329,7 +355,23 @@ func mapOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId,
-        headers: options?.headers
+        headers: options?.headers,
+        onPayload: options?.onPayload
+    )
+}
+
+func mapOpenAICodexResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey: String) -> OpenAICodexResponsesOptions {
+    let maxTokens = options?.maxTokens ?? min(model.maxTokens, 32000)
+    let reasoningEffort = supportsXhigh(model: model) ? options?.reasoning : clampThinkingLevel(options?.reasoning)
+    return OpenAICodexResponsesOptions(
+        temperature: options?.temperature,
+        maxTokens: maxTokens,
+        signal: options?.signal,
+        apiKey: apiKey,
+        reasoningEffort: reasoningEffort,
+        sessionId: options?.sessionId,
+        headers: options?.headers,
+        onPayload: options?.onPayload
     )
 }
 
@@ -343,7 +385,8 @@ func mapAzureOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOpt
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId,
-        headers: options?.headers
+        headers: options?.headers,
+        onPayload: options?.onPayload
     )
 }
 
@@ -356,7 +399,8 @@ func mapGoogleSimpleOptions(model: Model, options: SimpleStreamOptions?, apiKey:
         signal: options?.signal,
         apiKey: apiKey,
         headers: options?.headers,
-        thinking: thinking
+        thinking: thinking,
+        onPayload: options?.onPayload
     )
 }
 
@@ -369,7 +413,8 @@ func mapGoogleVertexSimpleOptions(model: Model, options: SimpleStreamOptions?, a
         signal: options?.signal,
         apiKey: apiKey,
         headers: options?.headers,
-        thinking: thinking
+        thinking: thinking,
+        onPayload: options?.onPayload
     )
 }
 
@@ -435,7 +480,8 @@ func mapBedrockSimpleOptions(model: Model, options: SimpleStreamOptions?) -> Bed
             signal: options?.signal,
             reasoning: reasoning,
             thinkingBudgets: mergeThinkingBudgets(options?.thinkingBudgets, reasoning: reasoning, thinkingBudget: adjusted.thinkingBudget),
-            headers: options?.headers
+            headers: options?.headers,
+            onPayload: options?.onPayload
         )
     }
 
@@ -445,7 +491,8 @@ func mapBedrockSimpleOptions(model: Model, options: SimpleStreamOptions?) -> Bed
         signal: options?.signal,
         reasoning: reasoning,
         thinkingBudgets: options?.thinkingBudgets,
-        headers: options?.headers
+        headers: options?.headers,
+        onPayload: options?.onPayload
     )
 }
 

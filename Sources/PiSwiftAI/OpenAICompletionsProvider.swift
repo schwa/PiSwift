@@ -25,6 +25,7 @@ public func streamOpenAICompletions(
             if compat.thinkingFormat == .zai {
                 openAIStream = try streamZaiCompletions(model: model, context: context, options: options, query: query)
             } else {
+                emitPayload(options.onPayload, payload: query)
                 let middlewares = buildCompletionsMiddlewares(model: model)
                 let client = try makeOpenAIClient(
                     model: model,
@@ -583,7 +584,9 @@ private func streamZaiCompletions(
         request.setValue(value, forHTTPHeaderField: key)
     }
 
-    request.httpBody = try buildZaiRequestBody(query: query, model: model, options: options)
+    let body = try buildZaiRequestBody(query: query, model: model, options: options)
+    request.httpBody = body
+    emitPayload(options.onPayload, data: body)
     return streamChatCompletions(request: request, signal: options.signal)
 }
 

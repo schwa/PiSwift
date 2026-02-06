@@ -28,6 +28,7 @@ public func streamGoogleVertex(
             let accessToken = try resolveVertexAccessToken(options: options)
 
             let requestBody = try buildVertexRequestBody(model: model, context: context, options: options)
+            emitPayload(options.onPayload, data: requestBody)
             let url = try vertexStreamUrl(model: model, project: project, location: location)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"

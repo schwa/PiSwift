@@ -3307,7 +3307,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "gpt-5.1": Model(
             id: "gpt-5.1",
             name: "GPT-5.1",
-            api: .openAIResponses,
+            api: .openAICodexResponses,
             provider: "openai-codex",
             baseUrl: "https://chatgpt.com/backend-api",
             reasoning: true,
@@ -3319,7 +3319,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "gpt-5.1-codex-max": Model(
             id: "gpt-5.1-codex-max",
             name: "GPT-5.1 Codex Max",
-            api: .openAIResponses,
+            api: .openAICodexResponses,
             provider: "openai-codex",
             baseUrl: "https://chatgpt.com/backend-api",
             reasoning: true,
@@ -3331,7 +3331,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "gpt-5.1-codex-mini": Model(
             id: "gpt-5.1-codex-mini",
             name: "GPT-5.1 Codex Mini",
-            api: .openAIResponses,
+            api: .openAICodexResponses,
             provider: "openai-codex",
             baseUrl: "https://chatgpt.com/backend-api",
             reasoning: true,
@@ -3343,7 +3343,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "gpt-5.2": Model(
             id: "gpt-5.2",
             name: "GPT-5.2",
-            api: .openAIResponses,
+            api: .openAICodexResponses,
             provider: "openai-codex",
             baseUrl: "https://chatgpt.com/backend-api",
             reasoning: true,
@@ -3355,7 +3355,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "gpt-5.2-codex": Model(
             id: "gpt-5.2-codex",
             name: "GPT-5.2 Codex",
-            api: .openAIResponses,
+            api: .openAICodexResponses,
             provider: "openai-codex",
             baseUrl: "https://chatgpt.com/backend-api",
             reasoning: true,

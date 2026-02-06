@@ -151,6 +151,7 @@ public func streamAzureOpenAIResponses(
                 middlewares: [cacheMiddleware, azureMiddleware]
             )
             let builtQuery = try buildAzureResponsesQuery(model: model, context: context, options: options, deploymentName: deploymentName)
+            emitPayload(options.onPayload, payload: builtQuery)
             client = builtClient
             query = builtQuery
 

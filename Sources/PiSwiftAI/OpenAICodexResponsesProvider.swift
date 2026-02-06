@@ -70,6 +70,7 @@ public func streamOpenAICodexResponses(
                 include: options.include
             )
             transformCodexRequestBody(&body, options: requestOptions, prompt: nil)
+            emitPayload(options.onPayload, jsonObject: body)
 
             let requestData = try JSONSerialization.data(withJSONObject: body, options: [])
             var request = URLRequest(url: codexResponsesUrl(baseUrl: model.baseUrl))

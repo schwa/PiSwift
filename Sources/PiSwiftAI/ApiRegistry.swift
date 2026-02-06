@@ -120,7 +120,8 @@ public func registerBuiltInProviders() {
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
                 apiKey: apiKey,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamAnthropic(model: model, context: context, options: providerOptions)
         },
@@ -140,7 +141,8 @@ public func registerBuiltInProviders() {
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
                 apiKey: apiKey,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamOpenAICompletions(model: model, context: context, options: providerOptions)
         },
@@ -161,7 +163,8 @@ public func registerBuiltInProviders() {
                 signal: options?.signal,
                 apiKey: apiKey,
                 sessionId: options?.sessionId,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamOpenAIResponses(model: model, context: context, options: providerOptions)
         },
@@ -169,6 +172,28 @@ public func registerBuiltInProviders() {
             let apiKey = options?.apiKey ?? getEnvApiKey(provider: model.provider) ?? ""
             let providerOptions = mapOpenAIResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
             return streamOpenAIResponses(model: model, context: context, options: providerOptions)
+        }
+    ), sourceId: "built-in")
+
+    registerApiProvider(ApiProvider(
+        api: .openAICodexResponses,
+        stream: { model, context, options in
+            let apiKey = options?.apiKey ?? getEnvApiKey(provider: model.provider) ?? ""
+            let providerOptions = OpenAICodexResponsesOptions(
+                temperature: options?.temperature,
+                maxTokens: options?.maxTokens,
+                signal: options?.signal,
+                apiKey: apiKey,
+                sessionId: options?.sessionId,
+                headers: options?.headers,
+                onPayload: options?.onPayload
+            )
+            return streamOpenAICodexResponses(model: model, context: context, options: providerOptions)
+        },
+        streamSimple: { model, context, options in
+            let apiKey = options?.apiKey ?? getEnvApiKey(provider: model.provider) ?? ""
+            let providerOptions = mapOpenAICodexResponsesSimpleOptions(model: model, options: options, apiKey: apiKey)
+            return streamOpenAICodexResponses(model: model, context: context, options: providerOptions)
         }
     ), sourceId: "built-in")
 
@@ -182,7 +207,8 @@ public func registerBuiltInProviders() {
                 signal: options?.signal,
                 apiKey: apiKey,
                 sessionId: options?.sessionId,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamAzureOpenAIResponses(model: model, context: context, options: providerOptions)
         },
@@ -202,7 +228,8 @@ public func registerBuiltInProviders() {
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
                 apiKey: apiKey,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamGoogle(model: model, context: context, options: providerOptions)
         },
@@ -223,7 +250,8 @@ public func registerBuiltInProviders() {
                 signal: options?.signal,
                 apiKey: apiKey,
                 headers: options?.headers,
-                sessionId: options?.sessionId
+                sessionId: options?.sessionId,
+                onPayload: options?.onPayload
             )
             return streamGoogleGeminiCli(model: model, context: context, options: providerOptions)
         },
@@ -241,7 +269,8 @@ public func registerBuiltInProviders() {
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
                 apiKey: apiKey,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamGoogleVertex(model: model, context: context, options: providerOptions)
         },
@@ -259,7 +288,8 @@ public func registerBuiltInProviders() {
                 temperature: options?.temperature,
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
-                headers: options?.headers
+                headers: options?.headers,
+                onPayload: options?.onPayload
             )
             return streamBedrock(model: model, context: context, options: providerOptions)
         },

@@ -3,6 +3,7 @@ import Foundation
 public enum Api: String, Sendable {
     case openAICompletions = "openai-completions"
     case openAIResponses = "openai-responses"
+    case openAICodexResponses = "openai-codex-responses"
     case azureOpenAIResponses = "azure-openai-responses"
     case anthropicMessages = "anthropic-messages"
     case bedrockConverseStream = "bedrock-converse-stream"
@@ -56,6 +57,7 @@ public struct StreamOptions: Sendable {
     public var apiKey: String?
     public var sessionId: String?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -63,7 +65,8 @@ public struct StreamOptions: Sendable {
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
         sessionId: String? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -71,6 +74,7 @@ public struct StreamOptions: Sendable {
         self.apiKey = apiKey
         self.sessionId = sessionId
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 
@@ -83,6 +87,7 @@ public struct SimpleStreamOptions: Sendable {
     public var sessionId: String?
     public var thinkingBudgets: ThinkingBudgets?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -92,7 +97,8 @@ public struct SimpleStreamOptions: Sendable {
         reasoning: ThinkingLevel? = nil,
         sessionId: String? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -102,8 +108,19 @@ public struct SimpleStreamOptions: Sendable {
         self.sessionId = sessionId
         self.thinkingBudgets = thinkingBudgets
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
+
+public struct PayloadSnapshot: Sendable {
+    public let json: String
+
+    public init(json: String) {
+        self.json = json
+    }
+}
+
+public typealias PayloadHandler = @Sendable (PayloadSnapshot) -> Void
 
 public enum OpenAICompatMaxTokensField: String, Sendable {
     case maxCompletionTokens = "max_completion_tokens"
@@ -489,6 +506,7 @@ public struct OpenAICompletionsOptions: Sendable {
     public var toolChoice: OpenAIToolChoice?
     public var reasoningEffort: ThinkingLevel?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -497,7 +515,8 @@ public struct OpenAICompletionsOptions: Sendable {
         apiKey: String? = nil,
         toolChoice: OpenAIToolChoice? = nil,
         reasoningEffort: ThinkingLevel? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -506,6 +525,7 @@ public struct OpenAICompletionsOptions: Sendable {
         self.toolChoice = toolChoice
         self.reasoningEffort = reasoningEffort
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 
@@ -547,6 +567,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var serviceTier: OpenAIServiceTier?
     public var sessionId: String?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -557,7 +578,8 @@ public struct OpenAIResponsesOptions: Sendable {
         reasoningSummary: OpenAIReasoningSummary? = nil,
         serviceTier: OpenAIServiceTier? = nil,
         sessionId: String? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -568,6 +590,7 @@ public struct OpenAIResponsesOptions: Sendable {
         self.serviceTier = serviceTier
         self.sessionId = sessionId
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 
@@ -584,6 +607,7 @@ public struct AzureOpenAIResponsesOptions: Sendable {
     public var azureResourceName: String?
     public var azureBaseUrl: String?
     public var azureDeploymentName: String?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -597,7 +621,8 @@ public struct AzureOpenAIResponsesOptions: Sendable {
         azureApiVersion: String? = nil,
         azureResourceName: String? = nil,
         azureBaseUrl: String? = nil,
-        azureDeploymentName: String? = nil
+        azureDeploymentName: String? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -611,6 +636,7 @@ public struct AzureOpenAIResponsesOptions: Sendable {
         self.azureResourceName = azureResourceName
         self.azureBaseUrl = azureBaseUrl
         self.azureDeploymentName = azureDeploymentName
+        self.onPayload = onPayload
     }
 }
 
@@ -625,6 +651,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
     public var include: [String]?
     public var sessionId: String?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -636,7 +663,8 @@ public struct OpenAICodexResponsesOptions: Sendable {
         textVerbosity: OpenAICodexTextVerbosity? = nil,
         include: [String]? = nil,
         sessionId: String? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -648,6 +676,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
         self.include = include
         self.sessionId = sessionId
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 
@@ -679,6 +708,7 @@ public struct GoogleOptions: Sendable {
     public var headers: [String: String]?
     public var toolChoice: String?
     public var thinking: ThinkingConfig?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -687,7 +717,8 @@ public struct GoogleOptions: Sendable {
         apiKey: String? = nil,
         headers: [String: String]? = nil,
         toolChoice: String? = nil,
-        thinking: ThinkingConfig? = nil
+        thinking: ThinkingConfig? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -696,6 +727,7 @@ public struct GoogleOptions: Sendable {
         self.headers = headers
         self.toolChoice = toolChoice
         self.thinking = thinking
+        self.onPayload = onPayload
     }
 }
 
@@ -709,6 +741,7 @@ public struct GoogleGeminiCliOptions: Sendable {
     public var thinking: GoogleOptions.ThinkingConfig?
     public var sessionId: String?
     public var projectId: String?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -719,7 +752,8 @@ public struct GoogleGeminiCliOptions: Sendable {
         toolChoice: String? = nil,
         thinking: GoogleOptions.ThinkingConfig? = nil,
         sessionId: String? = nil,
-        projectId: String? = nil
+        projectId: String? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -730,6 +764,7 @@ public struct GoogleGeminiCliOptions: Sendable {
         self.thinking = thinking
         self.sessionId = sessionId
         self.projectId = projectId
+        self.onPayload = onPayload
     }
 }
 
@@ -743,6 +778,7 @@ public struct GoogleVertexOptions: Sendable {
     public var thinking: GoogleOptions.ThinkingConfig?
     public var project: String?
     public var location: String?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -753,7 +789,8 @@ public struct GoogleVertexOptions: Sendable {
         toolChoice: String? = nil,
         thinking: GoogleOptions.ThinkingConfig? = nil,
         project: String? = nil,
-        location: String? = nil
+        location: String? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -764,6 +801,7 @@ public struct GoogleVertexOptions: Sendable {
         self.thinking = thinking
         self.project = project
         self.location = location
+        self.onPayload = onPayload
     }
 }
 
@@ -784,6 +822,7 @@ public struct AnthropicOptions: Sendable {
     public var interleavedThinking: Bool?
     public var toolChoice: AnthropicToolChoice?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -794,7 +833,8 @@ public struct AnthropicOptions: Sendable {
         thinkingBudgetTokens: Int? = nil,
         interleavedThinking: Bool? = nil,
         toolChoice: AnthropicToolChoice? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -805,6 +845,7 @@ public struct AnthropicOptions: Sendable {
         self.interleavedThinking = interleavedThinking
         self.toolChoice = toolChoice
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 
@@ -826,6 +867,7 @@ public struct BedrockOptions: Sendable {
     public var thinkingBudgets: ThinkingBudgets?
     public var interleavedThinking: Bool?
     public var headers: [String: String]?
+    public var onPayload: PayloadHandler?
 
     public init(
         temperature: Double? = nil,
@@ -837,7 +879,8 @@ public struct BedrockOptions: Sendable {
         reasoning: ThinkingLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         interleavedThinking: Bool? = nil,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        onPayload: PayloadHandler? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -849,6 +892,7 @@ public struct BedrockOptions: Sendable {
         self.thinkingBudgets = thinkingBudgets
         self.interleavedThinking = interleavedThinking
         self.headers = headers
+        self.onPayload = onPayload
     }
 }
 

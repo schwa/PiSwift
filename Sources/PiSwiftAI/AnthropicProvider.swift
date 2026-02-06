@@ -120,6 +120,7 @@ public func streamAnthropic(
             )
 
             let parameters = buildAnthropicParameters(model: model, context: context, options: options, isOAuthToken: isOAuthToken)
+            emitPayload(options.onPayload, payload: parameters)
             debugService = service
             debugParameters = parameters
             let toolCount = context.tools?.count ?? 0

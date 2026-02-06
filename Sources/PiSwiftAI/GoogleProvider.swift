@@ -28,6 +28,7 @@ public func streamGoogle(
             }
 
             let requestBody = try buildGoogleRequestBody(model: model, context: context, options: options)
+            emitPayload(options.onPayload, data: requestBody)
             let url = try googleStreamUrl(model: model, apiKey: apiKey)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"

@@ -70,7 +70,8 @@ public func streamOpenAIResponses(
             reasoningEffort: options.reasoningEffort,
             reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary),
             sessionId: options.sessionId,
-            headers: options.headers
+            headers: options.headers,
+            onPayload: options.onPayload
         )
         return streamOpenAICodexResponses(model: model, context: context, options: codexOptions)
     }
@@ -102,6 +103,7 @@ public func streamOpenAIResponses(
                 middlewares: [middleware]
             )
             let builtQuery = try buildResponsesQuery(model: model, context: context, options: options)
+            emitPayload(options.onPayload, payload: builtQuery)
             client = builtClient
             query = builtQuery
             let openAIStream: AsyncThrowingStream<ResponseStreamEvent, Error> = builtClient.responses.createResponseStreaming(query: builtQuery)

@@ -141,6 +141,7 @@ public func streamGoogleGeminiCli(
             let endpoints = baseUrl.isEmpty ? (isAntigravity ? antigravityEndpointFallbacks : [defaultGeminiCliEndpoint]) : [baseUrl]
 
             let requestBody = try buildGeminiCliRequest(model: model, context: context, projectId: projectId, options: options, isAntigravity: isAntigravity)
+            emitPayload(options.onPayload, jsonObject: requestBody)
             let requestData = try JSONSerialization.data(withJSONObject: requestBody, options: [])
 
             var baseHeaders = isAntigravity ? antigravityHeaders : geminiCliHeaders
@@ -456,7 +457,8 @@ public func streamSimpleGoogleGeminiCli(
         toolChoice: nil,
         thinking: nil,
         sessionId: options?.sessionId,
-        projectId: nil
+        projectId: nil,
+        onPayload: options?.onPayload
     )
 
     guard let reasoning = options?.reasoning else {
@@ -469,7 +471,8 @@ public func streamSimpleGoogleGeminiCli(
             toolChoice: base.toolChoice,
             thinking: GoogleOptions.ThinkingConfig(enabled: false),
             sessionId: base.sessionId,
-            projectId: base.projectId
+            projectId: base.projectId,
+            onPayload: base.onPayload
         )
         return streamGoogleGeminiCli(model: model, context: context, options: updated)
     }
@@ -489,7 +492,8 @@ public func streamSimpleGoogleGeminiCli(
                 level: getGeminiCliThinkingLevel(effort: effort, modelId: model.id)
             ),
             sessionId: base.sessionId,
-            projectId: base.projectId
+            projectId: base.projectId,
+            onPayload: base.onPayload
         )
         return streamGoogleGeminiCli(model: model, context: context, options: updated)
     }
@@ -517,7 +521,8 @@ public func streamSimpleGoogleGeminiCli(
         toolChoice: base.toolChoice,
         thinking: GoogleOptions.ThinkingConfig(enabled: true, budgetTokens: thinkingBudget, level: nil),
         sessionId: base.sessionId,
-        projectId: base.projectId
+        projectId: base.projectId,
+        onPayload: base.onPayload
     )
     return streamGoogleGeminiCli(model: model, context: context, options: updated)
 }
