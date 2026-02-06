@@ -97,6 +97,19 @@ import PiSwiftAgent
     #expect(!agent.state.messages.contains { $0.role == "user" && $0.timestamp == followUpMessage.timestamp })
 }
 
+@Test func hasQueuedMessages() {
+    let agent = Agent()
+    #expect(agent.hasQueuedMessages() == false)
+    agent.steer(.user(UserMessage(content: .text("Steer"))))
+    #expect(agent.hasQueuedMessages())
+    agent.clearSteeringQueue()
+    #expect(agent.hasQueuedMessages() == false)
+    agent.followUp(.user(UserMessage(content: .text("Follow"))))
+    #expect(agent.hasQueuedMessages())
+    agent.clearAllQueues()
+    #expect(agent.hasQueuedMessages() == false)
+}
+
 @Test func promptWhileStreamingThrows() async throws {
     let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
     let streamFn: StreamFn = { model, _, _ in
@@ -213,6 +226,51 @@ import PiSwiftAgent
     }
 
     _ = try await task.value
+}
+
+@Test func continueUsesQueuedMessagesWhenLastIsAssistant() async throws {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let streamFn: StreamFn = { model, _, _ in
+        let stream = AssistantMessageEventStream()
+        Task {
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+                stopReason: .stop
+            )
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        }
+        return stream
+    }
+
+    let assistant = AssistantMessage(
+        content: [.text(TextContent(text: "previous"))],
+        api: .openAICompletions,
+        provider: "openai",
+        model: "gpt-4o-mini",
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .stop
+    )
+
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(model: model, messages: [.assistant(assistant)]),
+        streamFn: streamFn
+    ))
+
+    agent.steer(.user(UserMessage(content: .text("queued"))))
+    try await agent.continue()
+
+    #expect(agent.state.messages.contains { msg in
+        if case .user(let user) = msg, case .text(let text) = user.content {
+            return text == "queued"
+        }
+        return false
+    })
+    #expect(agent.hasQueuedMessages() == false)
 }
 
 @Test func thinkingBudgetsGetterSetter() async throws {

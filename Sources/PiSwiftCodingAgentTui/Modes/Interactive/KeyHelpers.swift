@@ -37,6 +37,10 @@ import PiSwiftCodingAgent
     matchesKey(data, Key.ctrl("l"))
 }
 
+@inline(__always) func isCtrlU(_ data: String) -> Bool {
+    matchesKey(data, Key.ctrl("u"))
+}
+
 @inline(__always) func isCtrlO(_ data: String) -> Bool {
     matchesKey(data, Key.ctrl("o"))
 }

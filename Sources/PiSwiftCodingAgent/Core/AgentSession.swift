@@ -663,6 +663,46 @@ public final class AgentSession: Sendable {
         return true
     }
 
+    func runAutoCompaction(
+        reason: AutoCompactionReason,
+        willRetry: Bool,
+        compactBlock: (() async throws -> CompactionResult?)? = nil
+    ) async {
+        if isCompactingInternal { return }
+        if compactBlock != nil {
+            isCompactingInternal = true
+        }
+        defer {
+            if compactBlock != nil {
+                isCompactingInternal = false
+            }
+        }
+
+        emit(.autoCompactionStart(reason: reason))
+
+        var result: CompactionResult?
+        var aborted = false
+        do {
+            if let compactBlock {
+                result = try await compactBlock()
+            } else {
+                result = try await compact()
+            }
+        } catch is CancellationError {
+            aborted = true
+        } catch AgentSessionError.compactionCancelled {
+            aborted = true
+        } catch {
+            aborted = false
+        }
+
+        emit(.autoCompactionEnd(result: result, aborted: aborted, willRetry: willRetry))
+
+        if pendingMessageCount == 0, agent.hasQueuedMessages() {
+            try? await agent.continue()
+        }
+    }
+
     private func performRetry(delayMs: Int, attempt: Int, token: CancellationToken) async {
         do {
             try await sleepWithCancellation(delayMs: delayMs, token: token)

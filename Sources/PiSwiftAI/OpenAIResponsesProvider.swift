@@ -4,26 +4,41 @@ import OpenAI
 
 private let openAIToolCallProviders: Set<String> = ["openai", "openai-codex", "opencode"]
 
-func promptCacheRetention(baseUrl: String) -> String? {
+func resolveCacheRetention(_ cacheRetention: CacheRetention?) -> CacheRetention {
+    if let cacheRetention {
+        return cacheRetention
+    }
     let flag = getenv("PI_CACHE_RETENTION").map { String(cString: $0) }?.lowercased()
-    guard flag == "long" else { return nil }
+    if flag == "long" {
+        return .long
+    }
+    return .short
+}
+
+func getPromptCacheRetention(baseUrl: String, cacheRetention: CacheRetention) -> String? {
+    guard cacheRetention == .long else { return nil }
     guard baseUrl.contains("api.openai.com") else { return nil }
     return "24h"
 }
 
 struct OpenAIResponsesCacheMiddleware: OpenAIMiddleware {
     let sessionId: String?
+    let cacheRetention: CacheRetention
     let promptCacheRetention: String?
 
     func intercept(request: URLRequest) -> URLRequest {
         guard let body = readRequestBody(request) else { return request }
         guard var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return request }
 
-        if let sessionId, !sessionId.isEmpty {
+        if cacheRetention != .none, let sessionId, !sessionId.isEmpty {
             payload["prompt_cache_key"] = sessionId
+        } else {
+            payload.removeValue(forKey: "prompt_cache_key")
         }
         if let promptCacheRetention {
             payload["prompt_cache_retention"] = promptCacheRetention
+        } else {
+            payload.removeValue(forKey: "prompt_cache_retention")
         }
 
         guard let updatedBody = try? JSONSerialization.data(withJSONObject: payload) else { return request }
@@ -91,10 +106,12 @@ public func streamOpenAIResponses(
         var query: CreateModelResponseQuery? = nil
 
         do {
-            let cacheRetention = promptCacheRetention(baseUrl: model.baseUrl)
+            let cacheRetention = resolveCacheRetention(options.cacheRetention)
+            let promptCacheRetention = getPromptCacheRetention(baseUrl: model.baseUrl, cacheRetention: cacheRetention)
             let middleware = OpenAIResponsesCacheMiddleware(
                 sessionId: options.sessionId,
-                promptCacheRetention: cacheRetention
+                cacheRetention: cacheRetention,
+                promptCacheRetention: promptCacheRetention
             )
             let builtClient = try makeOpenAIClient(
                 model: model,
@@ -357,7 +374,7 @@ private func buildResponsesQuery(
         maxOutputTokens: options.maxTokens,
         reasoning: reasoning,
         serviceTier: mapResponsesServiceTier(options.serviceTier),
-        store: nil,
+        store: false,
         stream: true,
         temperature: options.temperature,
         toolChoice: nil,

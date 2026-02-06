@@ -125,6 +125,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
+            cacheRetention: options?.cacheRetention,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -144,6 +145,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             temperature: options?.temperature,
             maxTokens: options?.maxTokens,
             signal: options?.signal,
+            cacheRetention: options?.cacheRetention,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -164,6 +166,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
+            cacheRetention: options?.cacheRetention,
             sessionId: options?.sessionId,
             headers: options?.headers,
             onPayload: options?.onPayload
@@ -217,6 +220,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
+            maxRetryDelayMs: options?.maxRetryDelayMs,
             headers: options?.headers,
             sessionId: options?.sessionId,
             onPayload: options?.onPayload
@@ -353,6 +357,7 @@ func mapOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?
         maxTokens: maxTokens,
         signal: options?.signal,
         apiKey: apiKey,
+        cacheRetention: options?.cacheRetention,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId,
         headers: options?.headers,
@@ -480,6 +485,7 @@ func mapBedrockSimpleOptions(model: Model, options: SimpleStreamOptions?) -> Bed
             signal: options?.signal,
             reasoning: reasoning,
             thinkingBudgets: mergeThinkingBudgets(options?.thinkingBudgets, reasoning: reasoning, thinkingBudget: adjusted.thinkingBudget),
+            cacheRetention: options?.cacheRetention,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -491,6 +497,7 @@ func mapBedrockSimpleOptions(model: Model, options: SimpleStreamOptions?) -> Bed
         signal: options?.signal,
         reasoning: reasoning,
         thinkingBudgets: options?.thinkingBudgets,
+        cacheRetention: options?.cacheRetention,
         headers: options?.headers,
         onPayload: options?.onPayload
     )

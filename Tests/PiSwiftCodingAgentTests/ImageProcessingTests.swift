@@ -15,6 +15,41 @@ private let MEDIUM_PNG_100x100 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAAAAABVicqIAA
 // 200x200 colored PNG
 private let LARGE_PNG_200x200 = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIEAIAAAByquWKAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRP///////wlY99wAAAAHdElNRQfqAQ4AMzqU03BFAAAEEElEQVR42u3dvWqUURSF4XXMRAyIhSAWQvwnWtjaWusFx9bW1kKD/wELESxEiBjDjJdwysOC57mCXW32+zGcGbtdACpsdi+T8Xz1GABzm91xMl6sHgNgblzcT/Y+rh4DYG6cv0/2H64eA2BOEgI1fHQHaoyzbXIwVo8BMCcJgRqSEKgxft9Lrn5aPQbA3Ph1klw7Wj0GwJwkBGpYWECN8fMiub63egyAORcWUMPCAmqMH3eTG59XjwEwN76/S24+Wj0GwJwkBGpYWECN8e1fcmuzegyAORcWUMPCAmqM09vJ4dfVYwDMjS9vkzuPV48BMCcJgRqeSAZqjA/nyYP91WMAzElCoIYkBGqMk8Pk6HT1GABzm+3L5JIkBApIQqCGj+5AjfHmb/Lk8uoxAOYkIVBDEgI1LCygxmZ7nFyShEABFxZQw8ICaozXf5KnV1aPATDnwgJqWFhADQsLqOFnDUANFxZQw8ICaoxXZ8mzg9VjAMy5sIAaFhZQw3tYQA1/QgHUkIRADUkI1JCEQA1JCNSQhEANFxZQwzcsoIYkBGpIQqCGJARqSEKghiQEalhYQA1/QgHUcGEBNSwsoIYkBGq4sIAaFhZQw8ICaviGBdRwYQE1LCyghiQEariwgBoWFlDDe1hADS+OAjUkIVBDEgI1JCFQQxICNSQhUMOFBdTwDQuoIQmBGpIQqCEJgRqSEKghCYEaFhZQw4ujQA0XFlDDwgJqSEKghgsLqGFhATUsLKCGb1hADRcWUMPCAmpIQqCGCwuoYWEBNbyHBdTw4ihQQxICNSQhUEMSAjUkIVBDEgI1XFhADd+wgBqSEKghCYEakhCoIQmBGpIQqGFhATW8OArUcGEBNSwsoIYkBGq4sIAaFhZQw8ICaviGBdRwYQE1LCyghiQEariwgBoWFlDDe1hADS+OAjUkIVBDEgI1JCFQQxICNSQhUMOFBdTwDQuoIQmBGpIQqCEJgRqSEKghCYEa49lB8ups9RgAc14cBWpIQqCGhQXUkIRADRcWUMPCAmqMp1eS139WjwEw5xsWUEMSAjUsLKCGJARquLCAGhYWUGM8uZy8+bt6DIA5L44CNSQhUMMTyUCNcXSanByuHgNgThICNSQhUGM82E8+nK8eA2DOzxqAGpIQqDHuPE6+vF09BsDcOPyanN5ePQbAnCQEavgdFlBj3Nok3/6tHgNgzoujQA1JCNQYNx8l39+tHgNgbtz4nPy4u3oMgDlJCNSwsIAa4/pe8vNi9RgAc37WANSQhECNce0o+XWyegyAuXH1U/L73uoxAOYkIVDDwgJqjIORnG1XjwEw508ogBqSEKgx9h8m5+9XjwEwN/Y+Jhf3V48BMCcJgRpjPE+2x6vHAJgbSbLbrR4DYO4/GqiSgXN+ksgAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDEtMTRUMDA6NTE6NTcrMDA6MDDpysx4AAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAxLTE0VDAwOjUxOjU3KzAwOjAwmJd0xAAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMS0xNFQwMDo1MTo1NyswMDowMM+CVRsAAAAASUVORK5CYII="
 
+private func tinyBmp1x1Red24bpp() -> String {
+    var bytes = [UInt8](repeating: 0, count: 58)
+
+    // BITMAPFILEHEADER
+    bytes[0] = 0x42 // B
+    bytes[1] = 0x4D // M
+    let fileSize: UInt32 = 58
+    withUnsafeBytes(of: fileSize.littleEndian) { bytes.replaceSubrange(2..<6, with: $0) }
+    // reserved bytes (6..9) remain 0
+    let pixelOffset: UInt32 = 54
+    withUnsafeBytes(of: pixelOffset.littleEndian) { bytes.replaceSubrange(10..<14, with: $0) }
+
+    // BITMAPINFOHEADER
+    let headerSize: UInt32 = 40
+    withUnsafeBytes(of: headerSize.littleEndian) { bytes.replaceSubrange(14..<18, with: $0) }
+    let width: Int32 = 1
+    let height: Int32 = 1
+    withUnsafeBytes(of: width.littleEndian) { bytes.replaceSubrange(18..<22, with: $0) }
+    withUnsafeBytes(of: height.littleEndian) { bytes.replaceSubrange(22..<26, with: $0) }
+    let planes: UInt16 = 1
+    let bpp: UInt16 = 24
+    withUnsafeBytes(of: planes.littleEndian) { bytes.replaceSubrange(26..<28, with: $0) }
+    withUnsafeBytes(of: bpp.littleEndian) { bytes.replaceSubrange(28..<30, with: $0) }
+    let imageSize: UInt32 = 4
+    withUnsafeBytes(of: imageSize.littleEndian) { bytes.replaceSubrange(34..<38, with: $0) }
+
+    // Pixel data (B, G, R) + padding
+    bytes[54] = 0x00 // B
+    bytes[55] = 0x00 // G
+    bytes[56] = 0xFF // R
+    bytes[57] = 0x00 // padding
+
+    return Data(bytes).base64EncodedString()
+}
+
 // MARK: - convertToPng tests
 
 @Test func convertToPngReturnsSameDataForPng() {
@@ -41,6 +76,23 @@ private let LARGE_PNG_200x200 = "iVBORw0KGgoAAAANSUhEUgAAAMgAAADIEAIAAAByquWKAAA
     } else {
         Issue.record("Failed to decode result as base64")
     }
+}
+
+@Test func convertToPngConvertsBmpToPng() {
+#if canImport(AppKit)
+    let bmp = tinyBmp1x1Red24bpp()
+    let result = convertToPng(bmp, "image/bmp")
+
+    #expect(result != nil)
+    #expect(result?.mimeType == "image/png")
+
+    if let data = result?.data, let decoded = Data(base64Encoded: data) {
+        #expect(decoded[0] == 0x89)
+        #expect(decoded[1] == 0x50)
+        #expect(decoded[2] == 0x4E)
+        #expect(decoded[3] == 0x47)
+    }
+#endif
 }
 
 // MARK: - resizeImage tests

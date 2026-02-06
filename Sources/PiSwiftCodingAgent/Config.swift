@@ -4,9 +4,19 @@ public let APP_NAME = "pi"
 public let CONFIG_DIR_NAME = ".pi"
 public let VERSION = "0.0.0"
 public let ENV_AGENT_DIR = "\(APP_NAME.uppercased())_CODING_AGENT_DIR"
+public let ENV_PACKAGE_DIR = "PI_PACKAGE_DIR"
 
 public func getPackageDir() -> String {
-    FileManager.default.currentDirectoryPath
+    if let override = ProcessInfo.processInfo.environment[ENV_PACKAGE_DIR], !override.isEmpty {
+        if override == "~" {
+            return getHomeDir()
+        }
+        if override.hasPrefix("~/") {
+            return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(override.dropFirst(2))).path
+        }
+        return override
+    }
+    return FileManager.default.currentDirectoryPath
 }
 
 public func getThemesDir() -> String {

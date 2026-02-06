@@ -121,6 +121,7 @@ public func streamAzureOpenAIResponses(
 
             let cacheMiddleware = OpenAIResponsesCacheMiddleware(
                 sessionId: options.sessionId,
+                cacheRetention: .none,
                 promptCacheRetention: nil
             )
             let azureMiddleware = AzureOpenAIResponsesMiddleware(

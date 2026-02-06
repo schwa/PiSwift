@@ -121,6 +121,9 @@ private func normalizeCodexToolOutputs(_ input: [[String: Any]]) -> [[String: An
 private func clampCodexReasoningEffort(model: String, effort: ThinkingLevel) -> String {
     let modelId = model.split(separator: "/").last.map(String.init) ?? model
     let raw = effort.rawValue
+    if (modelId.hasPrefix("gpt-5.2") || modelId.hasPrefix("gpt-5.3")) && raw == "minimal" {
+        return "low"
+    }
     if modelId == "gpt-5.1", raw == "xhigh" {
         return "high"
     }

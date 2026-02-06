@@ -705,11 +705,13 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
 
 @Test func openAIPromptCacheRetentionHelper() async throws {
     await withEnv("PI_CACHE_RETENTION", value: nil) {
-        #expect(promptCacheRetention(baseUrl: "https://api.openai.com/v1") == nil)
+        #expect(resolveCacheRetention(nil) == .short)
+        #expect(getPromptCacheRetention(baseUrl: "https://api.openai.com/v1", cacheRetention: .short) == nil)
     }
     await withEnv("PI_CACHE_RETENTION", value: "long") {
-        #expect(promptCacheRetention(baseUrl: "https://api.openai.com/v1") == "24h")
-        #expect(promptCacheRetention(baseUrl: "https://proxy.example.com/v1") == nil)
+        #expect(resolveCacheRetention(nil) == .long)
+        #expect(getPromptCacheRetention(baseUrl: "https://api.openai.com/v1", cacheRetention: .long) == "24h")
+        #expect(getPromptCacheRetention(baseUrl: "https://proxy.example.com/v1", cacheRetention: .long) == nil)
     }
 }
 
@@ -723,11 +725,28 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     request.httpMethod = "POST"
     request.httpBody = body
 
-    let middleware = OpenAIResponsesCacheMiddleware(sessionId: "session-123", promptCacheRetention: "24h")
+    let middleware = OpenAIResponsesCacheMiddleware(sessionId: "session-123", cacheRetention: .long, promptCacheRetention: "24h")
     let updated = middleware.intercept(request: request)
     let updatedBody = updated.httpBody.flatMap { String(data: $0, encoding: .utf8) }
     #expect(updatedBody?.contains("\"prompt_cache_key\":\"session-123\"") == true)
     #expect(updatedBody?.contains("\"prompt_cache_retention\":\"24h\"") == true)
+}
+
+@Test func openAIResponsesCacheMiddlewareDisabled() async throws {
+    let payload: [String: Any] = [
+        "model": "gpt-4o-mini",
+        "input": [],
+    ]
+    let body = try JSONSerialization.data(withJSONObject: payload)
+    var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+    request.httpMethod = "POST"
+    request.httpBody = body
+
+    let middleware = OpenAIResponsesCacheMiddleware(sessionId: "session-123", cacheRetention: .none, promptCacheRetention: nil)
+    let updated = middleware.intercept(request: request)
+    let updatedBody = updated.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+    #expect(updatedBody?.contains("\"prompt_cache_key\"") == false)
+    #expect(updatedBody?.contains("\"prompt_cache_retention\"") == false)
 }
 
 @Test func anthropicCacheRetentionHelper() async throws {
@@ -757,6 +776,28 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     let updatedLong = injectCacheControl(body: body, ttl: "1h")
     let updatedLongString = updatedLong.flatMap { String(data: $0, encoding: .utf8) }
     #expect(updatedLongString?.contains("\"ttl\":\"1h\"") == true)
+}
+
+@Test func supportsXhighModels() async throws {
+    let gpt52 = getModel(provider: .openai, modelId: "gpt-5.2")
+    #expect(supportsXhigh(model: gpt52))
+
+    let gpt51 = getModel(provider: .openai, modelId: "gpt-5.1")
+    #expect(supportsXhigh(model: gpt51) == false)
+
+    let opus = Model(
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        api: .anthropicMessages,
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: [.text],
+        cost: ModelCost(input: 0, output: 0, cacheRead: 0, cacheWrite: 0),
+        contextWindow: 200000,
+        maxTokens: 4096
+    )
+    #expect(supportsXhigh(model: opus))
 }
 
 // MARK: - JSON Schema Validation Tests

@@ -26,7 +26,7 @@ public func streamOpenAICompletions(
                 openAIStream = try streamZaiCompletions(model: model, context: context, options: options, query: query)
             } else {
                 emitPayload(options.onPayload, payload: query)
-                let middlewares = buildCompletionsMiddlewares(model: model)
+                let middlewares = buildCompletionsMiddlewares(model: model, compat: compat, options: options)
                 let client = try makeOpenAIClient(
                     model: model,
                     apiKey: options.apiKey,
@@ -214,6 +214,7 @@ private struct ResolvedOpenAICompat {
     let requiresThinkingAsText: Bool
     let requiresMistralToolIds: Bool
     let thinkingFormat: OpenAICompatThinkingFormat
+    let supportsStrictMode: Bool
 }
 
 private func detectCompat(model: Model) -> ResolvedOpenAICompat {
@@ -240,7 +241,8 @@ private func detectCompat(model: Model) -> ResolvedOpenAICompat {
         requiresAssistantAfterToolResult: false,
         requiresThinkingAsText: isMistral,
         requiresMistralToolIds: isMistral,
-        thinkingFormat: isZai ? .zai : .openai
+        thinkingFormat: isZai ? .zai : .openai,
+        supportsStrictMode: true
     )
 }
 
@@ -258,7 +260,8 @@ private func resolveCompat(model: Model) -> ResolvedOpenAICompat {
         requiresAssistantAfterToolResult: compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
         requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
         requiresMistralToolIds: compat.requiresMistralToolIds ?? detected.requiresMistralToolIds,
-        thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat
+        thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
+        supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode
     )
 }
 
@@ -338,7 +341,7 @@ private func buildCompletionsQuery(
 
     let tools: [ChatQuery.ChatCompletionToolParam]? = {
         if let tools = context.tools {
-            return convertCompletionsTools(tools)
+            return convertCompletionsTools(tools, compat: compat)
         }
         if hasToolHistory(context.messages) {
             return []
@@ -545,14 +548,14 @@ private func convertCompletionsMessages(
     return params
 }
 
-private func convertCompletionsTools(_ tools: [AITool]) -> [ChatQuery.ChatCompletionToolParam] {
+private func convertCompletionsTools(_ tools: [AITool], compat: ResolvedOpenAICompat) -> [ChatQuery.ChatCompletionToolParam] {
     tools.compactMap { tool in
         let schema = openAIJSONSchema(from: tool.parameters)
         let definition = ChatQuery.ChatCompletionToolParam.FunctionDefinition(
             name: tool.name,
             description: tool.description,
             parameters: schema,
-            strict: nil
+            strict: compat.supportsStrictMode ? false : nil
         )
         return .init(function: definition)
     }
@@ -604,8 +607,16 @@ private func buildZaiRequestBody(query: ChatQuery, model: Model, options: OpenAI
     return try JSONSerialization.data(withJSONObject: object, options: [])
 }
 
-private func buildCompletionsMiddlewares(model: Model) -> [OpenAIMiddleware] {
+private func buildCompletionsMiddlewares(
+    model: Model,
+    compat: ResolvedOpenAICompat,
+    options: OpenAICompletionsOptions
+) -> [OpenAIMiddleware] {
     var middlewares: [OpenAIMiddleware] = []
+    if compat.thinkingFormat == .qwen, model.reasoning {
+        let enabled = options.reasoningEffort != nil
+        middlewares.append(OpenAICompletionsThinkingMiddleware(enableThinking: enabled))
+    }
     if model.compat?.openRouterRouting != nil || model.compat?.vercelGatewayRouting != nil {
         middlewares.append(OpenAICompletionsRoutingMiddleware(
             baseUrl: model.baseUrl,
@@ -614,6 +625,42 @@ private func buildCompletionsMiddlewares(model: Model) -> [OpenAIMiddleware] {
         ))
     }
     return middlewares
+}
+
+private struct OpenAICompletionsThinkingMiddleware: OpenAIMiddleware {
+    let enableThinking: Bool
+
+    func intercept(request: URLRequest) -> URLRequest {
+        guard let body = readRequestBody(request) else { return request }
+        guard var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return request }
+        payload["enable_thinking"] = enableThinking
+        guard let updatedBody = try? JSONSerialization.data(withJSONObject: payload) else { return request }
+        var updated = request
+        updated.httpBodyStream = nil
+        updated.httpBody = updatedBody
+        return updated
+    }
+
+    private func readRequestBody(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: bufferSize)
+            if read > 0 {
+                data.append(buffer, count: read)
+            } else {
+                break
+            }
+        }
+        return data.isEmpty ? nil : data
+    }
 }
 
 private struct OpenAICompletionsRoutingMiddleware: OpenAIMiddleware {

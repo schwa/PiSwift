@@ -32,10 +32,14 @@ public func calculateCost(model: Model, usage: inout Usage) -> UsageCost {
     return usage.cost
 }
 
-private let xhighModels: Set<String> = ["gpt-5.1-codex-max", "gpt-5.2", "gpt-5.2-codex"]
-
 public func supportsXhigh(model: Model) -> Bool {
-    xhighModels.contains(model.id)
+    if model.id.contains("gpt-5.2") || model.id.contains("gpt-5.3") {
+        return true
+    }
+    if model.api == .anthropicMessages {
+        return model.id.contains("opus-4-6") || model.id.contains("opus-4.6")
+    }
+    return false
 }
 
 public func modelsAreEqual(_ a: Model?, _ b: Model?) -> Bool {

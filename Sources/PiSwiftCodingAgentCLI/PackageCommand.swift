@@ -45,7 +45,7 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
                 return true
             }
             try await packageManager.install(source, options: PackageResolveOptions(local: options.local))
-            updatePackageSources(settingsManager, source: source, local: options.local, action: .add)
+            _ = packageManager.addSourceToSettings(source, local: options.local)
             print("Installed \(source)")
         case .remove:
             guard let source = options.source, !source.isEmpty else {
@@ -53,7 +53,11 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
                 return true
             }
             try await packageManager.remove(source, options: PackageResolveOptions(local: options.local))
-            updatePackageSources(settingsManager, source: source, local: options.local, action: .remove)
+            let removed = packageManager.removeSourceFromSettings(source, local: options.local)
+            if !removed {
+                fputs("No matching package found for \(source).\n", stderr)
+                return true
+            }
             print("Removed \(source)")
         case .list:
             let globalPackages = settingsManager.getGlobalSettings().packages ?? []
@@ -209,4 +213,3 @@ private func parseNpmSpec(_ spec: String) -> (name: String, version: String?) {
     }
     return (spec, nil)
 }
-

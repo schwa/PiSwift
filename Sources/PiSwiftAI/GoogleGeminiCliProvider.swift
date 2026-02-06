@@ -13,10 +13,17 @@ private let geminiCliHeaders: [String: String] = [
 ]
 
 private let antigravityHeaders: [String: String] = [
-    "User-Agent": "antigravity/1.15.8 darwin/arm64",
     "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
     "Client-Metadata": #"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#,
 ]
+
+private let defaultAntigravityVersion = "1.15.8"
+
+private func antigravityUserAgent() -> String {
+    let env = ProcessInfo.processInfo.environment
+    let version = env["PI_AI_ANTIGRAVITY_VERSION"] ?? defaultAntigravityVersion
+    return "antigravity/\(version) darwin/arm64"
+}
 
 private let antigravitySystemInstruction = """
 <identity>
@@ -145,6 +152,9 @@ public func streamGoogleGeminiCli(
             let requestData = try JSONSerialization.data(withJSONObject: requestBody, options: [])
 
             var baseHeaders = isAntigravity ? antigravityHeaders : geminiCliHeaders
+            if isAntigravity {
+                baseHeaders["User-Agent"] = antigravityUserAgent()
+            }
             if isClaudeThinkingModel(model.id) {
                 baseHeaders["anthropic-beta"] = claudeThinkingBetaHeader
             }
@@ -200,7 +210,16 @@ public func streamGoogleGeminiCli(
                     let body = try await collectSseStreamData(from: bytes)
                     let errorText = String(data: body, encoding: .utf8) ?? ""
                     if attempt < maxRetries && isRetryableError(status: http.statusCode, errorText: errorText) {
-                        let delay = extractRetryDelay(errorText: errorText, response: http) ?? (baseDelayMs * (1 << attempt))
+                        let serverDelay = extractRetryDelay(errorText: errorText, response: http)
+                        let delay = serverDelay ?? (baseDelayMs * (1 << attempt))
+                        let maxDelayMs = options.maxRetryDelayMs ?? 60000
+                        if maxDelayMs > 0, let serverDelay, serverDelay > maxDelayMs {
+                            let delaySeconds = Int(ceil(Double(serverDelay) / 1000.0))
+                            let maxSeconds = Int(ceil(Double(maxDelayMs) / 1000.0))
+                            throw GoogleGeminiCliError.apiError(
+                                "Server requested \(delaySeconds)s retry delay (max: \(maxSeconds)s). \(extractErrorMessage(errorText))"
+                            )
+                        }
                         try await sleepMillis(delay, signal: options.signal)
                         continue
                     }
@@ -453,6 +472,7 @@ public func streamSimpleGoogleGeminiCli(
         maxTokens: baseMaxTokens,
         signal: options?.signal,
         apiKey: apiKey,
+        maxRetryDelayMs: options?.maxRetryDelayMs,
         headers: options?.headers,
         toolChoice: nil,
         thinking: nil,
@@ -467,6 +487,7 @@ public func streamSimpleGoogleGeminiCli(
             maxTokens: base.maxTokens,
             signal: base.signal,
             apiKey: base.apiKey,
+            maxRetryDelayMs: base.maxRetryDelayMs,
             headers: base.headers,
             toolChoice: base.toolChoice,
             thinking: GoogleOptions.ThinkingConfig(enabled: false),
@@ -484,6 +505,7 @@ public func streamSimpleGoogleGeminiCli(
             maxTokens: base.maxTokens,
             signal: base.signal,
             apiKey: base.apiKey,
+            maxRetryDelayMs: base.maxRetryDelayMs,
             headers: base.headers,
             toolChoice: base.toolChoice,
             thinking: GoogleOptions.ThinkingConfig(
@@ -517,6 +539,7 @@ public func streamSimpleGoogleGeminiCli(
         maxTokens: maxTokens,
         signal: base.signal,
         apiKey: base.apiKey,
+        maxRetryDelayMs: base.maxRetryDelayMs,
         headers: base.headers,
         toolChoice: base.toolChoice,
         thinking: GoogleOptions.ThinkingConfig(enabled: true, budgetTokens: thinkingBudget, level: nil),

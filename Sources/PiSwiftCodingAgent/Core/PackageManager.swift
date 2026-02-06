@@ -277,8 +277,12 @@ public final class DefaultPackageManager: PackageManager {
                 try await installNpm(npm, scope: scope, temporary: false)
             case .git(let git):
                 try await installGit(git, scope: scope)
-            case .local:
-                throw PackageManagerError.unsupported("Unsupported install source: \(source)")
+            case .local(let local):
+                let resolved = resolvePath(local.path)
+                var isDir: ObjCBool = false
+                if !FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir) {
+                    throw PackageManagerError.unsupported("Path does not exist: \(resolved)")
+                }
             }
         }
     }
@@ -293,7 +297,7 @@ public final class DefaultPackageManager: PackageManager {
             case .git(let git):
                 try await removeGit(git, scope: scope)
             case .local:
-                throw PackageManagerError.unsupported("Unsupported remove source: \(source)")
+                return
             }
         }
     }
@@ -524,7 +528,12 @@ public final class DefaultPackageManager: PackageManager {
             try ensureGitIgnore(gitRoot)
         }
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: (targetDir as NSString).deletingLastPathComponent), withIntermediateDirectories: true)
-        let cloneUrl = source.repo.hasPrefix("http") ? source.repo : "https://\(source.repo)"
+        let cloneUrl: String
+        if source.repo.hasPrefix("http") || source.repo.hasPrefix("git@") || source.repo.hasPrefix("ssh://") {
+            cloneUrl = source.repo
+        } else {
+            cloneUrl = "https://\(source.repo)"
+        }
         _ = try await runCommand("git", ["clone", cloneUrl, targetDir], cwd: cwd)
         if let ref = source.ref {
             _ = try await runCommand("git", ["checkout", ref], cwd: targetDir)
@@ -680,29 +689,57 @@ public final class DefaultPackageManager: PackageManager {
     private func resolvePath(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "~" {
-            return getHomeDir()
+            return canonicalize(getHomeDir())
         }
         if trimmed.hasPrefix("~/") {
-            return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst(2))).path
+            return canonicalize(URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst(2))).path)
         }
         if trimmed.hasPrefix("~") {
-            return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst())).path
+            return canonicalize(URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst())).path)
         }
-        return URL(fileURLWithPath: cwd).appendingPathComponent(trimmed).standardized.path
+        if trimmed.hasPrefix("/") {
+            return canonicalize(URL(fileURLWithPath: trimmed).path)
+        }
+        if trimmed.count >= 3 {
+            let chars = Array(trimmed)
+            if chars[1] == ":", (chars[2] == "/" || chars[2] == "\\") {
+                return canonicalize(URL(fileURLWithPath: trimmed).path)
+            }
+        }
+        if trimmed.hasPrefix("\\\\") {
+            return canonicalize(URL(fileURLWithPath: trimmed).path)
+        }
+        return canonicalize(URL(fileURLWithPath: cwd).appendingPathComponent(trimmed).path)
     }
 
     private func resolvePathFromBase(_ input: String, baseDir: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == "~" {
-            return getHomeDir()
+            return canonicalize(getHomeDir())
         }
         if trimmed.hasPrefix("~/") {
-            return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst(2))).path
+            return canonicalize(URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst(2))).path)
         }
         if trimmed.hasPrefix("~") {
-            return URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst())).path
+            return canonicalize(URL(fileURLWithPath: getHomeDir()).appendingPathComponent(String(trimmed.dropFirst())).path)
         }
-        return URL(fileURLWithPath: baseDir).appendingPathComponent(trimmed).standardized.path
+        if trimmed.hasPrefix("/") {
+            return canonicalize(URL(fileURLWithPath: trimmed).path)
+        }
+        if trimmed.count >= 3 {
+            let chars = Array(trimmed)
+            if chars[1] == ":", (chars[2] == "/" || chars[2] == "\\") {
+                return canonicalize(URL(fileURLWithPath: trimmed).path)
+            }
+        }
+        if trimmed.hasPrefix("\\\\") {
+            return canonicalize(URL(fileURLWithPath: trimmed).path)
+        }
+        return canonicalize(URL(fileURLWithPath: baseDir).appendingPathComponent(trimmed).path)
+    }
+
+    private func canonicalize(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardized.path
     }
 
     private func collectPackageResources(
@@ -975,51 +1012,257 @@ public final class DefaultPackageManager: PackageManager {
         return files
     }
 
-    private func parseSource(_ source: String) -> ParsedSource {
+    func parseSource(_ source: String) -> ParsedSource {
         if source.hasPrefix("npm:") {
             let spec = String(source.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
             let parsed = parseNpmSpec(spec)
             return .npm(NpmSource(spec: spec, name: parsed.name, pinned: parsed.version != nil))
         }
 
+        if isLocalPathLike(source) {
+            return .local(LocalSource(path: source))
+        }
+
         if source.hasPrefix("git:") || looksLikeGitUrl(source) {
-            let repoSpec = source.hasPrefix("git:") ? String(source.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : source
-            let parts = repoSpec.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: true)
-            let repoPart = String(parts.first ?? Substring(repoSpec))
-            let ref = parts.count > 1 ? String(parts[1]) : nil
-            let normalized = repoPart
-                .replacingOccurrences(of: "https://", with: "")
-                .replacingOccurrences(of: "http://", with: "")
-                .replacingOccurrences(of: ".git", with: "")
-            let segments = normalized.split(separator: "/")
-            let host = segments.first.map(String.init) ?? ""
-            let repoPath = segments.dropFirst().joined(separator: "/")
-            return .git(GitSource(repo: normalized, host: host, path: repoPath, ref: ref, pinned: ref != nil))
+            if let git = parseGitUrl(source) {
+                return .git(git)
+            }
         }
 
         return .local(LocalSource(path: source))
     }
 
-    private func looksLikeGitUrl(_ input: String) -> Bool {
-        if input.hasPrefix("git@") { return true }
-        if input.contains("github.com") || input.contains("gitlab.com") || input.contains("bitbucket.org") {
+    private func isLocalPathLike(_ input: String) -> Bool {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "~" || trimmed.hasPrefix("~/") || trimmed.hasPrefix("~") {
             return true
         }
-        if input.hasPrefix("https://") || input.hasPrefix("http://") {
+        if trimmed.hasPrefix("./") || trimmed.hasPrefix("../") || trimmed.hasPrefix("/") {
             return true
         }
-        return input.hasSuffix(".git")
+        // Windows-style absolute paths (best-effort)
+        if trimmed.count >= 3 {
+            let chars = Array(trimmed)
+            if chars[1] == ":", (chars[2] == "/" || chars[2] == "\\") {
+                return true
+            }
+        }
+        if trimmed.hasPrefix("\\\\") {
+            return true
+        }
+        return false
     }
 
-    private func getPackageIdentity(_ source: String) -> String {
+    private func looksLikeGitUrl(_ input: String) -> Bool {
+        if input.hasPrefix("git@") { return true }
+        if input.hasPrefix("https://") || input.hasPrefix("http://") || input.hasPrefix("ssh://") { return true }
+        if input.hasSuffix(".git") { return true }
+        let parts = input.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        if parts.count == 2, parts[0].contains(".") || parts[0] == "localhost" {
+            return true
+        }
+        return false
+    }
+
+    func parseGitUrl(_ source: String) -> GitSource? {
+        let raw = source.hasPrefix("git:") ? String(source.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : source
+        let split = splitGitRef(raw)
+        let repoWithoutRef = split.repo
+        let ref = split.ref
+
+        if repoWithoutRef.hasPrefix("git@"), let colonIndex = repoWithoutRef.firstIndex(of: ":") {
+            let host = String(repoWithoutRef[repoWithoutRef.index(repoWithoutRef.startIndex, offsetBy: 4)..<colonIndex])
+            let path = String(repoWithoutRef[repoWithoutRef.index(after: colonIndex)...])
+            let normalizedPath = path.replacingOccurrences(of: ".git", with: "")
+            return GitSource(repo: repoWithoutRef, host: host, path: normalizedPath, ref: ref, pinned: ref != nil)
+        }
+
+        if repoWithoutRef.contains("://"), let url = URL(string: repoWithoutRef), let host = url.host {
+            let rawPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let normalizedPath = rawPath.replacingOccurrences(of: ".git", with: "")
+            guard !normalizedPath.isEmpty else { return nil }
+            var repo = repoWithoutRef
+            if repo.hasSuffix("/") { repo.removeLast() }
+            return GitSource(repo: repo, host: host, path: normalizedPath, ref: ref, pinned: ref != nil)
+        }
+
+        let parts = repoWithoutRef.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        let host = String(parts[0])
+        guard host.contains(".") || host == "localhost" else { return nil }
+        let normalizedPath = String(parts[1]).replacingOccurrences(of: ".git", with: "")
+        let repo = "https://\(repoWithoutRef)"
+        return GitSource(repo: repo, host: host, path: normalizedPath, ref: ref, pinned: ref != nil)
+    }
+
+    private func splitGitRef(_ url: String) -> (repo: String, ref: String?) {
+        if url.hasPrefix("git@"), let colonIndex = url.firstIndex(of: ":") {
+            let hostPart = String(url[..<colonIndex])
+            let pathPart = String(url[url.index(after: colonIndex)...])
+            if let atIndex = pathPart.firstIndex(of: "@") {
+                let repoPath = String(pathPart[..<atIndex])
+                let ref = String(pathPart[pathPart.index(after: atIndex)...])
+                if !repoPath.isEmpty && !ref.isEmpty {
+                    return (repo: "\(hostPart):\(repoPath)", ref: ref)
+                }
+            }
+            return (repo: url, ref: nil)
+        }
+
+        if url.contains("://"), let components = URLComponents(string: url) {
+            let path = components.percentEncodedPath
+            if let atIndex = path.firstIndex(of: "@") {
+                var updated = components
+                let repoPath = String(path[..<atIndex])
+                let ref = String(path[path.index(after: atIndex)...])
+                if !repoPath.isEmpty && !ref.isEmpty {
+                    updated.percentEncodedPath = repoPath
+                    let repo = updated.url?.absoluteString ?? url
+                    return (repo: repo, ref: ref)
+                }
+            }
+            return (repo: url, ref: nil)
+        }
+
+        if let slashIndex = url.firstIndex(of: "/") {
+            let host = String(url[..<slashIndex])
+            let pathPart = String(url[url.index(after: slashIndex)...])
+            if let atIndex = pathPart.firstIndex(of: "@") {
+                let repoPath = String(pathPart[..<atIndex])
+                let ref = String(pathPart[pathPart.index(after: atIndex)...])
+                if !repoPath.isEmpty && !ref.isEmpty {
+                    return (repo: "\(host)/\(repoPath)", ref: ref)
+                }
+            }
+        }
+
+        return (repo: url, ref: nil)
+    }
+
+    func getPackageIdentity(_ source: String) -> String {
         let parsed = parseSource(source)
         switch parsed {
         case .npm(let npm):
             return "npm:\(npm.name)"
         case .git(let git):
-            return "git:\(git.repo)"
+            return "git:\(git.host)/\(git.path)"
         case .local(let local):
             return "local:\(resolvePath(local.path))"
+        }
+    }
+
+    public func addSourceToSettings(_ source: String, local: Bool) -> Bool {
+        let scope = local ? "project" : "user"
+        let currentSettings = local ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings()
+        let currentPackages = currentSettings.packages ?? []
+
+        let normalizedSource = normalizePackageSourceForSettings(source, scope: scope)
+        let exists = currentPackages.contains { packageSourcesMatch($0, source, scope: scope) }
+        if exists {
+            return false
+        }
+
+        let nextPackages = currentPackages + [.simple(normalizedSource)]
+        if local {
+            settingsManager.setProjectPackages(nextPackages)
+        } else {
+            settingsManager.setPackages(nextPackages)
+        }
+        return true
+    }
+
+    public func removeSourceFromSettings(_ source: String, local: Bool) -> Bool {
+        let scope = local ? "project" : "user"
+        let currentSettings = local ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings()
+        let currentPackages = currentSettings.packages ?? []
+        let nextPackages = currentPackages.filter { !packageSourcesMatch($0, source, scope: scope) }
+        let changed = nextPackages.count != currentPackages.count
+        if !changed {
+            return false
+        }
+
+        if local {
+            settingsManager.setProjectPackages(nextPackages)
+        } else {
+            settingsManager.setPackages(nextPackages)
+        }
+        return true
+    }
+
+    private func getSourceMatchKeyForInput(_ source: String) -> String {
+        let parsed = parseSource(source)
+        switch parsed {
+        case .npm(let npm):
+            return "npm:\(npm.name)"
+        case .git(let git):
+            return "git:\(git.host)/\(git.path)"
+        case .local(let local):
+            return "local:\(resolvePath(local.path))"
+        }
+    }
+
+    private func getSourceMatchKeyForSettings(_ source: String, scope: String) -> String {
+        let parsed = parseSource(source)
+        switch parsed {
+        case .npm(let npm):
+            return "npm:\(npm.name)"
+        case .git(let git):
+            return "git:\(git.host)/\(git.path)"
+        case .local(let local):
+            let baseDir = getBaseDirForScope(scope)
+            return "local:\(resolvePathFromBase(local.path, baseDir: baseDir))"
+        }
+    }
+
+    private func packageSourcesMatch(_ existing: PackageSource, _ inputSource: String, scope: String) -> Bool {
+        let left = getSourceMatchKeyForSettings(packageSourceString(existing), scope: scope)
+        let right = getSourceMatchKeyForInput(inputSource)
+        return left == right
+    }
+
+    private func normalizePackageSourceForSettings(_ source: String, scope: String) -> String {
+        let parsed = parseSource(source)
+        switch parsed {
+        case .local(let local):
+            let baseDir = getBaseDirForScope(scope)
+            let resolved = resolvePath(local.path)
+            let relative = relativePath(from: baseDir, to: resolved)
+            return relative.isEmpty ? "." : relative
+        case .npm, .git:
+            return source
+        }
+    }
+
+    private func getBaseDirForScope(_ scope: String) -> String {
+        if scope == "project" {
+            return URL(fileURLWithPath: cwd).appendingPathComponent(CONFIG_DIR_NAME).path
+        }
+        return agentDir
+    }
+
+    private func relativePath(from baseDir: String, to targetPath: String) -> String {
+        let baseURL = URL(fileURLWithPath: baseDir).standardized
+        let targetURL = URL(fileURLWithPath: targetPath).standardized
+        let baseComponents = baseURL.pathComponents
+        let targetComponents = targetURL.pathComponents
+
+        var index = 0
+        while index < min(baseComponents.count, targetComponents.count),
+              baseComponents[index] == targetComponents[index] {
+            index += 1
+        }
+
+        let upMoves = Array(repeating: "..", count: baseComponents.count - index)
+        let downMoves = Array(targetComponents[index...])
+        return (upMoves + downMoves).joined(separator: "/")
+    }
+
+    private func packageSourceString(_ pkg: PackageSource) -> String {
+        switch pkg {
+        case .simple(let value):
+            return value
+        case .filtered(let value):
+            return value.source
         }
     }
 
@@ -1181,13 +1424,13 @@ private struct PiManifest {
     }
 }
 
-private struct NpmSource {
+struct NpmSource {
     var spec: String
     var name: String
     var pinned: Bool
 }
 
-private struct GitSource {
+struct GitSource {
     var repo: String
     var host: String
     var path: String
@@ -1195,11 +1438,11 @@ private struct GitSource {
     var pinned: Bool
 }
 
-private struct LocalSource {
+struct LocalSource {
     var path: String
 }
 
-private enum ParsedSource {
+enum ParsedSource {
     case npm(NpmSource)
     case git(GitSource)
     case local(LocalSource)

@@ -69,6 +69,11 @@ public func getShellConfig(settingsManager: SettingsManager = SettingsManager.cr
         storeShellConfig(config)
         return config
     }
+    if let bashOnPath = findBashOnPath() {
+        let config = ShellConfig(shell: bashOnPath, args: ["-c"])
+        storeShellConfig(config)
+        return config
+    }
     let config = ShellConfig(shell: "sh", args: ["-c"])
     storeShellConfig(config)
     return config
@@ -126,6 +131,31 @@ private func findBashOnPath() -> String? {
         if FileManager.default.fileExists(atPath: path) {
             return path
         }
+    }
+    return nil
+}
+#else
+private func findBashOnPath() -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["which", "bash"]
+    let output = Pipe()
+    process.standardOutput = output
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { return nil }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    let text = String(decoding: data, as: UTF8.self)
+    let first = text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).first
+    if let match = first {
+        let path = String(match)
+        return path.isEmpty ? nil : path
     }
     return nil
 }

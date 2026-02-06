@@ -594,8 +594,9 @@ private func buildBedrockRequest(
         throw BedrockStreamError.invalidUrl
     }
 
-    let messages = convertMessages(context: context, model: model)
-    let system = buildSystemPrompt(context.systemPrompt, model: model)
+    let cacheRetention = resolveBedrockCacheRetention(options.cacheRetention)
+    let messages = convertMessages(context: context, model: model, cacheRetention: cacheRetention)
+    let system = buildSystemPrompt(context.systemPrompt, model: model, cacheRetention: cacheRetention)
     let inferenceConfig = BedrockInferenceConfig(maxTokens: options.maxTokens, temperature: options.temperature)
     let toolConfig = convertToolConfig(context.tools, toolChoice: options.toolChoice)
     let additional = buildAdditionalModelRequestFields(model: model, options: options)
@@ -620,16 +621,19 @@ private func buildBedrockRequest(
     return (request, body)
 }
 
-private func buildSystemPrompt(_ systemPrompt: String?, model: Model) -> [BedrockSystemBlock]? {
+private func buildSystemPrompt(_ systemPrompt: String?, model: Model, cacheRetention: CacheRetention) -> [BedrockSystemBlock]? {
     guard let systemPrompt, !systemPrompt.isEmpty else { return nil }
     var blocks = [BedrockSystemBlock(payload: AnyCodable(["text": sanitizeSurrogates(systemPrompt)]))]
-    if supportsPromptCaching(model: model) {
-        blocks.append(BedrockSystemBlock(payload: AnyCodable(["cachePoint": ["type": "default"]])))
+    if cacheRetention != .none, supportsPromptCaching(model: model) {
+        blocks.append(BedrockSystemBlock(payload: AnyCodable(["cachePoint": cachePointPayload(cacheRetention: cacheRetention)])))
     }
     return blocks
 }
 
 private func supportsPromptCaching(model: Model) -> Bool {
+    if model.cost.cacheRead > 0 || model.cost.cacheWrite > 0 {
+        return true
+    }
     let id = model.id.lowercased()
     if id.contains("claude") && (id.contains("-4-") || id.contains("-4.")) {
         return true
@@ -648,7 +652,43 @@ private func supportsThinkingSignature(model: Model) -> Bool {
     return id.contains("anthropic.claude") || id.contains("anthropic/claude")
 }
 
-private func convertMessages(context: Context, model: Model) -> [BedrockMessage] {
+private func supportsAdaptiveThinking(modelId: String) -> Bool {
+    modelId.contains("opus-4-6") || modelId.contains("opus-4.6")
+}
+
+private func mapThinkingLevelToEffort(_ level: ThinkingLevel) -> String {
+    switch level {
+    case .minimal, .low:
+        return "low"
+    case .medium:
+        return "medium"
+    case .high:
+        return "high"
+    case .xhigh:
+        return "max"
+    }
+}
+
+private func resolveBedrockCacheRetention(_ cacheRetention: CacheRetention?) -> CacheRetention {
+    if let cacheRetention {
+        return cacheRetention
+    }
+    let flag = getenv("PI_CACHE_RETENTION").map { String(cString: $0) }?.lowercased()
+    if flag == "long" {
+        return .long
+    }
+    return .short
+}
+
+private func cachePointPayload(cacheRetention: CacheRetention) -> [String: Any] {
+    var payload: [String: Any] = ["type": "default"]
+    if cacheRetention == .long {
+        payload["ttl"] = "one_hour"
+    }
+    return payload
+}
+
+private func convertMessages(context: Context, model: Model, cacheRetention: CacheRetention) -> [BedrockMessage] {
     let normalizeToolCallId: @Sendable (String, Model, AssistantMessage) -> String = { id, _, _ in
         let sanitized = id.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
         return sanitized.count > 64 ? String(sanitized.prefix(64)) : sanitized
@@ -691,11 +731,11 @@ private func convertMessages(context: Context, model: Model) -> [BedrockMessage]
         index += 1
     }
 
-    if supportsPromptCaching(model: model),
+    if cacheRetention != .none, supportsPromptCaching(model: model),
        let lastIndex = result.indices.last,
        result[lastIndex].role == "user" {
         var last = result[lastIndex]
-        last.content.append(BedrockContentBlock(payload: AnyCodable(["cachePoint": ["type": "default"]])))
+        last.content.append(BedrockContentBlock(payload: AnyCodable(["cachePoint": cachePointPayload(cacheRetention: cacheRetention)])))
         result[lastIndex] = last
     }
 
@@ -832,25 +872,30 @@ private func buildAdditionalModelRequestFields(model: Model, options: BedrockOpt
     guard let reasoning = options.reasoning, model.reasoning else { return nil }
     guard model.id.contains("anthropic.claude") else { return nil }
 
-    let defaultBudgets: [ThinkingLevel: Int] = [
-        .minimal: 1024,
-        .low: 2048,
-        .medium: 8192,
-        .high: 16384,
-        .xhigh: 16384,
-    ]
+    var result: [String: Any] = [:]
 
-    let level = reasoning == .xhigh ? .high : reasoning
-    let budget = options.thinkingBudgets?[level] ?? defaultBudgets[reasoning] ?? 1024
-    var result: [String: Any] = [
-        "thinking": [
+    if supportsAdaptiveThinking(modelId: model.id) {
+        result["thinking"] = ["type": "adaptive"]
+        result["output_config"] = ["effort": mapThinkingLevelToEffort(reasoning)]
+    } else {
+        let defaultBudgets: [ThinkingLevel: Int] = [
+            .minimal: 1024,
+            .low: 2048,
+            .medium: 8192,
+            .high: 16384,
+            .xhigh: 16384,
+        ]
+
+        let level = reasoning == .xhigh ? .high : reasoning
+        let budget = options.thinkingBudgets?[level] ?? defaultBudgets[reasoning] ?? 1024
+        result["thinking"] = [
             "type": "enabled",
             "budget_tokens": budget,
-        ],
-    ]
+        ]
 
-    if options.interleavedThinking == true {
-        result["anthropic_beta"] = ["interleaved-thinking-2025-05-14"]
+        if options.interleavedThinking == true {
+            result["anthropic_beta"] = ["interleaved-thinking-2025-05-14"]
+        }
     }
 
     return result.mapValues { AnyCodable($0) }
@@ -875,6 +920,9 @@ private func resolveBedrockAuth(profile: String?) throws -> BedrockAuth {
     let env = ProcessInfo.processInfo.environment
     if let bearer = env["AWS_BEARER_TOKEN_BEDROCK"], !bearer.isEmpty {
         return .bearer(bearer)
+    }
+    if env["AWS_BEDROCK_SKIP_AUTH"] == "1" {
+        return .sigV4(AwsCredentials(accessKeyId: "dummy-access-key", secretAccessKey: "dummy-secret-key", sessionToken: nil))
     }
 
     if let access = env["AWS_ACCESS_KEY_ID"],

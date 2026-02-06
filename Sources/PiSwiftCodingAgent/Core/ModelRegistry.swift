@@ -1,72 +1,6 @@
 import Foundation
 import PiSwiftAI
 
-private let commandResultCache = LockedState<[String: String?]>([:])
-
-private func resolveConfigValue(_ config: String) -> String? {
-    if config.hasPrefix("!") {
-        return executeCommand(config)
-    }
-    let envValue = ProcessInfo.processInfo.environment[config]
-    if let envValue, !envValue.isEmpty {
-        return envValue
-    }
-    return config
-}
-
-private func executeCommand(_ commandConfig: String) -> String? {
-    if let cached = commandResultCache.withLock({ $0[commandConfig] }) {
-        return cached
-    }
-    if commandResultCache.withLock({ $0.keys.contains(commandConfig) }) {
-        return nil
-    }
-
-    let command = String(commandConfig.dropFirst())
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    process.arguments = ["-lc", command]
-    process.standardInput = FileHandle.nullDevice
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = FileHandle.nullDevice
-
-    var result: String? = nil
-    do {
-        try process.run()
-        let group = DispatchGroup()
-        group.enter()
-        process.terminationHandler = { _ in
-            group.leave()
-        }
-        if group.wait(timeout: .now() + 10) == .timedOut {
-            process.terminate()
-            _ = group.wait(timeout: .now() + 1)
-        }
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        if let output = String(data: data, encoding: .utf8) {
-            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            result = trimmed.isEmpty ? nil : trimmed
-        }
-    } catch {
-        result = nil
-    }
-
-    commandResultCache.withLock { $0[commandConfig] = result }
-    return result
-}
-
-private func resolveHeaders(_ headers: [String: String]?) -> [String: String]? {
-    guard let headers else { return nil }
-    var resolved: [String: String] = [:]
-    for (key, value) in headers {
-        if let resolvedValue = resolveConfigValue(value), !resolvedValue.isEmpty {
-            resolved[key] = resolvedValue
-        }
-    }
-    return resolved.isEmpty ? nil : resolved
-}
-
 private func parseRouting(_ value: Any?) -> (only: [String]?, order: [String]?)? {
     guard let dict = value as? [String: Any] else { return nil }
     let only = dict["only"] as? [String]
@@ -88,6 +22,7 @@ private func parseCompat(_ value: Any?) -> OpenAICompat? {
     let requiresThinkingAsText = dict["requiresThinkingAsText"] as? Bool
     let requiresMistralToolIds = dict["requiresMistralToolIds"] as? Bool
     let thinkingFormat = (dict["thinkingFormat"] as? String).flatMap(OpenAICompatThinkingFormat.init(rawValue:))
+    let supportsStrictMode = dict["supportsStrictMode"] as? Bool
 
     let openRouterRoutingValue = parseRouting(dict["openRouterRouting"])
     let vercelGatewayRoutingValue = parseRouting(dict["vercelGatewayRouting"])
@@ -105,6 +40,7 @@ private func parseCompat(_ value: Any?) -> OpenAICompat? {
        requiresThinkingAsText == nil,
        requiresMistralToolIds == nil,
        thinkingFormat == nil,
+       supportsStrictMode == nil,
        openRouterRouting == nil,
        vercelGatewayRouting == nil {
         return nil
@@ -122,7 +58,8 @@ private func parseCompat(_ value: Any?) -> OpenAICompat? {
         requiresMistralToolIds: requiresMistralToolIds,
         thinkingFormat: thinkingFormat,
         openRouterRouting: openRouterRouting,
-        vercelGatewayRouting: vercelGatewayRouting
+        vercelGatewayRouting: vercelGatewayRouting,
+        supportsStrictMode: supportsStrictMode
     )
 }
 
@@ -132,15 +69,111 @@ private struct ProviderOverride: Sendable {
     var apiKey: String?
 }
 
+private struct ModelOverride: Sendable {
+    var name: String?
+    var reasoning: Bool?
+    var input: [String]?
+    var cost: ModelCostOverride?
+    var contextWindow: Int?
+    var maxTokens: Int?
+    var headers: [String: String]?
+    var compat: OpenAICompat?
+}
+
+private struct ModelCostOverride: Sendable {
+    var input: Double?
+    var output: Double?
+    var cacheRead: Double?
+    var cacheWrite: Double?
+}
+
 private struct CustomModelsResult: Sendable {
     var models: [Model]
-    var replacedProviders: Set<String>
     var overrides: [String: ProviderOverride]
+    var modelOverrides: [String: [String: ModelOverride]]
     var errorMessage: String?
 }
 
 private func emptyCustomModelsResult(errorMessage: String? = nil) -> CustomModelsResult {
-    CustomModelsResult(models: [], replacedProviders: Set(), overrides: [:], errorMessage: errorMessage)
+    CustomModelsResult(models: [], overrides: [:], modelOverrides: [:], errorMessage: errorMessage)
+}
+
+private func mergeCompat(_ base: OpenAICompat?, _ override: OpenAICompat?) -> OpenAICompat? {
+    guard let override else { return base }
+    guard let base else { return override }
+
+    let mergedOpenRouter: OpenRouterRouting? = {
+        if base.openRouterRouting == nil && override.openRouterRouting == nil { return nil }
+        return OpenRouterRouting(
+            only: override.openRouterRouting?.only ?? base.openRouterRouting?.only,
+            order: override.openRouterRouting?.order ?? base.openRouterRouting?.order
+        )
+    }()
+
+    let mergedVercel: VercelGatewayRouting? = {
+        if base.vercelGatewayRouting == nil && override.vercelGatewayRouting == nil { return nil }
+        return VercelGatewayRouting(
+            only: override.vercelGatewayRouting?.only ?? base.vercelGatewayRouting?.only,
+            order: override.vercelGatewayRouting?.order ?? base.vercelGatewayRouting?.order
+        )
+    }()
+
+    return OpenAICompat(
+        supportsStore: override.supportsStore ?? base.supportsStore,
+        supportsDeveloperRole: override.supportsDeveloperRole ?? base.supportsDeveloperRole,
+        supportsReasoningEffort: override.supportsReasoningEffort ?? base.supportsReasoningEffort,
+        supportsUsageInStreaming: override.supportsUsageInStreaming ?? base.supportsUsageInStreaming,
+        maxTokensField: override.maxTokensField ?? base.maxTokensField,
+        requiresToolResultName: override.requiresToolResultName ?? base.requiresToolResultName,
+        requiresAssistantAfterToolResult: override.requiresAssistantAfterToolResult ?? base.requiresAssistantAfterToolResult,
+        requiresThinkingAsText: override.requiresThinkingAsText ?? base.requiresThinkingAsText,
+        requiresMistralToolIds: override.requiresMistralToolIds ?? base.requiresMistralToolIds,
+        thinkingFormat: override.thinkingFormat ?? base.thinkingFormat,
+        openRouterRouting: mergedOpenRouter,
+        vercelGatewayRouting: mergedVercel,
+        supportsStrictMode: override.supportsStrictMode ?? base.supportsStrictMode
+    )
+}
+
+private func applyModelOverride(model: Model, override: ModelOverride) -> Model {
+    var updated = model
+    if let name = override.name { updated = Model(id: updated.id, name: name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: updated.compat) }
+    if let reasoning = override.reasoning {
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: reasoning, input: updated.input, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: updated.compat)
+    }
+    if let input = override.input {
+        let mapped = input.compactMap { ModelInput(rawValue: $0) }
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: mapped, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: updated.compat)
+    }
+    if let contextWindow = override.contextWindow {
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: updated.cost, contextWindow: contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: updated.compat)
+    }
+    if let maxTokens = override.maxTokens {
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: maxTokens, headers: updated.headers, compat: updated.compat)
+    }
+
+    if let cost = override.cost {
+        let mergedCost = ModelCost(
+            input: cost.input ?? updated.cost.input,
+            output: cost.output ?? updated.cost.output,
+            cacheRead: cost.cacheRead ?? updated.cost.cacheRead,
+            cacheWrite: cost.cacheWrite ?? updated.cost.cacheWrite
+        )
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: mergedCost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: updated.compat)
+    }
+
+    if let headers = resolveHeaders(override.headers) {
+        var mergedHeaders = updated.headers ?? [:]
+        for (key, value) in headers { mergedHeaders[key] = value }
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: mergedHeaders, compat: updated.compat)
+    }
+
+    let mergedCompat = mergeCompat(updated.compat, override.compat)
+    if mergedCompat != nil {
+        updated = Model(id: updated.id, name: updated.name, api: updated.api, provider: updated.provider, baseUrl: updated.baseUrl, reasoning: updated.reasoning, input: updated.input, cost: updated.cost, contextWindow: updated.contextWindow, maxTokens: updated.maxTokens, headers: updated.headers, compat: mergedCompat)
+    }
+
+    return updated
 }
 
 public final class ModelRegistry: Sendable {
@@ -199,43 +232,39 @@ public final class ModelRegistry: Sendable {
             state.withLock { $0.errorMessage = errorMessage }
         }
         let builtInModels = loadBuiltInModels(
-            replacedProviders: customResult.replacedProviders,
-            overrides: customResult.overrides
+            overrides: customResult.overrides,
+            modelOverrides: customResult.modelOverrides
         )
-        var combined = builtInModels
-        combined.append(contentsOf: customResult.models)
+        let combined = mergeCustomModels(builtInModels: builtInModels, customModels: customResult.models)
         state.withLock { $0.models = combined }
     }
 
-    private func loadBuiltInModels(replacedProviders: Set<String>, overrides: [String: ProviderOverride]) -> [Model] {
+    private func loadBuiltInModels(
+        overrides: [String: ProviderOverride],
+        modelOverrides: [String: [String: ModelOverride]]
+    ) -> [Model] {
         var models: [Model] = []
         for provider in getProviders() {
             let providerId = provider.rawValue
-            guard !replacedProviders.contains(providerId) else { continue }
             let builtIns = getModels(provider: provider)
-            guard let override = overrides[providerId] else {
-                models.append(contentsOf: builtIns)
-                continue
-            }
+            let override = overrides[providerId]
+            let resolvedHeaders = resolveHeaders(override?.headers)
+            let perModelOverrides = modelOverrides[providerId] ?? [:]
 
-            let resolvedHeaders = resolveHeaders(override.headers)
             for model in builtIns {
-                let mergedHeaders: [String: String]?
-                if let resolvedHeaders {
+                let mergedHeaders: [String: String]? = {
+                    guard let resolvedHeaders else { return model.headers }
                     var headers = model.headers ?? [:]
-                    for (key, value) in resolvedHeaders {
-                        headers[key] = value
-                    }
-                    mergedHeaders = headers
-                } else {
-                    mergedHeaders = model.headers
-                }
-                let updated = Model(
+                    for (key, value) in resolvedHeaders { headers[key] = value }
+                    return headers
+                }()
+
+                var updated = Model(
                     id: model.id,
                     name: model.name,
                     api: model.api,
                     provider: model.provider,
-                    baseUrl: override.baseUrl ?? model.baseUrl,
+                    baseUrl: override?.baseUrl ?? model.baseUrl,
                     reasoning: model.reasoning,
                     input: model.input,
                     cost: model.cost,
@@ -244,14 +273,31 @@ public final class ModelRegistry: Sendable {
                     headers: mergedHeaders,
                     compat: model.compat
                 )
+
+                if let override = perModelOverrides[model.id] {
+                    updated = applyModelOverride(model: updated, override: override)
+                }
+
                 models.append(updated)
             }
 
-            if let apiKey = override.apiKey {
+            if let apiKey = override?.apiKey {
                 customProviderApiKeys.withLock { $0[providerId] = apiKey }
             }
         }
         return models
+    }
+
+    private func mergeCustomModels(builtInModels: [Model], customModels: [Model]) -> [Model] {
+        var merged = builtInModels
+        for custom in customModels {
+            if let index = merged.firstIndex(where: { $0.provider == custom.provider && $0.id == custom.id }) {
+                merged[index] = custom
+            } else {
+                merged.append(custom)
+            }
+        }
+        return merged
     }
 
     private func loadCustomModels(from dir: String) -> CustomModelsResult {
@@ -263,11 +309,11 @@ public final class ModelRegistry: Sendable {
         do {
             let root = try JSONSerialization.jsonObject(with: data)
             if let entries = root as? [[String: Any]] {
-                return parseLegacyModels(entries)
-            }
-            guard let dict = root as? [String: Any],
-                  let providers = dict["providers"] as? [String: Any] else {
-                return emptyCustomModelsResult(errorMessage: "models.json parse error")
+            return parseLegacyModels(entries)
+        }
+        guard let dict = root as? [String: Any],
+              let providers = dict["providers"] as? [String: Any] else {
+            return emptyCustomModelsResult(errorMessage: "models.json parse error")
             }
             return parseProviderModels(providers)
         } catch {
@@ -314,13 +360,13 @@ public final class ModelRegistry: Sendable {
             )
             custom.append(model)
         }
-        return CustomModelsResult(models: custom, replacedProviders: Set(), overrides: [:], errorMessage: nil)
+        return CustomModelsResult(models: custom, overrides: [:], modelOverrides: [:], errorMessage: nil)
     }
 
     private func parseProviderModels(_ providers: [String: Any]) -> CustomModelsResult {
         var custom: [Model] = []
-        var replacedProviders = Set<String>()
         var overrides: [String: ProviderOverride] = [:]
+        var modelOverrides: [String: [String: ModelOverride]] = [:]
 
         for (providerName, value) in providers {
             guard let providerConfig = value as? [String: Any] else { continue }
@@ -330,32 +376,56 @@ public final class ModelRegistry: Sendable {
             let apiOverride = providerConfig["api"] as? String
             let headers = providerConfig["headers"] as? [String: String]
             let authHeader = providerConfig["authHeader"] as? Bool ?? false
+            let overridesDict = providerConfig["modelOverrides"] as? [String: Any]
 
-            if models.isEmpty {
-                if baseUrl != nil {
-                    overrides[providerName] = ProviderOverride(baseUrl: baseUrl, headers: headers, apiKey: apiKey)
-                }
-                if let apiKey {
-                    customProviderApiKeys.withLock { $0[providerName] = apiKey }
-                }
-                continue
+            if baseUrl != nil || headers != nil || apiKey != nil {
+                overrides[providerName] = ProviderOverride(baseUrl: baseUrl, headers: headers, apiKey: apiKey)
             }
 
-            replacedProviders.insert(providerName)
             if let apiKey {
                 customProviderApiKeys.withLock { $0[providerName] = apiKey }
             }
 
-            for modelDef in models {
-                guard let id = modelDef["id"] as? String,
-                      let name = modelDef["name"] as? String,
-                      let reasoning = modelDef["reasoning"] as? Bool,
-                      let input = modelDef["input"] as? [String],
-                      let contextWindow = modelDef["contextWindow"] as? Int,
-                      let maxTokens = modelDef["maxTokens"] as? Int,
-                      let cost = modelDef["cost"] as? [String: Any] else {
-                    continue
+            if let overridesDict {
+                var parsed: [String: ModelOverride] = [:]
+                for (modelId, value) in overridesDict {
+                    guard let dict = value as? [String: Any] else { continue }
+            let costOverride: ModelCostOverride? = {
+                guard let cost = dict["cost"] as? [String: Any] else { return nil }
+                return ModelCostOverride(
+                    input: cost["input"] as? Double,
+                    output: cost["output"] as? Double,
+                    cacheRead: cost["cacheRead"] as? Double,
+                    cacheWrite: cost["cacheWrite"] as? Double
+                )
+            }()
+
+            parsed[modelId] = ModelOverride(
+                name: dict["name"] as? String,
+                reasoning: dict["reasoning"] as? Bool,
+                input: dict["input"] as? [String],
+                cost: costOverride,
+                contextWindow: dict["contextWindow"] as? Int,
+                maxTokens: dict["maxTokens"] as? Int,
+                headers: dict["headers"] as? [String: String],
+                compat: parseCompat(dict["compat"])
+            )
                 }
+                modelOverrides[providerName] = parsed
+            }
+
+            if models.isEmpty {
+                continue
+            }
+
+            for modelDef in models {
+                guard let id = modelDef["id"] as? String else { continue }
+                let name = modelDef["name"] as? String ?? id
+                let reasoning = modelDef["reasoning"] as? Bool ?? false
+                let input = modelDef["input"] as? [String] ?? ["text"]
+                let contextWindow = modelDef["contextWindow"] as? Int ?? 128000
+                let maxTokens = modelDef["maxTokens"] as? Int ?? 16384
+                let cost = modelDef["cost"] as? [String: Any] ?? [:]
 
                 let apiRaw = (modelDef["api"] as? String) ?? apiOverride
                 guard let apiRaw, let api = Api(rawValue: apiRaw) else { continue }
@@ -399,8 +469,8 @@ public final class ModelRegistry: Sendable {
 
         return CustomModelsResult(
             models: custom,
-            replacedProviders: replacedProviders,
             overrides: overrides,
+            modelOverrides: modelOverrides,
             errorMessage: nil
         )
     }

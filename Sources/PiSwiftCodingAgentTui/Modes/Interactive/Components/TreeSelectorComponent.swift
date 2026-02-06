@@ -15,31 +15,41 @@ private final class TreeList: Component {
     private var selectedIndex = 0
     private var searchQuery = ""
     private var labels: [String: String?] = [:]
+    private var currentLeafId: String?
+    private var lastSelectedId: String?
+    private var filterMode: FilterMode = .default
 
     var onSelect: ((String) -> Void)?
     var onCancel: (() -> Void)?
     var onLabelEdit: ((String, String?) -> Void)?
 
+    private enum FilterMode {
+        case `default`
+        case userOnly
+        case labeledOnly
+    }
+
     init(tree: [SessionTreeNode], currentLeafId: String?, maxVisibleLines: Int) {
         self.flatNodes = TreeList.flatten(tree)
         self.filteredNodes = flatNodes
+        self.currentLeafId = currentLeafId
 
         for node in flatNodes {
             labels[node.node.entry.id] = node.node.label
         }
 
-        if let currentLeafId,
-           let idx = filteredNodes.firstIndex(where: { $0.node.entry.id == currentLeafId }) {
-            selectedIndex = idx
-        } else {
-            selectedIndex = max(0, filteredNodes.count - 1)
-        }
+        self.lastSelectedId = currentLeafId
+        applyFilter(preserveSelectionSnapshot: false)
 
         _ = maxVisibleLines
     }
 
     func updateNodeLabel(_ entryId: String, _ label: String?) {
         labels[entryId] = label
+    }
+
+    func selectedEntryId() -> String? {
+        filteredNodes[safe: selectedIndex]?.node.entry.id
     }
 
     func invalidate() {}
@@ -73,6 +83,21 @@ private final class TreeList: Component {
             selectedIndex = min(filteredNodes.count - 1, selectedIndex + 1)
             return
         }
+        if isCtrlU(keyData) {
+            filterMode = (filterMode == .userOnly) ? .default : .userOnly
+            applyFilter()
+            return
+        }
+        if isCtrlL(keyData) {
+            filterMode = (filterMode == .labeledOnly) ? .default : .labeledOnly
+            applyFilter()
+            return
+        }
+        if isCtrlD(keyData) {
+            filterMode = .default
+            applyFilter()
+            return
+        }
         if isEnter(keyData) {
             if let selected = filteredNodes[safe: selectedIndex] {
                 onSelect?(selected.node.entry.id)
@@ -103,14 +128,104 @@ private final class TreeList: Component {
         }
     }
 
-    private func applyFilter() {
-        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            filteredNodes = flatNodes
-        } else {
-            filteredNodes = flatNodes.filter { describeEntry($0.node.entry).lowercased().contains(trimmed.lowercased()) }
+    private func applyFilter(preserveSelectionSnapshot: Bool = true) {
+        if preserveSelectionSnapshot, filteredNodes.isEmpty == false {
+            lastSelectedId = filteredNodes[safe: selectedIndex]?.node.entry.id ?? lastSelectedId
         }
-        selectedIndex = min(selectedIndex, max(0, filteredNodes.count - 1))
+
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        filteredNodes = flatNodes.filter { flat in
+            let entry = flat.node.entry
+            if !passesFilterMode(entry, node: flat.node) {
+                return false
+            }
+            if trimmed.isEmpty {
+                return true
+            }
+            return describeEntry(entry).lowercased().contains(trimmed.lowercased())
+        }
+
+        if let lastSelectedId {
+            selectedIndex = findNearestVisibleIndex(lastSelectedId)
+        } else {
+            selectedIndex = min(selectedIndex, max(0, filteredNodes.count - 1))
+        }
+
+        if filteredNodes.isEmpty == false {
+            lastSelectedId = filteredNodes[safe: selectedIndex]?.node.entry.id ?? lastSelectedId
+        }
+    }
+
+    private func passesFilterMode(_ entry: SessionEntry, node: SessionTreeNode) -> Bool {
+        let isSettingsEntry: Bool = {
+            switch entry {
+            case .label, .custom, .modelChange, .thinkingLevel:
+                return true
+            default:
+                return false
+            }
+        }()
+
+        switch filterMode {
+        case .userOnly:
+            if case .message(let message) = entry {
+                if case .user = message.message { return true }
+            }
+            return false
+        case .labeledOnly:
+            return node.label != nil
+        case .default:
+            return !isSettingsEntry
+        }
+    }
+
+    private func findNearestVisibleIndex(_ entryId: String?) -> Int {
+        guard filteredNodes.isEmpty == false else { return 0 }
+        guard let entryId else { return max(0, filteredNodes.count - 1) }
+
+        var entryMap: [String: SessionEntry] = [:]
+        for flat in flatNodes {
+            entryMap[flat.node.entry.id] = flat.node.entry
+        }
+
+        var visibleMap: [String: Int] = [:]
+        for (idx, flat) in filteredNodes.enumerated() {
+            visibleMap[flat.node.entry.id] = idx
+        }
+
+        var currentId: String? = entryId
+        while let id = currentId {
+            if let index = visibleMap[id] {
+                return index
+            }
+            guard let entry = entryMap[id] else { break }
+            currentId = parentId(for: entry)
+        }
+
+        return max(0, filteredNodes.count - 1)
+    }
+
+    private func parentId(for entry: SessionEntry) -> String? {
+        switch entry {
+        case .message(let entry):
+            return entry.parentId
+        case .thinkingLevel(let entry):
+            return entry.parentId
+        case .modelChange(let entry):
+            return entry.parentId
+        case .compaction(let entry):
+            return entry.parentId
+        case .branchSummary(let entry):
+            return entry.parentId
+        case .custom(let entry):
+            return entry.parentId
+        case .customMessage(let entry):
+            return entry.parentId
+        case .label(let entry):
+            return entry.parentId
+        case .sessionInfo(let entry):
+            return entry.parentId
+        }
     }
 
     private static func flatten(_ roots: [SessionTreeNode]) -> [FlatNode] {
@@ -259,6 +374,10 @@ public final class TreeSelectorComponent: Container {
 
     public func getTreeList() -> Component {
         treeList
+    }
+
+    func getSelectedEntryId() -> String? {
+        treeList.selectedEntryId()
     }
 }
 

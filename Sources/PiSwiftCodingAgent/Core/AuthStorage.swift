@@ -41,11 +41,24 @@ public enum AuthCredential: Sendable {
     case oauth(OAuthCredential)
 }
 
+struct AuthLockOptions: Sendable {
+    var maxAttempts: Int
+    var initialDelayMs: Int
+    var maxDelayMs: Int
+}
+
+struct OAuthOverrides: Sendable {
+    var getOAuthApiKey: (@Sendable (OAuthProvider, [String: OAuthCredentials]) async throws -> (newCredentials: OAuthCredentials, apiKey: String)?)?
+    var oauthApiKey: (@Sendable (OAuthProvider, String, String?) throws -> String)?
+}
+
 public final class AuthStorage: Sendable {
     private struct State: Sendable {
         var data: [String: AuthCredential] = [:]
         var runtimeOverrides: [String: String] = [:]
         var fallbackResolver: (@Sendable (String) -> String?)?
+        var lockOptionsOverride: AuthLockOptions?
+        var oauthOverrides: OAuthOverrides?
     }
 
     private let state = LockedState(State())
@@ -66,6 +79,14 @@ public final class AuthStorage: Sendable {
 
     public func setFallbackResolver(_ resolver: @escaping @Sendable (String) -> String?) {
         state.withLock { $0.fallbackResolver = resolver }
+    }
+
+    func setAuthLockOptionsForTesting(_ options: AuthLockOptions?) {
+        state.withLock { $0.lockOptionsOverride = options }
+    }
+
+    func setOAuthOverridesForTesting(_ overrides: OAuthOverrides?) {
+        state.withLock { $0.oauthOverrides = overrides }
     }
 
     public func reload() {
@@ -181,7 +202,7 @@ public final class AuthStorage: Sendable {
         if let credential = snapshot.credential {
             switch credential {
             case .apiKey(let apiKey):
-                return apiKey.key
+                return resolveConfigValue(apiKey.key)
             case .oauth(let oauth):
                 let oauthProviderId = OAuthProvider(rawValue: provider)
                 let now = Date().timeIntervalSince1970 * 1000
@@ -196,11 +217,19 @@ public final class AuthStorage: Sendable {
                     } catch {
                         let message = error.localizedDescription
                         fputs("OAuth token refresh failed for \(provider): \(message)\n", stderr)
+                        if let expires = oauth.expires, now >= expires {
+                            return nil
+                        }
                     }
                 }
 
                 if let providerId = oauthProviderId {
-                    if let apiKey = try? oauthApiKey(provider: providerId, accessToken: oauth.access, projectId: oauth.projectId) {
+                    let override = state.withLock { $0.oauthOverrides }
+                    if let overrideApiKey = override?.oauthApiKey {
+                        if let apiKey = try? overrideApiKey(providerId, oauth.access, oauth.projectId) {
+                            return apiKey
+                        }
+                    } else if let apiKey = try? oauthApiKey(provider: providerId, accessToken: oauth.access, projectId: oauth.projectId) {
                         return apiKey
                     }
                 }
@@ -279,7 +308,13 @@ public final class AuthStorage: Sendable {
             }
 
             let oauthCreds = self.oauthCredentialsMap()
-            let result = try await getOAuthApiKey(provider: provider, credentials: oauthCreds)
+            let override = self.state.withLock { $0.oauthOverrides }
+            let result: (newCredentials: OAuthCredentials, apiKey: String)?
+            if let overrideFn = override?.getOAuthApiKey {
+                result = try await overrideFn(provider, oauthCreds)
+            } else {
+                result = try await getOAuthApiKey(provider: provider, credentials: oauthCreds)
+            }
             if let result {
                 self.state.withLock { state in
                     state.data[provider.rawValue] = .oauth(OAuthCredential(result.newCredentials))
@@ -321,15 +356,21 @@ public final class AuthStorage: Sendable {
         }
         defer { close(fd) }
 
-        var delayMs = 100
+        let override = state.withLock { $0.lockOptionsOverride }
+        let maxAttempts = override?.maxAttempts ?? 10
+        let maxDelayMs = override?.maxDelayMs ?? 10_000
+        var delayMs = override?.initialDelayMs ?? 100
         var locked = false
-        for _ in 0..<10 {
+        if maxAttempts <= 0 {
+            throw OAuthError.refreshFailed("failed to acquire auth.json lock")
+        }
+        for _ in 0..<maxAttempts {
             if flock(fd, LOCK_EX | LOCK_NB) == 0 {
                 locked = true
                 break
             }
             try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            delayMs = min(delayMs * 2, 10_000)
+            delayMs = min(delayMs * 2, maxDelayMs)
         }
 
         guard locked else {

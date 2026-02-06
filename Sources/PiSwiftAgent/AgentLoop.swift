@@ -273,7 +273,8 @@ private func streamAssistantResponse(
             apiKey: resolvedApiKey,
             reasoning: config.reasoning,
             sessionId: config.sessionId,
-            thinkingBudgets: config.thinkingBudgets
+            thinkingBudgets: config.thinkingBudgets,
+            maxRetryDelayMs: config.maxRetryDelayMs
         )
     )
 

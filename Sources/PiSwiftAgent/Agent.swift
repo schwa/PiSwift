@@ -14,6 +14,7 @@ public struct AgentOptions: Sendable {
     public var streamFn: StreamFn?
     public var sessionId: String?
     public var thinkingBudgets: ThinkingBudgets?
+    public var maxRetryDelayMs: Int?
     public var getApiKey: (@Sendable (String) async -> String?)?
 
     public init(
@@ -25,6 +26,7 @@ public struct AgentOptions: Sendable {
         streamFn: StreamFn? = nil,
         sessionId: String? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
+        maxRetryDelayMs: Int? = nil,
         getApiKey: (@Sendable (String) async -> String?)? = nil
     ) {
         self.initialState = initialState
@@ -35,6 +37,7 @@ public struct AgentOptions: Sendable {
         self.streamFn = streamFn
         self.sessionId = sessionId
         self.thinkingBudgets = thinkingBudgets
+        self.maxRetryDelayMs = maxRetryDelayMs
         self.getApiKey = getApiKey
     }
 }
@@ -53,6 +56,7 @@ public final class Agent: Sendable {
         var streamFn: StreamFn
         var sessionId: String?
         var thinkingBudgets: ThinkingBudgets?
+        var maxRetryDelayMs: Int?
         var getApiKey: (@Sendable (String) async -> String?)?
         var runningTask: Task<Void, Never>?
     }
@@ -119,6 +123,11 @@ public final class Agent: Sendable {
         set { stateBox.withLock { $0.thinkingBudgets = newValue } }
     }
 
+    public var maxRetryDelayMs: Int? {
+        get { stateBox.withLock { $0.maxRetryDelayMs } }
+        set { stateBox.withLock { $0.maxRetryDelayMs = newValue } }
+    }
+
     public var getApiKey: (@Sendable (String) async -> String?)? {
         get { stateBox.withLock { $0.getApiKey } }
         set { stateBox.withLock { $0.getApiKey = newValue } }
@@ -150,6 +159,7 @@ public final class Agent: Sendable {
             streamFn: stream,
             sessionId: options.sessionId,
             thinkingBudgets: options.thinkingBudgets,
+            maxRetryDelayMs: options.maxRetryDelayMs,
             getApiKey: options.getApiKey,
             runningTask: nil
         ))
@@ -232,6 +242,40 @@ public final class Agent: Sendable {
         followUpQueue.removeAll()
     }
 
+    public func hasQueuedMessages() -> Bool {
+        !steeringQueue.isEmpty || !followUpQueue.isEmpty
+    }
+
+    private func dequeueSteeringMessages() -> [AgentMessage] {
+        switch steeringMode {
+        case .oneAtATime:
+            if let first = steeringQueue.first {
+                steeringQueue.removeFirst()
+                return [first]
+            }
+            return []
+        case .all:
+            let queued = steeringQueue
+            steeringQueue.removeAll()
+            return queued
+        }
+    }
+
+    private func dequeueFollowUpMessages() -> [AgentMessage] {
+        switch followUpMode {
+        case .oneAtATime:
+            if let first = followUpQueue.first {
+                followUpQueue.removeFirst()
+                return [first]
+            }
+            return []
+        case .all:
+            let queued = followUpQueue
+            followUpQueue.removeAll()
+            return queued
+        }
+    }
+
     public func clearMessages() {
         _state.messages.removeAll()
     }
@@ -279,15 +323,33 @@ public final class Agent: Sendable {
     public func `continue`() async throws {
         try ensureNotStreaming(.alreadyStreamingContinue)
         guard !_state.messages.isEmpty else { throw AgentError.emptyContext }
-        if let last = _state.messages.last, last.role == "assistant" { throw AgentError.lastMessageAssistant }
+        if let last = _state.messages.last, last.role == "assistant" {
+            let queuedSteering = dequeueSteeringMessages()
+            if !queuedSteering.isEmpty {
+                await runLoop(messages: queuedSteering, options: RunLoopOptions(skipInitialSteeringPoll: true))
+                return
+            }
+
+            let queuedFollowUp = dequeueFollowUpMessages()
+            if !queuedFollowUp.isEmpty {
+                await runLoop(messages: queuedFollowUp)
+                return
+            }
+
+            throw AgentError.lastMessageAssistant
+        }
 
         await runLoop(messages: nil)
     }
 
-    private func runLoop(messages: [AgentMessage]?) async {
+    private struct RunLoopOptions: Sendable {
+        var skipInitialSteeringPoll: Bool
+    }
+
+    private func runLoop(messages: [AgentMessage]?, options: RunLoopOptions? = nil) async {
         runningTask = Task { [weak self] in
             guard let self else { return }
-            await self.runLoopInternal(messages: messages)
+            await self.runLoopInternal(messages: messages, options: options)
         }
         if let task = runningTask {
             await task.value
@@ -295,7 +357,7 @@ public final class Agent: Sendable {
         runningTask = nil
     }
 
-    private func runLoopInternal(messages: [AgentMessage]?) async {
+    private func runLoopInternal(messages: [AgentMessage]?, options: RunLoopOptions?) async {
         let model = _state.model
 
         abortToken = CancellationToken()
@@ -311,43 +373,33 @@ public final class Agent: Sendable {
             tools: _state.tools
         )
 
+        let skipInitialSteeringPoll = LockedState(options?.skipInitialSteeringPoll == true)
         let config = AgentLoopConfig(
             model: model,
             reasoning: reasoning,
             sessionId: sessionId,
             thinkingBudgets: thinkingBudgets,
+            maxRetryDelayMs: maxRetryDelayMs,
             convertToLlm: convertToLlm,
             transformContext: transformContext,
             getApiKey: getApiKey,
             getSteeringMessages: { [weak self] in
                 guard let self else { return [] }
-                switch self.steeringMode {
-                case .oneAtATime:
-                    if let first = self.steeringQueue.first {
-                        self.steeringQueue.removeFirst()
-                        return [first]
+                let shouldSkip = skipInitialSteeringPoll.withLock { flag -> Bool in
+                    if flag {
+                        flag = false
+                        return true
                     }
-                    return []
-                case .all:
-                    let queued = self.steeringQueue
-                    self.steeringQueue.removeAll()
-                    return queued
+                    return false
                 }
+                if shouldSkip {
+                    return []
+                }
+                return self.dequeueSteeringMessages()
             },
             getFollowUpMessages: { [weak self] in
                 guard let self else { return [] }
-                switch self.followUpMode {
-                case .oneAtATime:
-                    if let first = self.followUpQueue.first {
-                        self.followUpQueue.removeFirst()
-                        return [first]
-                    }
-                    return []
-                case .all:
-                    let queued = self.followUpQueue
-                    self.followUpQueue.removeAll()
-                    return queued
-                }
+                return self.dequeueFollowUpMessages()
             }
         )
 

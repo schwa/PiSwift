@@ -248,6 +248,164 @@ private final class EventCollector: @unchecked Sendable {
     #expect(collector.events.contains { $0.type == "start" && $0.action == "install" })
 }
 
+// MARK: - SSH URL parsing tests
+
+@Test func parseSourceSupportsGitAtUrls() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
+        #expect(git.path == "user/repo")
+        #expect(git.repo == "git@github.com:user/repo")
+        #expect(git.ref == nil)
+        #expect(git.pinned == false)
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceSupportsGitAtWithRef() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo@v1.0.0")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
+        #expect(git.path == "user/repo")
+        #expect(git.ref == "v1.0.0")
+        #expect(git.repo == "git@github.com:user/repo")
+        #expect(git.pinned == true)
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceSupportsSshProtocolUrls() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("ssh://git@github.com/user/repo")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
+        #expect(git.path == "user/repo")
+        #expect(git.repo == "ssh://git@github.com/user/repo")
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceSupportsSshProtocolWithPort() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("ssh://git@github.com:22/user/repo")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
+        #expect(git.path == "user/repo")
+        #expect(git.repo == "ssh://git@github.com:22/user/repo")
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceSupportsGitPrefixWithSshUrl() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git:git@github.com:user/repo")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
+        #expect(git.path == "user/repo")
+        #expect(git.repo == "git@github.com:user/repo")
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceSupportsGitSuffix() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo.git")
+    if case .git(let git) = parsed {
+        #expect(git.path == "user/repo")
+        #expect(git.repo == "git@github.com:user/repo.git")
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func packageIdentityNormalizesGitUrls() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let sshIdentity = fixture.packageManager.getPackageIdentity("git@github.com:user/repo")
+    let httpsIdentity = fixture.packageManager.getPackageIdentity("https://github.com/user/repo")
+    #expect(sshIdentity == httpsIdentity)
+    #expect(sshIdentity == "git:github.com/user/repo")
+}
+
+@Test func packageIdentityIgnoresRefs() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let withRef = fixture.packageManager.getPackageIdentity("git@github.com:user/repo@v1.0.0")
+    let withoutRef = fixture.packageManager.getPackageIdentity("git@github.com:user/repo")
+    #expect(withRef == withoutRef)
+}
+
+@Test func parseSourceSupportsEnterpriseHosts() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git:github.tools.sap/agent-dev/sap-pie@v1")
+    if case .git(let git) = parsed {
+        #expect(git.host == "github.tools.sap")
+        #expect(git.path == "agent-dev/sap-pie")
+        #expect(git.ref == "v1")
+        #expect(git.repo == "https://github.tools.sap/agent-dev/sap-pie")
+        #expect(git.pinned == true)
+    } else {
+        Issue.record("Expected git source")
+    }
+}
+
+@Test func sshInstallEmitsStartEvent() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let collector = EventCollector()
+    fixture.packageManager.setProgressCallback { event in
+        collector.append(event)
+    }
+
+    let previousValue = ProcessInfo.processInfo.environment["GIT_TERMINAL_PROMPT"]
+    setenv("GIT_TERMINAL_PROMPT", "0", 1)
+    defer {
+        if let previousValue {
+            setenv("GIT_TERMINAL_PROMPT", previousValue, 1)
+        } else {
+            unsetenv("GIT_TERMINAL_PROMPT")
+        }
+    }
+
+    do {
+        try await fixture.packageManager.install("git@github.com:nonexistent/repo")
+    } catch {
+        // Expected to fail
+    }
+
+    #expect(collector.events.contains { $0.type == "start" && $0.action == "install" })
+}
+
+@Test func sshProtocolInstallEmitsStartEvent() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let collector = EventCollector()
+    fixture.packageManager.setProgressCallback { event in
+        collector.append(event)
+    }
+
+    let previousValue = ProcessInfo.processInfo.environment["GIT_TERMINAL_PROMPT"]
+    setenv("GIT_TERMINAL_PROMPT", "0", 1)
+    defer {
+        if let previousValue {
+            setenv("GIT_TERMINAL_PROMPT", previousValue, 1)
+        } else {
+            unsetenv("GIT_TERMINAL_PROMPT")
+        }
+    }
+
+    do {
+        try await fixture.packageManager.install("ssh://git@github.com/nonexistent/repo")
+    } catch {
+        // Expected to fail
+    }
+
+    #expect(collector.events.contains { $0.type == "start" && $0.action == "install" })
+}
+
 // MARK: - pattern filtering in pi manifest tests
 
 @Test func manifestSupportGlobPatternsInExtensions() async throws {

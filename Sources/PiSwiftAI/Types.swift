@@ -50,31 +50,43 @@ public enum ThinkingLevel: String, Sendable {
 public typealias ReasoningEffort = ThinkingLevel
 public typealias ThinkingBudgets = [ThinkingLevel: Int]
 
+public enum CacheRetention: String, Sendable {
+    case none
+    case short
+    case long
+}
+
 public struct StreamOptions: Sendable {
     public var temperature: Double?
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
+    public var cacheRetention: CacheRetention?
     public var sessionId: String?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
+    public var maxRetryDelayMs: Int?
 
     public init(
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
+        cacheRetention: CacheRetention? = nil,
         sessionId: String? = nil,
         headers: [String: String]? = nil,
-        onPayload: PayloadHandler? = nil
+        onPayload: PayloadHandler? = nil,
+        maxRetryDelayMs: Int? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
+        self.cacheRetention = cacheRetention
         self.sessionId = sessionId
         self.headers = headers
         self.onPayload = onPayload
+        self.maxRetryDelayMs = maxRetryDelayMs
     }
 }
 
@@ -84,10 +96,12 @@ public struct SimpleStreamOptions: Sendable {
     public var signal: CancellationToken?
     public var apiKey: String?
     public var reasoning: ThinkingLevel?
+    public var cacheRetention: CacheRetention?
     public var sessionId: String?
     public var thinkingBudgets: ThinkingBudgets?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
+    public var maxRetryDelayMs: Int?
 
     public init(
         temperature: Double? = nil,
@@ -95,20 +109,24 @@ public struct SimpleStreamOptions: Sendable {
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
         reasoning: ThinkingLevel? = nil,
+        cacheRetention: CacheRetention? = nil,
         sessionId: String? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         headers: [String: String]? = nil,
-        onPayload: PayloadHandler? = nil
+        onPayload: PayloadHandler? = nil,
+        maxRetryDelayMs: Int? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
         self.reasoning = reasoning
+        self.cacheRetention = cacheRetention
         self.sessionId = sessionId
         self.thinkingBudgets = thinkingBudgets
         self.headers = headers
         self.onPayload = onPayload
+        self.maxRetryDelayMs = maxRetryDelayMs
     }
 }
 
@@ -130,6 +148,7 @@ public enum OpenAICompatMaxTokensField: String, Sendable {
 public enum OpenAICompatThinkingFormat: String, Sendable {
     case openai
     case zai
+    case qwen
 }
 
 public struct OpenRouterRouting: Sendable {
@@ -165,6 +184,7 @@ public struct OpenAICompat: Sendable {
     public var thinkingFormat: OpenAICompatThinkingFormat?
     public var openRouterRouting: OpenRouterRouting?
     public var vercelGatewayRouting: VercelGatewayRouting?
+    public var supportsStrictMode: Bool?
 
     public init(
         supportsStore: Bool? = nil,
@@ -178,7 +198,8 @@ public struct OpenAICompat: Sendable {
         requiresMistralToolIds: Bool? = nil,
         thinkingFormat: OpenAICompatThinkingFormat? = nil,
         openRouterRouting: OpenRouterRouting? = nil,
-        vercelGatewayRouting: VercelGatewayRouting? = nil
+        vercelGatewayRouting: VercelGatewayRouting? = nil,
+        supportsStrictMode: Bool? = nil
     ) {
         self.supportsStore = supportsStore
         self.supportsDeveloperRole = supportsDeveloperRole
@@ -192,6 +213,7 @@ public struct OpenAICompat: Sendable {
         self.thinkingFormat = thinkingFormat
         self.openRouterRouting = openRouterRouting
         self.vercelGatewayRouting = vercelGatewayRouting
+        self.supportsStrictMode = supportsStrictMode
     }
 }
 
@@ -562,6 +584,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
+    public var cacheRetention: CacheRetention?
     public var reasoningEffort: ThinkingLevel?
     public var reasoningSummary: OpenAIReasoningSummary?
     public var serviceTier: OpenAIServiceTier?
@@ -574,6 +597,7 @@ public struct OpenAIResponsesOptions: Sendable {
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
+        cacheRetention: CacheRetention? = nil,
         reasoningEffort: ThinkingLevel? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
         serviceTier: OpenAIServiceTier? = nil,
@@ -585,6 +609,7 @@ public struct OpenAIResponsesOptions: Sendable {
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
+        self.cacheRetention = cacheRetention
         self.reasoningEffort = reasoningEffort
         self.reasoningSummary = reasoningSummary
         self.serviceTier = serviceTier
@@ -736,6 +761,7 @@ public struct GoogleGeminiCliOptions: Sendable {
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
+    public var maxRetryDelayMs: Int?
     public var headers: [String: String]?
     public var toolChoice: String?
     public var thinking: GoogleOptions.ThinkingConfig?
@@ -748,6 +774,7 @@ public struct GoogleGeminiCliOptions: Sendable {
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
+        maxRetryDelayMs: Int? = nil,
         headers: [String: String]? = nil,
         toolChoice: String? = nil,
         thinking: GoogleOptions.ThinkingConfig? = nil,
@@ -759,6 +786,7 @@ public struct GoogleGeminiCliOptions: Sendable {
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
+        self.maxRetryDelayMs = maxRetryDelayMs
         self.headers = headers
         self.toolChoice = toolChoice
         self.thinking = thinking
@@ -866,6 +894,7 @@ public struct BedrockOptions: Sendable {
     public var reasoning: ThinkingLevel?
     public var thinkingBudgets: ThinkingBudgets?
     public var interleavedThinking: Bool?
+    public var cacheRetention: CacheRetention?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
 
@@ -879,6 +908,7 @@ public struct BedrockOptions: Sendable {
         reasoning: ThinkingLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         interleavedThinking: Bool? = nil,
+        cacheRetention: CacheRetention? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil
     ) {
@@ -891,6 +921,7 @@ public struct BedrockOptions: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.interleavedThinking = interleavedThinking
+        self.cacheRetention = cacheRetention
         self.headers = headers
         self.onPayload = onPayload
     }
