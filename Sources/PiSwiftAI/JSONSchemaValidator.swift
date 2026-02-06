@@ -325,7 +325,7 @@ public final class JSONSchemaValidator: @unchecked Sendable {
             numberValue = num.doubleValue
             isInteger = num.doubleValue.truncatingRemainder(dividingBy: 1) == 0
         } else if coerceTypes, let str = value as? String {
-            if let parsed = Double(str) {
+            if let parsed = Double(str) ?? parseLenientNumber(str) {
                 numberValue = parsed
                 isInteger = parsed.truncatingRemainder(dividingBy: 1) == 0
             } else {
@@ -394,6 +394,26 @@ public final class JSONSchemaValidator: @unchecked Sendable {
             return .valid(Int(numberValue))
         }
         return .valid(numberValue)
+    }
+
+    /// Attempt to parse a number from a string that may include trailing non-numeric characters.
+    /// This is useful for recovering from partial or malformed tool-call arguments.
+    private func parseLenientNumber(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return nil
+        }
+        let pattern = #"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return nil
+        }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard let match = regex.firstMatch(in: trimmed, options: [], range: range),
+              let matchRange = Range(match.range, in: trimmed) else {
+            return nil
+        }
+        let numberString = String(trimmed[matchRange])
+        return Double(numberString)
     }
 
     // MARK: - Boolean Validation
