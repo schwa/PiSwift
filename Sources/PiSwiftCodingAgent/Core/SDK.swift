@@ -35,6 +35,7 @@ public struct CreateAgentSessionOptions: Sendable {
     public var resourceLoader: ResourceLoader?
     public var hooks: [HookDefinition]?
     public var additionalHookPaths: [String]?
+    public var additionalExtensionPaths: [String]?
     public var eventBus: EventBus?
     public var skills: [Skill]?
     public var contextFiles: [ContextFile]?
@@ -58,6 +59,7 @@ public struct CreateAgentSessionOptions: Sendable {
         resourceLoader: ResourceLoader? = nil,
         hooks: [HookDefinition]? = nil,
         additionalHookPaths: [String]? = nil,
+        additionalExtensionPaths: [String]? = nil,
         eventBus: EventBus? = nil,
         skills: [Skill]? = nil,
         contextFiles: [ContextFile]? = nil,
@@ -80,6 +82,7 @@ public struct CreateAgentSessionOptions: Sendable {
         self.resourceLoader = resourceLoader
         self.hooks = hooks
         self.additionalHookPaths = additionalHookPaths
+        self.additionalExtensionPaths = additionalExtensionPaths
         self.eventBus = eventBus
         self.skills = skills
         self.contextFiles = contextFiles
@@ -509,11 +512,11 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         }
     }
 
-    var hookRunner: HookRunner? = nil
+    var allLoadedHooks: [LoadedHook] = []
+
     if let hooks = options.hooks {
         if !hooks.isEmpty {
-            let loadedHooks = createLoadedHooksFromDefinitions(hooks, eventBus: eventBus)
-            hookRunner = HookRunner(loadedHooks, cwd, sessionManager, modelRegistry)
+            allLoadedHooks = createLoadedHooksFromDefinitions(hooks, eventBus: eventBus)
         }
     } else {
         let hookPaths = settingsManager.getHooks() + (options.additionalHookPaths ?? [])
@@ -522,9 +525,21 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         for error in loadResult.errors {
             writeStderr("Failed to load hook \"\(error.path)\": \(error.error)\n")
         }
-        if !loadResult.hooks.isEmpty {
-            hookRunner = HookRunner(loadResult.hooks, cwd, sessionManager, modelRegistry)
-        }
+        allLoadedHooks = loadResult.hooks
+    }
+
+    // Load extensions (plain .swift files) and merge into hooks
+    let extensionPaths = settingsManager.getExtensionPaths() + (options.additionalExtensionPaths ?? [])
+    let extensionResult = await discoverAndLoadExtensions(extensionPaths, cwd, agentDir, eventBus)
+    time("discoverAndLoadExtensions")
+    for error in extensionResult.errors {
+        writeStderr("Failed to load extension: \(error.localizedDescription)\n")
+    }
+    allLoadedHooks += extensionResult.hooks
+
+    var hookRunner: HookRunner? = nil
+    if !allLoadedHooks.isEmpty {
+        hookRunner = HookRunner(allLoadedHooks, cwd, sessionManager, modelRegistry)
     }
 
     let agentBox = LockedState<Agent?>(nil)
