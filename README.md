@@ -1,5 +1,5 @@
 This directory contains a port of the pi-mono project from
-Mario Zechner:
+Mario Zechner to Swift, as I need to embed this into an iPad app:
 
 https://github.com/badlogic/pi-mono
 
