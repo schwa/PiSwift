@@ -99,7 +99,11 @@ public func streamAnthropic(
             }
             let isOAuthToken = isAnthropicOAuthToken(apiKey)
 
-            let betaHeaders = buildAnthropicBetaHeaders(apiKey: apiKey, interleavedThinking: options.interleavedThinking ?? true)
+            let betaHeaders = buildAnthropicBetaHeaders(
+                apiKey: apiKey,
+                interleavedThinking: options.interleavedThinking ?? true,
+                provider: model.provider
+            )
             if let betaHeaders {
                 logAnthropicDebug("anthropic betaHeaders=\(betaHeaders.joined(separator: ","))")
             } else {
@@ -325,7 +329,7 @@ private func mapAnthropicModel(_ id: String) -> SwiftAnthropic.Model {
     }
 }
 
-private func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool) -> [String]? {
+func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool, provider: String) -> [String]? {
     let env = ProcessInfo.processInfo.environment
     let disableFlag = (env["PI_DISABLE_ANTHROPIC_BETA"] ?? "").lowercased()
     if disableFlag == "1" || disableFlag == "true" || disableFlag == "yes" {
@@ -340,15 +344,22 @@ private func buildAnthropicBetaHeaders(apiKey: String, interleavedThinking: Bool
         return items.isEmpty ? nil : items
     }
 
-    var headers = ["fine-grained-tool-streaming-2025-05-14"]
-    if interleavedThinking {
-        headers.append("interleaved-thinking-2025-05-14")
+    var headers: [String] = []
+    if provider == "github-copilot" {
+        if interleavedThinking {
+            headers.append("interleaved-thinking-2025-05-14")
+        }
+    } else {
+        headers.append("fine-grained-tool-streaming-2025-05-14")
+        if interleavedThinking {
+            headers.append("interleaved-thinking-2025-05-14")
+        }
     }
     if isAnthropicOAuthToken(apiKey) {
         headers.insert("oauth-2025-04-20", at: 0)
         headers.insert("claude-code-20250219", at: 0)
     }
-    return headers
+    return headers.isEmpty ? nil : headers
 }
 
 private func convertAnthropicMessages(model: Model, messages: [Message], isOAuthToken: Bool) -> [MessageParameter.Message] {

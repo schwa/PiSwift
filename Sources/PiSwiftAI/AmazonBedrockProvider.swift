@@ -868,7 +868,7 @@ private func convertToolConfig(
     return BedrockToolConfig(tools: bedrockTools, toolChoice: choicePayload)
 }
 
-private func buildAdditionalModelRequestFields(model: Model, options: BedrockOptions) -> [String: AnyCodable]? {
+func buildAdditionalModelRequestFields(model: Model, options: BedrockOptions) -> [String: AnyCodable]? {
     guard let reasoning = options.reasoning, model.reasoning else { return nil }
     let isAnthropicClaude = model.id.hasPrefix("anthropic.claude") || model.id.hasPrefix("anthropic/claude")
     guard isAnthropicClaude else { return nil }

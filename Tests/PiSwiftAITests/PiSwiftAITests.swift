@@ -516,6 +516,35 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
     #expect(text == "continue")
 }
 
+@Test func transformMessagesRemovesToolCallThoughtSignatureAcrossModels() {
+    let targetModel = getModel(provider: .githubCopilot, modelId: "claude-sonnet-4.5")
+    let toolCall = ToolCall(
+        id: "call_123",
+        name: "bash",
+        arguments: ["command": AnyCodable("ls")],
+        thoughtSignature: "{\"type\":\"reasoning.encrypted\"}"
+    )
+    let assistant = AssistantMessage(
+        content: [.toolCall(toolCall)],
+        api: .openAIResponses,
+        provider: "github-copilot",
+        model: "gpt-4o",
+        usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+        stopReason: .toolUse
+    )
+
+    let transformed = transformMessages([.assistant(assistant)], model: targetModel)
+    guard case .assistant(let transformedAssistant) = transformed.first else {
+        #expect(Bool(false), "Expected assistant message")
+        return
+    }
+    guard case .toolCall(let transformedToolCall) = transformedAssistant.content.first else {
+        #expect(Bool(false), "Expected tool call content")
+        return
+    }
+    #expect(transformedToolCall.thoughtSignature == nil)
+}
+
 @Test func contextOverflowDetection() {
     let usage = Usage(input: 10, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 10)
     let message = AssistantMessage(
@@ -526,6 +555,20 @@ private func runCodexSessionRequest(sessionId: String?) async throws -> CodexReq
         usage: usage,
         stopReason: .error,
         errorMessage: "Your input exceeds the context window of this model"
+    )
+    #expect(isContextOverflow(message))
+}
+
+@Test func contextOverflowDetectionInputTooLong() {
+    let usage = Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0)
+    let message = AssistantMessage(
+        content: [],
+        api: .openAICompletions,
+        provider: "github-copilot",
+        model: "claude-sonnet-4",
+        usage: usage,
+        stopReason: .error,
+        errorMessage: "input is too long"
     )
     #expect(isContextOverflow(message))
 }
@@ -778,6 +821,26 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     #expect(updatedLongString?.contains("\"ttl\":\"1h\"") == true)
 }
 
+@Test func anthropicBetaHeadersCopilotExcludeFineGrained() {
+    let headers = buildAnthropicBetaHeaders(
+        apiKey: "tid_copilot_session_test_token",
+        interleavedThinking: true,
+        provider: "github-copilot"
+    )
+    #expect(headers?.contains("fine-grained-tool-streaming-2025-05-14") == false)
+    #expect(headers?.contains("interleaved-thinking-2025-05-14") == true)
+}
+
+@Test func anthropicBetaHeadersDefaultIncludeFineGrained() {
+    let headers = buildAnthropicBetaHeaders(
+        apiKey: "sk-ant-api",
+        interleavedThinking: true,
+        provider: "anthropic"
+    )
+    #expect(headers?.contains("fine-grained-tool-streaming-2025-05-14") == true)
+    #expect(headers?.contains("interleaved-thinking-2025-05-14") == true)
+}
+
 @Test func anthropicMetadataInjection() async throws {
     let payload: [String: Any] = [
         "model": "claude-3-5-haiku-20241022",
@@ -789,6 +852,13 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     let updated = injectAnthropicRequestBody(body: body, ttl: nil, metadataUserId: "user-123")
     let updatedString = updated.flatMap { String(data: $0, encoding: .utf8) }
     #expect(updatedString?.contains("\"metadata\":{\"user_id\":\"user-123\"}") == true)
+}
+
+@Test func anthropicSimpleOptionsCarryMetadata() {
+    let model = getModel(provider: .anthropic, modelId: "claude-3-5-haiku-20241022")
+    let options = SimpleStreamOptions(metadata: ["user_id": AnyCodable("user-123")])
+    let mapped = mapAnthropicSimpleOptions(model: model, options: options, apiKey: "sk-ant-api")
+    #expect(mapped.metadata?["user_id"]?.value as? String == "user-123")
 }
 
 @Test func googleToolDeclarationModes() {
@@ -821,6 +891,51 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     let opus = getModel(provider: .githubCopilot, modelId: "claude-opus-4.5")
     #expect(sonnet.api == .anthropicMessages)
     #expect(opus.api == .anthropicMessages)
+}
+
+@Test func bedrockInterleavedThinkingDefaultsToEnabled() {
+    let model = Model(
+        id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        name: "Claude Sonnet 4.5 Bedrock",
+        api: .bedrockConverseStream,
+        provider: "amazon-bedrock",
+        baseUrl: "",
+        reasoning: true,
+        input: [.text],
+        cost: ModelCost(input: 0, output: 0, cacheRead: 0, cacheWrite: 0),
+        contextWindow: 200000,
+        maxTokens: 64000
+    )
+    let fields = buildAdditionalModelRequestFields(
+        model: model,
+        options: BedrockOptions(reasoning: .xhigh)
+    )
+    let beta = fields?["anthropic_beta"]?.value as? [String]
+    #expect(beta?.contains("interleaved-thinking-2025-05-14") == true)
+    let thinking = fields?["thinking"]?.value as? [String: Any]
+    #expect(thinking?["budget_tokens"] as? Int == 16384)
+}
+
+@Test func bedrockAdaptiveThinkingOmitsInterleavedBeta() {
+    let model = Model(
+        id: "anthropic.claude-opus-4-6-v1",
+        name: "Claude Opus 4.6 Bedrock",
+        api: .bedrockConverseStream,
+        provider: "amazon-bedrock",
+        baseUrl: "",
+        reasoning: true,
+        input: [.text],
+        cost: ModelCost(input: 0, output: 0, cacheRead: 0, cacheWrite: 0),
+        contextWindow: 200000,
+        maxTokens: 64000
+    )
+    let fields = buildAdditionalModelRequestFields(
+        model: model,
+        options: BedrockOptions(reasoning: .high, interleavedThinking: true)
+    )
+    #expect(fields?["anthropic_beta"] == nil)
+    let thinking = fields?["thinking"]?.value as? [String: Any]
+    #expect(thinking?["type"] as? String == "adaptive")
 }
 
 @Test func supportsXhighModels() async throws {

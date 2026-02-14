@@ -4,6 +4,7 @@ private let overflowPatterns: [NSRegularExpression] = [
     try! NSRegularExpression(pattern: "prompt is too long", options: [.caseInsensitive]),
     try! NSRegularExpression(pattern: "input is too long for requested model", options: [.caseInsensitive]),
     try! NSRegularExpression(pattern: "exceeds the context window", options: [.caseInsensitive]),
+    try! NSRegularExpression(pattern: "input is too long", options: [.caseInsensitive]),
     try! NSRegularExpression(pattern: "input token count.*exceeds the maximum", options: [.caseInsensitive]),
     try! NSRegularExpression(pattern: "maximum prompt length is \\d+", options: [.caseInsensitive]),
     try! NSRegularExpression(pattern: "reduce the length of the messages", options: [.caseInsensitive]),
