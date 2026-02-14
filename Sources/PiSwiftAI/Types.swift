@@ -56,11 +56,18 @@ public enum CacheRetention: String, Sendable {
     case long
 }
 
+public enum Transport: String, Sendable {
+    case sse
+    case websocket
+    case auto
+}
+
 public struct StreamOptions: Sendable {
     public var temperature: Double?
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
+    public var transport: Transport?
     public var cacheRetention: CacheRetention?
     public var sessionId: String?
     public var headers: [String: String]?
@@ -72,6 +79,7 @@ public struct StreamOptions: Sendable {
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
+        transport: Transport? = nil,
         cacheRetention: CacheRetention? = nil,
         sessionId: String? = nil,
         headers: [String: String]? = nil,
@@ -82,6 +90,7 @@ public struct StreamOptions: Sendable {
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
+        self.transport = transport
         self.cacheRetention = cacheRetention
         self.sessionId = sessionId
         self.headers = headers
@@ -95,6 +104,7 @@ public struct SimpleStreamOptions: Sendable {
     public var maxTokens: Int?
     public var signal: CancellationToken?
     public var apiKey: String?
+    public var transport: Transport?
     public var reasoning: ThinkingLevel?
     public var cacheRetention: CacheRetention?
     public var sessionId: String?
@@ -108,6 +118,7 @@ public struct SimpleStreamOptions: Sendable {
         maxTokens: Int? = nil,
         signal: CancellationToken? = nil,
         apiKey: String? = nil,
+        transport: Transport? = nil,
         reasoning: ThinkingLevel? = nil,
         cacheRetention: CacheRetention? = nil,
         sessionId: String? = nil,
@@ -120,6 +131,7 @@ public struct SimpleStreamOptions: Sendable {
         self.maxTokens = maxTokens
         self.signal = signal
         self.apiKey = apiKey
+        self.transport = transport
         self.reasoning = reasoning
         self.cacheRetention = cacheRetention
         self.sessionId = sessionId
@@ -589,6 +601,7 @@ public struct OpenAIResponsesOptions: Sendable {
     public var reasoningSummary: OpenAIReasoningSummary?
     public var serviceTier: OpenAIServiceTier?
     public var sessionId: String?
+    public var transport: Transport?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
 
@@ -602,6 +615,7 @@ public struct OpenAIResponsesOptions: Sendable {
         reasoningSummary: OpenAIReasoningSummary? = nil,
         serviceTier: OpenAIServiceTier? = nil,
         sessionId: String? = nil,
+        transport: Transport? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil
     ) {
@@ -614,6 +628,7 @@ public struct OpenAIResponsesOptions: Sendable {
         self.reasoningSummary = reasoningSummary
         self.serviceTier = serviceTier
         self.sessionId = sessionId
+        self.transport = transport
         self.headers = headers
         self.onPayload = onPayload
     }
@@ -675,6 +690,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
     public var textVerbosity: OpenAICodexTextVerbosity?
     public var include: [String]?
     public var sessionId: String?
+    public var transport: Transport?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
 
@@ -688,6 +704,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
         textVerbosity: OpenAICodexTextVerbosity? = nil,
         include: [String]? = nil,
         sessionId: String? = nil,
+        transport: Transport? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil
     ) {
@@ -700,6 +717,7 @@ public struct OpenAICodexResponsesOptions: Sendable {
         self.textVerbosity = textVerbosity
         self.include = include
         self.sessionId = sessionId
+        self.transport = transport
         self.headers = headers
         self.onPayload = onPayload
     }

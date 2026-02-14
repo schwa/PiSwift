@@ -97,6 +97,20 @@ private func parseCLI(_ args: [String]) throws -> Args {
 
     let skills = try parseCLI(["--skills", "git-*,docker"])
     #expect(skills.skills == ["git-*", "docker"])
+
+    let noPrompts = try parseCLI(["--no-prompt-templates"])
+    #expect(noPrompts.noPromptTemplates == true)
+}
+
+@Test func parseShortAliasesForNoFlags() throws {
+    let noExtensions = try parseCLI(["-ne"])
+    #expect(noExtensions.noExtensions == true)
+
+    let noSkills = try parseCLI(["-ns"])
+    #expect(noSkills.noSkills == true)
+
+    let noPrompts = try parseCLI(["-np"])
+    #expect(noPrompts.noPromptTemplates == true)
 }
 
 @Test func parseArgsComplex() throws {

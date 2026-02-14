@@ -70,6 +70,9 @@ struct CLIOptions: ParsableArguments {
     @Flag(name: .customLong("no-skills"), help: "Disable skills discovery and loading")
     var noSkills: Bool = false
 
+    @Flag(name: .customLong("no-prompt-templates"), help: "Disable prompt template discovery and loading")
+    var noPromptTemplates: Bool = false
+
     @Option(name: .customLong("skills"), help: "Comma-separated skill file paths or directories")
     var skills: String?
 
@@ -149,6 +152,9 @@ extension CLIOptions {
         result.export = export
         if noSkills {
             result.noSkills = true
+        }
+        if noPromptTemplates {
+            result.noPromptTemplates = true
         }
         if let skills {
             result.skills = skills.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }

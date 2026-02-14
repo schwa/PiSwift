@@ -2675,6 +2675,7 @@ public final class InteractiveMode {
             enableSkillCommands: settingsManager.getEnableSkillCommands(),
             steeringMode: settingsManager.getSteeringMode(),
             followUpMode: settingsManager.getFollowUpMode(),
+            transport: settingsManager.getTransport(),
             thinkingLevel: session.agent.state.thinkingLevel,
             availableThinkingLevels: availableThinking,
             currentTheme: settingsManager.getTheme() ?? "dark",
@@ -2713,6 +2714,10 @@ public final class InteractiveMode {
                 onFollowUpModeChange: { mode in
                     settingsManager.setFollowUpMode(mode)
                     session.agent.setFollowUpMode(AgentFollowUpMode(rawValue: mode) ?? .oneAtATime)
+                },
+                onTransportChange: { transport in
+                    settingsManager.setTransport(transport)
+                    session.agent.setTransport(transport)
                 },
                 onThinkingLevelChange: { [weak self] level in
                     session.agent.setThinkingLevel(level)

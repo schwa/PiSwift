@@ -66,7 +66,7 @@ private final class GitUpdateTestFixture {
     let installedDir: String
     let settingsManager: SettingsManager
     let packageManager: DefaultPackageManager
-    let gitSource = "github.com/test/extension"
+    let gitSource = "git:github.com/test/extension"
 
     init() throws {
         let uuid = UUID().uuidString
@@ -113,7 +113,7 @@ private final class GitUpdateTestFixture {
         _ = try git(["config", "user.name", "Test"], cwd: installedDir)
 
         // Add to settings so update() processes this source
-        settingsManager.setExtensionPaths([gitSource])
+        settingsManager.setPackages([.simple(gitSource)])
     }
 }
 
@@ -245,7 +245,7 @@ private final class GitUpdateTestFixture {
     let initialCommit = try getCurrentCommit(repoDir: fixture.installedDir)
 
     // Reconfigure with pinned ref
-    fixture.settingsManager.setExtensionPaths(["\(fixture.gitSource)@\(initialCommit)"])
+    fixture.settingsManager.setPackages([.simple("\(fixture.gitSource)@\(initialCommit)")])
 
     // Add new commit to remote
     _ = try createCommit(repoDir: fixture.remoteDir, filename: "extension.ts", content: "// v2", message: "Second commit")

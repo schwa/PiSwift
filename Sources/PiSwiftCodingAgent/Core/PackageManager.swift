@@ -202,7 +202,8 @@ public final class DefaultPackageManager: PackageManager {
             let path = getGitInstallPath(git, scope: scope)
             return FileManager.default.fileExists(atPath: path) ? path : nil
         case .local(let local):
-            let path = resolvePath(local.path)
+            let baseDir = getBaseDirForScope(scope)
+            let path = resolvePathFromBase(local.path, baseDir: baseDir)
             return FileManager.default.fileExists(atPath: path) ? path : nil
         }
     }
@@ -303,19 +304,24 @@ public final class DefaultPackageManager: PackageManager {
     }
 
     public func update(_ source: String?) async throws {
-        if let source {
-            try await updateSource(source: source, scope: "user")
-            try await updateSource(source: source, scope: "project")
-            return
-        }
-
         let globalSettings = settingsManager.getGlobalSettings()
         let projectSettings = settingsManager.getProjectSettings()
-        for entry in globalSettings.extensions ?? [] {
-            try await updateSource(source: entry, scope: "user")
+
+        let identity = source.map { getPackageIdentity($0) }
+
+        for pkg in globalSettings.packages ?? [] {
+            let sourceStr = packageSourceString(pkg)
+            if let identity, getPackageIdentity(sourceStr) != identity {
+                continue
+            }
+            try await updateSource(source: sourceStr, scope: "user")
         }
-        for entry in projectSettings.extensions ?? [] {
-            try await updateSource(source: entry, scope: "project")
+        for pkg in projectSettings.packages ?? [] {
+            let sourceStr = packageSourceString(pkg)
+            if let identity, getPackageIdentity(sourceStr) != identity {
+                continue
+            }
+            try await updateSource(source: sourceStr, scope: "project")
         }
     }
 
@@ -555,7 +561,12 @@ public final class DefaultPackageManager: PackageManager {
             return
         }
         _ = try await runCommand("git", ["fetch", "--prune", "origin"], cwd: targetDir)
-        _ = try await runCommand("git", ["reset", "--hard", "@{upstream}"], cwd: targetDir)
+        do {
+            _ = try await runCommand("git", ["reset", "--hard", "@{upstream}"], cwd: targetDir)
+        } catch {
+            _ = try? await runCommand("git", ["remote", "set-head", "origin", "-a"], cwd: targetDir)
+            _ = try await runCommand("git", ["reset", "--hard", "origin/HEAD"], cwd: targetDir)
+        }
         _ = try await runCommand("git", ["clean", "-fdx"], cwd: targetDir)
         let packageJsonPath = URL(fileURLWithPath: targetDir).appendingPathComponent("package.json").path
         if FileManager.default.fileExists(atPath: packageJsonPath) {
@@ -1054,18 +1065,23 @@ public final class DefaultPackageManager: PackageManager {
     }
 
     private func looksLikeGitUrl(_ input: String) -> Bool {
-        if input.hasPrefix("git@") { return true }
-        if input.hasPrefix("https://") || input.hasPrefix("http://") || input.hasPrefix("ssh://") { return true }
-        if input.hasSuffix(".git") { return true }
-        let parts = input.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
-        if parts.count == 2, parts[0].contains(".") || parts[0] == "localhost" {
-            return true
-        }
-        return false
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("https://") ||
+            trimmed.hasPrefix("http://") ||
+            trimmed.hasPrefix("ssh://") ||
+            trimmed.hasPrefix("git://")
     }
 
     func parseGitUrl(_ source: String) -> GitSource? {
-        let raw = source.hasPrefix("git:") ? String(source.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : source
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasGitPrefix = trimmed.hasPrefix("git:")
+        let raw = hasGitPrefix ? String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines) : trimmed
+        if !hasGitPrefix {
+            guard raw.hasPrefix("https://") || raw.hasPrefix("http://") || raw.hasPrefix("ssh://") || raw.hasPrefix("git://") else {
+                return nil
+            }
+        }
+
         let split = splitGitRef(raw)
         let repoWithoutRef = split.repo
         let ref = split.ref
@@ -1227,7 +1243,13 @@ public final class DefaultPackageManager: PackageManager {
             let baseDir = getBaseDirForScope(scope)
             let resolved = resolvePath(local.path)
             let relative = relativePath(from: baseDir, to: resolved)
-            return relative.isEmpty ? "." : relative
+            if relative.isEmpty {
+                return "."
+            }
+            if relative == "." || relative.hasPrefix("./") || relative.hasPrefix("../") {
+                return relative
+            }
+            return "./\(relative)"
         case .npm, .git:
             return source
         }

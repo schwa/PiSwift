@@ -72,31 +72,10 @@ public func streamOpenAICodexResponses(
             transformCodexRequestBody(&body, options: requestOptions, prompt: nil)
             emitPayload(options.onPayload, jsonObject: body)
 
-            let requestData = try JSONSerialization.data(withJSONObject: body, options: [])
-            var request = URLRequest(url: codexResponsesUrl(baseUrl: model.baseUrl))
-            request.httpMethod = "POST"
-            request.httpBody = requestData
-            for (key, value) in headers {
-                request.setValue(value, forHTTPHeaderField: key)
-            }
-
-            let session = proxySession(for: request.url)
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw OpenAICodexStreamError.invalidResponse
-            }
-
-            if !(200..<300).contains(http.statusCode) {
-                let bodyData = try await collectCodexData(from: bytes)
-                let info = parseCodexError(statusCode: http.statusCode, headers: http.allHeaderFields, body: bodyData)
-                throw OpenAICodexStreamError.apiError(info.friendlyMessage ?? info.message)
-            }
-
-            stream.push(.start(partial: output))
-
             var currentBlockIndex: Int? = nil
             var currentBlockKind: String? = nil
             var currentToolCallPartial = ""
+            var hasStartedStream = false
 
             func startBlock(kind: String, block: ContentBlock) {
                 output.content.append(block)
@@ -139,18 +118,24 @@ public func streamOpenAICodexResponses(
                 stream.push(.toolCallDelta(contentIndex: index, delta: delta, partial: output))
             }
 
-            for try await rawEvent in parseCodexSseStream(bytes: bytes) {
+            func startStreamIfNeeded() {
+                guard !hasStartedStream else { return }
+                hasStartedStream = true
+                stream.push(.start(partial: output))
+            }
+
+            func processRawEvent(_ rawEvent: [String: Any]) throws {
                 if options.signal?.isCancelled == true {
                     throw OpenAICodexStreamError.aborted
                 }
 
                 let eventType = rawEvent["type"] as? String ?? ""
-                if eventType.isEmpty { continue }
+                if eventType.isEmpty { return }
 
                 switch eventType {
                 case "response.output_item.added":
                     guard let item = rawEvent["item"] as? [String: Any],
-                          let type = item["type"] as? String else { continue }
+                          let type = item["type"] as? String else { return }
                     if type == "reasoning" {
                         startBlock(kind: "thinking", block: .thinking(ThinkingContent(thinking: "")))
                     } else if type == "message" {
@@ -188,7 +173,7 @@ public func streamOpenAICodexResponses(
 
                 case "response.output_item.done":
                     guard let item = rawEvent["item"] as? [String: Any],
-                          let type = item["type"] as? String else { continue }
+                          let type = item["type"] as? String else { return }
                     if type == "reasoning", let index = currentBlockIndex, currentBlockKind == "thinking",
                        case .thinking(var thinking) = output.content[index] {
                         let summaryText = extractCodexReasoningSummary(item)
@@ -274,6 +259,67 @@ public func streamOpenAICodexResponses(
                 }
             }
 
+            let transport = options.transport ?? .sse
+            if transport != .sse {
+                var websocketStarted = false
+                do {
+                    try await processCodexWebSocketStream(
+                        url: codexWebSocketUrl(baseUrl: model.baseUrl),
+                        body: body,
+                        headers: headers,
+                        sessionId: options.sessionId,
+                        signal: options.signal,
+                        onStart: {
+                            websocketStarted = true
+                            startStreamIfNeeded()
+                        },
+                        onEvent: { event in
+                            try processRawEvent(event)
+                        }
+                    )
+
+                    if options.signal?.isCancelled == true {
+                        throw OpenAICodexStreamError.aborted
+                    }
+                    if output.stopReason == .aborted || output.stopReason == .error {
+                        throw OpenAICodexStreamError.unknown
+                    }
+
+                    stream.push(.done(reason: output.stopReason, message: output))
+                    stream.end()
+                    return
+                } catch {
+                    if transport == .websocket || websocketStarted {
+                        throw error
+                    }
+                }
+            }
+
+            let requestData = try JSONSerialization.data(withJSONObject: body, options: [])
+            var request = URLRequest(url: codexResponsesUrl(baseUrl: model.baseUrl))
+            request.httpMethod = "POST"
+            request.httpBody = requestData
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+
+            let session = proxySession(for: request.url)
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw OpenAICodexStreamError.invalidResponse
+            }
+
+            if !(200..<300).contains(http.statusCode) {
+                let bodyData = try await collectCodexData(from: bytes)
+                let info = parseCodexError(statusCode: http.statusCode, headers: http.allHeaderFields, body: bodyData)
+                throw OpenAICodexStreamError.apiError(info.friendlyMessage ?? info.message)
+            }
+
+            startStreamIfNeeded()
+            for try await rawEvent in parseCodexSseStream(bytes: bytes) {
+                try processRawEvent(rawEvent)
+            }
+
             if options.signal?.isCancelled == true {
                 throw OpenAICodexStreamError.aborted
             }
@@ -335,6 +381,146 @@ private func codexResponsesUrl(baseUrl: String) -> URL {
     }
     let suffix = trimmed.hasSuffix("/") ? "codex/responses" : "/codex/responses"
     return URL(string: trimmed + suffix)!
+}
+
+private func codexWebSocketUrl(baseUrl: String) -> URL {
+    let httpUrl = codexResponsesUrl(baseUrl: baseUrl)
+    guard var components = URLComponents(url: httpUrl, resolvingAgainstBaseURL: false) else {
+        return httpUrl
+    }
+    if components.scheme == "https" {
+        components.scheme = "wss"
+    } else if components.scheme == "http" {
+        components.scheme = "ws"
+    }
+    return components.url ?? httpUrl
+}
+
+private let codexWebSocketBetaHeader = "responses_websockets=2026-02-06"
+private let codexSessionWebSocketCacheTtl: TimeInterval = 5 * 60
+
+private struct CodexWebSocketLease {
+    let task: URLSessionWebSocketTask
+    let sessionId: String?
+    let cached: Bool
+}
+
+private final class CodexWebSocketCache: @unchecked Sendable {
+    private struct Entry {
+        var task: URLSessionWebSocketTask
+        var busy: Bool
+        var idleTimer: DispatchSourceTimer?
+    }
+
+    static let shared = CodexWebSocketCache()
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    private init() {}
+
+    func acquire(url: URL, headers: [String: String], sessionId: String?) -> CodexWebSocketLease {
+        guard let sessionId, !sessionId.isEmpty else {
+            let task = connect(url: url, headers: headers)
+            return CodexWebSocketLease(task: task, sessionId: nil, cached: false)
+        }
+
+        lock.lock()
+        if var existing = entries[sessionId] {
+            existing.idleTimer?.cancel()
+            existing.idleTimer = nil
+            if !existing.busy, isReusable(existing.task) {
+                existing.busy = true
+                entries[sessionId] = existing
+                lock.unlock()
+                return CodexWebSocketLease(task: existing.task, sessionId: sessionId, cached: true)
+            }
+            if !isReusable(existing.task) {
+                closeSilently(existing.task, reason: "reconnect")
+                entries.removeValue(forKey: sessionId)
+            } else {
+                entries[sessionId] = existing
+                if existing.busy {
+                    lock.unlock()
+                    let task = connect(url: url, headers: headers)
+                    return CodexWebSocketLease(task: task, sessionId: nil, cached: false)
+                }
+            }
+        }
+        lock.unlock()
+
+        let task = connect(url: url, headers: headers)
+        lock.lock()
+        entries[sessionId] = Entry(task: task, busy: true, idleTimer: nil)
+        lock.unlock()
+        return CodexWebSocketLease(task: task, sessionId: sessionId, cached: true)
+    }
+
+    func release(_ lease: CodexWebSocketLease, keep: Bool) {
+        guard lease.cached, let sessionId = lease.sessionId else {
+            closeSilently(lease.task)
+            return
+        }
+
+        lock.lock()
+        guard var entry = entries[sessionId], entry.task === lease.task else {
+            lock.unlock()
+            closeSilently(lease.task)
+            return
+        }
+
+        if !keep || !isReusable(entry.task) {
+            entries.removeValue(forKey: sessionId)
+            lock.unlock()
+            closeSilently(entry.task)
+            return
+        }
+
+        entry.busy = false
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + codexSessionWebSocketCacheTtl)
+        timer.setEventHandler { [weak self] in
+            self?.expire(sessionId: sessionId, expectedTask: lease.task)
+        }
+        timer.resume()
+        entry.idleTimer = timer
+        entries[sessionId] = entry
+        lock.unlock()
+    }
+
+    private func expire(sessionId: String, expectedTask: URLSessionWebSocketTask) {
+        lock.lock()
+        guard let entry = entries[sessionId], entry.task === expectedTask else {
+            lock.unlock()
+            return
+        }
+        if entry.busy {
+            lock.unlock()
+            return
+        }
+        entries.removeValue(forKey: sessionId)
+        lock.unlock()
+        closeSilently(entry.task, reason: "idle_timeout")
+    }
+
+    private func connect(url: URL, headers: [String: String]) -> URLSessionWebSocketTask {
+        var request = URLRequest(url: url)
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        let session = proxySession(for: url)
+        let task = session.webSocketTask(with: request)
+        task.resume()
+        return task
+    }
+
+    private func isReusable(_ task: URLSessionWebSocketTask) -> Bool {
+        task.state == .running && task.closeCode == .invalid
+    }
+
+    private func closeSilently(_ task: URLSessionWebSocketTask, reason: String = "done") {
+        task.cancel(with: .normalClosure, reason: reason.data(using: .utf8))
+    }
 }
 
 private func buildCodexHeaders(
@@ -417,6 +603,84 @@ private func parseCodexSseStream(bytes: URLSession.AsyncBytes) -> AsyncThrowingS
             }
         }
     }
+}
+
+private func processCodexWebSocketStream(
+    url: URL,
+    body: [String: Any],
+    headers: [String: String],
+    sessionId: String?,
+    signal: CancellationToken?,
+    onStart: () -> Void,
+    onEvent: ([String: Any]) throws -> Void
+) async throws {
+    var wsHeaders = headers
+    wsHeaders["OpenAI-Beta"] = codexWebSocketBetaHeader
+
+    let lease = CodexWebSocketCache.shared.acquire(url: url, headers: wsHeaders, sessionId: sessionId)
+    var keepConnection = true
+    defer {
+        CodexWebSocketCache.shared.release(lease, keep: keepConnection)
+    }
+    do {
+        var payload = body
+        payload["type"] = "response.create"
+        let payloadData = try JSONSerialization.data(withJSONObject: payload, options: [])
+        guard let payloadText = String(data: payloadData, encoding: .utf8) else {
+            throw OpenAICodexStreamError.apiError("Failed to encode WebSocket request payload")
+        }
+
+        if signal?.isCancelled == true {
+            throw OpenAICodexStreamError.aborted
+        }
+
+        try await lease.task.send(.string(payloadText))
+        onStart()
+
+        var sawCompletion = false
+        while true {
+            if signal?.isCancelled == true {
+                throw OpenAICodexStreamError.aborted
+            }
+
+            let message = try await lease.task.receive()
+            guard let event = parseCodexWebSocketMessage(message) else { continue }
+            let type = event["type"] as? String ?? ""
+            if type == "response.completed" || type == "response.done" {
+                sawCompletion = true
+            }
+            try onEvent(event)
+            if sawCompletion {
+                break
+            }
+        }
+
+        if !sawCompletion {
+            throw OpenAICodexStreamError.apiError("WebSocket stream closed before response.completed")
+        }
+    } catch {
+        keepConnection = false
+        throw error
+    }
+}
+
+private func parseCodexWebSocketMessage(_ message: URLSessionWebSocketTask.Message) -> [String: Any]? {
+    let text: String?
+    switch message {
+    case .string(let value):
+        text = value
+    case .data(let data):
+        text = String(data: data, encoding: .utf8)
+    @unknown default:
+        text = nil
+    }
+
+    guard let text, let data = text.data(using: .utf8) else { return nil }
+    guard let object = try? JSONSerialization.jsonObject(with: data, options: []),
+          let dict = object as? [String: Any] else {
+        return nil
+    }
+    return dict
 }
 
 private func findCodexDelimiter(in buffer: Data, crlf: Data, lf: Data) -> Range<Data.Index>? {

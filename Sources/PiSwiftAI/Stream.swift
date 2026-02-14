@@ -168,6 +168,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             apiKey: apiKey,
             cacheRetention: options?.cacheRetention,
             sessionId: options?.sessionId,
+            transport: options?.transport,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -179,6 +180,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             signal: options?.signal,
             apiKey: apiKey,
             sessionId: options?.sessionId,
+            transport: options?.transport,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -360,6 +362,7 @@ func mapOpenAIResponsesSimpleOptions(model: Model, options: SimpleStreamOptions?
         cacheRetention: options?.cacheRetention,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId,
+        transport: options?.transport,
         headers: options?.headers,
         onPayload: options?.onPayload
     )
@@ -375,6 +378,7 @@ func mapOpenAICodexResponsesSimpleOptions(model: Model, options: SimpleStreamOpt
         apiKey: apiKey,
         reasoningEffort: reasoningEffort,
         sessionId: options?.sessionId,
+        transport: options?.transport,
         headers: options?.headers,
         onPayload: options?.onPayload
     )

@@ -188,6 +188,41 @@ import PiSwiftAgent
     #expect(receivedSessionId.withLock { $0 } == "session-def")
 }
 
+@Test func forwardsTransportToStreamOptions() async throws {
+    let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
+    let receivedTransport = LockedState<Transport?>(nil)
+    let streamFn: StreamFn = { model, _, options in
+        receivedTransport.withLock { $0 = options.transport }
+        let stream = AssistantMessageEventStream()
+        Task {
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: Usage(input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0),
+                stopReason: .stop
+            )
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+        }
+        return stream
+    }
+
+    let agent = Agent(AgentOptions(
+        initialState: AgentState(model: model),
+        streamFn: streamFn,
+        transport: .websocket
+    ))
+
+    try await agent.prompt("Hello")
+    #expect(receivedTransport.withLock { $0 } == .websocket)
+
+    agent.setTransport(.auto)
+    try await agent.prompt("Hello again")
+    #expect(receivedTransport.withLock { $0 } == .auto)
+}
+
 @Test func continueWhileStreamingThrows() async throws {
     let model = getModel(provider: .openai, modelId: "gpt-4o-mini")
     let streamFn: StreamFn = { model, _, _ in

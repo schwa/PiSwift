@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import PiSwiftCodingAgent
+import PiSwiftAI
 
 @Test func settingsPreservesExternalEdits() throws {
     let tempDir = FileManager.default.temporaryDirectory
@@ -67,6 +68,43 @@ import PiSwiftCodingAgent
 
     let reloaded = SettingsManager.create(tempDir, tempDir)
     #expect(reloaded.getQuietStartup() == true)
+}
+
+@Test func settingsTransportRoundTrip() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-transport-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+    manager.setTransport(.websocket)
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["transport"] as? String == "websocket")
+
+    let reloaded = SettingsManager.create(tempDir, tempDir)
+    #expect(reloaded.getTransport() == .websocket)
+}
+
+@Test func settingsMigratesLegacyWebsocketsFlagToTransport() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-websockets-\(UUID().uuidString)")
+        .path
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let settingsPath = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.json").path
+    let initial = """
+    {"websockets":true}
+    """
+    try initial.data(using: .utf8)?.write(to: URL(fileURLWithPath: settingsPath))
+
+    let manager = SettingsManager.create(tempDir, tempDir)
+    #expect(manager.getTransport() == .websocket)
 }
 
 // MARK: - Packages tests

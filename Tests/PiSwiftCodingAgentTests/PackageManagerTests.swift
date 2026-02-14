@@ -248,37 +248,41 @@ private final class EventCollector: @unchecked Sendable {
     #expect(collector.events.contains { $0.type == "start" && $0.action == "install" })
 }
 
-// MARK: - SSH URL parsing tests
-
-@Test func parseSourceSupportsGitAtUrls() async throws {
+@Test func addSourceToSettingsNormalizesLocalUserPackageWithDotPrefix() async throws {
     let fixture = try PackageManagerTestFixture()
-    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo")
-    if case .git(let git) = parsed {
-        #expect(git.host == "github.com")
-        #expect(git.path == "user/repo")
-        #expect(git.repo == "git@github.com:user/repo")
-        #expect(git.ref == nil)
-        #expect(git.pinned == false)
+    _ = try fixture.createDir("local-package")
+
+    let added = fixture.packageManager.addSourceToSettings("local-package", local: false)
+    #expect(added)
+
+    let packages = fixture.settingsManager.getGlobalSettings().packages
+    #expect(packages?.count == 1)
+    if case .simple(let source)? = packages?.first {
+        #expect(source == "../local-package")
     } else {
-        Issue.record("Expected git source")
+        Issue.record("Expected a simple package source")
     }
 }
 
-@Test func parseSourceSupportsGitAtWithRef() async throws {
+@Test func addSourceToSettingsNormalizesLocalProjectPackageWithDotPrefix() async throws {
     let fixture = try PackageManagerTestFixture()
-    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo@v1.0.0")
-    if case .git(let git) = parsed {
-        #expect(git.host == "github.com")
-        #expect(git.path == "user/repo")
-        #expect(git.ref == "v1.0.0")
-        #expect(git.repo == "git@github.com:user/repo")
-        #expect(git.pinned == true)
+    _ = try fixture.createDir("project-local")
+
+    let added = fixture.packageManager.addSourceToSettings("project-local", local: true)
+    #expect(added)
+
+    let packages = fixture.settingsManager.getProjectSettings().packages
+    #expect(packages?.count == 1)
+    if case .simple(let source)? = packages?.first {
+        #expect(source == "../project-local")
     } else {
-        Issue.record("Expected git source")
+        Issue.record("Expected a simple package source")
     }
 }
 
-@Test func parseSourceSupportsSshProtocolUrls() async throws {
+// MARK: - Git URL parsing tests
+
+@Test func parseSourceSupportsProtocolGitUrls() async throws {
     let fixture = try PackageManagerTestFixture()
     let parsed = fixture.packageManager.parseSource("ssh://git@github.com/user/repo")
     if case .git(let git) = parsed {
@@ -290,44 +294,54 @@ private final class EventCollector: @unchecked Sendable {
     }
 }
 
-@Test func parseSourceSupportsSshProtocolWithPort() async throws {
-    let fixture = try PackageManagerTestFixture()
-    let parsed = fixture.packageManager.parseSource("ssh://git@github.com:22/user/repo")
-    if case .git(let git) = parsed {
-        #expect(git.host == "github.com")
-        #expect(git.path == "user/repo")
-        #expect(git.repo == "ssh://git@github.com:22/user/repo")
-    } else {
-        Issue.record("Expected git source")
-    }
-}
-
-@Test func parseSourceSupportsGitPrefixWithSshUrl() async throws {
+@Test func parseSourceSupportsGitPrefixShorthandUrls() async throws {
     let fixture = try PackageManagerTestFixture()
     let parsed = fixture.packageManager.parseSource("git:git@github.com:user/repo")
     if case .git(let git) = parsed {
         #expect(git.host == "github.com")
         #expect(git.path == "user/repo")
         #expect(git.repo == "git@github.com:user/repo")
+        #expect(git.ref == nil)
+        #expect(git.pinned == false)
     } else {
         Issue.record("Expected git source")
     }
 }
 
-@Test func parseSourceSupportsGitSuffix() async throws {
+@Test func parseSourceSupportsGitPrefixShorthandWithRef() async throws {
     let fixture = try PackageManagerTestFixture()
-    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo.git")
+    let parsed = fixture.packageManager.parseSource("git:git@github.com:user/repo@v1.0.0")
     if case .git(let git) = parsed {
+        #expect(git.host == "github.com")
         #expect(git.path == "user/repo")
-        #expect(git.repo == "git@github.com:user/repo.git")
+        #expect(git.repo == "git@github.com:user/repo")
+        #expect(git.ref == "v1.0.0")
+        #expect(git.pinned == true)
     } else {
         Issue.record("Expected git source")
+    }
+}
+
+@Test func parseSourceRejectsShorthandWithoutGitPrefix() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let parsed = fixture.packageManager.parseSource("git@github.com:user/repo.git")
+    if case .local(let local) = parsed {
+        #expect(local.path == "git@github.com:user/repo.git")
+    } else {
+        Issue.record("Expected local source")
+    }
+
+    let shorthand = fixture.packageManager.parseSource("github.com/user/repo")
+    if case .local(let local) = shorthand {
+        #expect(local.path == "github.com/user/repo")
+    } else {
+        Issue.record("Expected local source")
     }
 }
 
 @Test func packageIdentityNormalizesGitUrls() async throws {
     let fixture = try PackageManagerTestFixture()
-    let sshIdentity = fixture.packageManager.getPackageIdentity("git@github.com:user/repo")
+    let sshIdentity = fixture.packageManager.getPackageIdentity("git:git@github.com:user/repo")
     let httpsIdentity = fixture.packageManager.getPackageIdentity("https://github.com/user/repo")
     #expect(sshIdentity == httpsIdentity)
     #expect(sshIdentity == "git:github.com/user/repo")
@@ -335,8 +349,8 @@ private final class EventCollector: @unchecked Sendable {
 
 @Test func packageIdentityIgnoresRefs() async throws {
     let fixture = try PackageManagerTestFixture()
-    let withRef = fixture.packageManager.getPackageIdentity("git@github.com:user/repo@v1.0.0")
-    let withoutRef = fixture.packageManager.getPackageIdentity("git@github.com:user/repo")
+    let withRef = fixture.packageManager.getPackageIdentity("git:git@github.com:user/repo@v1.0.0")
+    let withoutRef = fixture.packageManager.getPackageIdentity("git:git@github.com:user/repo")
     #expect(withRef == withoutRef)
 }
 
@@ -372,7 +386,7 @@ private final class EventCollector: @unchecked Sendable {
     }
 
     do {
-        try await fixture.packageManager.install("git@github.com:nonexistent/repo")
+        try await fixture.packageManager.install("git:git@github.com:nonexistent/repo")
     } catch {
         // Expected to fail
     }

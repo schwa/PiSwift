@@ -111,6 +111,7 @@ public struct SettingsSnapshot: Sendable {
     public var defaultThinkingLevel: String?
     public var steeringMode: String
     public var followUpMode: String
+    public var transport: Transport
     public var theme: String?
     public var compaction: CompactionSettings
     public var retry: RetrySettings
@@ -132,6 +133,7 @@ public struct SettingsSnapshot: Sendable {
         defaultThinkingLevel: String?,
         steeringMode: String,
         followUpMode: String,
+        transport: Transport,
         theme: String?,
         compaction: CompactionSettings,
         retry: RetrySettings,
@@ -152,6 +154,7 @@ public struct SettingsSnapshot: Sendable {
         self.defaultThinkingLevel = defaultThinkingLevel
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
+        self.transport = transport
         self.theme = theme
         self.compaction = compaction
         self.retry = retry
@@ -311,6 +314,7 @@ public func loadSettings(cwd: String? = nil, agentDir: String? = nil) -> Setting
         defaultThinkingLevel: manager.getDefaultThinkingLevel(),
         steeringMode: manager.getSteeringMode(),
         followUpMode: manager.getFollowUpMode(),
+        transport: manager.getTransport(),
         theme: manager.getTheme(),
         compaction: manager.getCompactionSettings(),
         retry: manager.getRetrySettings(),
@@ -662,6 +666,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
         followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
         sessionId: sessionManager.getSessionId(),
+        transport: settingsManager.getTransport(),
         thinkingBudgets: settingsManager.getThinkingBudgets(),
         getApiKey: { provider in
             await modelRegistry.getApiKey(provider)

@@ -85,6 +85,7 @@ public func streamOpenAIResponses(
             reasoningEffort: options.reasoningEffort,
             reasoningSummary: mapCodexReasoningSummary(options.reasoningSummary),
             sessionId: options.sessionId,
+            transport: options.transport,
             headers: options.headers,
             onPayload: options.onPayload
         )

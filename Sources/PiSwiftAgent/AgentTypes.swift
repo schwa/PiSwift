@@ -155,6 +155,7 @@ public struct AgentLoopConfig: Sendable {
     public var temperature: Double?
     public var maxTokens: Int?
     public var reasoning: ReasoningEffort?
+    public var transport: Transport?
     public var apiKey: String?
     public var sessionId: String?
     public var thinkingBudgets: ThinkingBudgets?
@@ -170,6 +171,7 @@ public struct AgentLoopConfig: Sendable {
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         reasoning: ReasoningEffort? = nil,
+        transport: Transport? = nil,
         apiKey: String? = nil,
         sessionId: String? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
@@ -184,6 +186,7 @@ public struct AgentLoopConfig: Sendable {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.reasoning = reasoning
+        self.transport = transport
         self.apiKey = apiKey
         self.sessionId = sessionId
         self.thinkingBudgets = thinkingBudgets

@@ -202,6 +202,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             additionalSkillPaths: parsed.skills ?? [],
             noExtensions: parsed.noExtensions ?? false,
             noSkills: parsed.noSkills ?? false,
+            noPromptTemplates: parsed.noPromptTemplates ?? false,
             systemPrompt: parsed.systemPrompt,
             appendSystemPrompt: parsed.appendSystemPrompt
         ))
@@ -349,6 +350,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             steeringMode: AgentSteeringMode(rawValue: settingsManager.getSteeringMode()),
             followUpMode: AgentFollowUpMode(rawValue: settingsManager.getFollowUpMode()),
             sessionId: sessionManager.getSessionId(),
+            transport: settingsManager.getTransport(),
             thinkingBudgets: settingsManager.getThinkingBudgets(),
             getApiKey: { provider in
                 return await authStorage.getApiKey(provider)
@@ -536,6 +538,21 @@ Available Tools (default: read, bash, edit, write):
         var i = 0
         while i < args.count {
             let arg = args[i]
+            if arg == "-ne" {
+                result.append("--no-extensions")
+                i += 1
+                continue
+            }
+            if arg == "-ns" {
+                result.append("--no-skills")
+                i += 1
+                continue
+            }
+            if arg == "-np" {
+                result.append("--no-prompt-templates")
+                i += 1
+                continue
+            }
             if arg == "--list-models" {
                 result.append(arg)
                 if i + 1 < args.count {

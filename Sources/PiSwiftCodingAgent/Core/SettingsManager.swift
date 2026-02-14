@@ -94,6 +94,7 @@ public struct Settings: Sendable {
     public var defaultProvider: String?
     public var defaultModel: String?
     public var defaultThinkingLevel: String?
+    public var transport: Transport?
     public var steeringMode: String?
     public var followUpMode: String?
     public var theme: String?
@@ -293,6 +294,16 @@ public final class SettingsManager: Sendable {
     public func setFollowUpMode(_ mode: String) {
         globalSettings.followUpMode = mode
         markModified("followUpMode")
+        save()
+    }
+
+    public func getTransport() -> Transport {
+        settings.transport ?? .sse
+    }
+
+    public func setTransport(_ transport: Transport) {
+        globalSettings.transport = transport
+        markModified("transport")
         save()
     }
 
@@ -681,6 +692,7 @@ public final class SettingsManager: Sendable {
         json["defaultProvider"] = settings.defaultProvider
         json["defaultModel"] = settings.defaultModel
         json["defaultThinkingLevel"] = settings.defaultThinkingLevel
+        json["transport"] = settings.transport?.rawValue
         json["steeringMode"] = settings.steeringMode
         json["followUpMode"] = settings.followUpMode
         json["theme"] = settings.theme
@@ -774,6 +786,11 @@ public final class SettingsManager: Sendable {
         settings.defaultProvider = json["defaultProvider"] as? String
         settings.defaultModel = json["defaultModel"] as? String
         settings.defaultThinkingLevel = json["defaultThinkingLevel"] as? String
+        if let transport = json["transport"] as? String, let parsed = Transport(rawValue: transport) {
+            settings.transport = parsed
+        } else if settings.transport == nil, let websockets = json["websockets"] as? Bool {
+            settings.transport = websockets ? .websocket : .sse
+        }
         settings.steeringMode = json["steeringMode"] as? String ?? settings.steeringMode
         settings.followUpMode = json["followUpMode"] as? String
         settings.theme = json["theme"] as? String
@@ -943,6 +960,7 @@ public final class SettingsManager: Sendable {
         json["defaultProvider"] = settings.defaultProvider
         json["defaultModel"] = settings.defaultModel
         json["defaultThinkingLevel"] = settings.defaultThinkingLevel
+        json["transport"] = settings.transport?.rawValue
         json["steeringMode"] = settings.steeringMode
         json["followUpMode"] = settings.followUpMode
         json["theme"] = settings.theme
@@ -1047,6 +1065,7 @@ public final class SettingsManager: Sendable {
         if override.defaultProvider != nil { result.defaultProvider = override.defaultProvider }
         if override.defaultModel != nil { result.defaultModel = override.defaultModel }
         if override.defaultThinkingLevel != nil { result.defaultThinkingLevel = override.defaultThinkingLevel }
+        if override.transport != nil { result.transport = override.transport }
         if override.steeringMode != nil { result.steeringMode = override.steeringMode }
         if override.followUpMode != nil { result.followUpMode = override.followUpMode }
         if override.theme != nil { result.theme = override.theme }

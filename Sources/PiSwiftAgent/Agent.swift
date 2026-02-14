@@ -13,6 +13,7 @@ public struct AgentOptions: Sendable {
     public var followUpMode: AgentFollowUpMode?
     public var streamFn: StreamFn?
     public var sessionId: String?
+    public var transport: Transport?
     public var thinkingBudgets: ThinkingBudgets?
     public var maxRetryDelayMs: Int?
     public var getApiKey: (@Sendable (String) async -> String?)?
@@ -25,6 +26,7 @@ public struct AgentOptions: Sendable {
         followUpMode: AgentFollowUpMode? = nil,
         streamFn: StreamFn? = nil,
         sessionId: String? = nil,
+        transport: Transport? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         maxRetryDelayMs: Int? = nil,
         getApiKey: (@Sendable (String) async -> String?)? = nil
@@ -36,6 +38,7 @@ public struct AgentOptions: Sendable {
         self.followUpMode = followUpMode
         self.streamFn = streamFn
         self.sessionId = sessionId
+        self.transport = transport
         self.thinkingBudgets = thinkingBudgets
         self.maxRetryDelayMs = maxRetryDelayMs
         self.getApiKey = getApiKey
@@ -55,6 +58,7 @@ public final class Agent: Sendable {
         var followUpMode: AgentFollowUpMode
         var streamFn: StreamFn
         var sessionId: String?
+        var transport: Transport
         var thinkingBudgets: ThinkingBudgets?
         var maxRetryDelayMs: Int?
         var getApiKey: (@Sendable (String) async -> String?)?
@@ -118,6 +122,11 @@ public final class Agent: Sendable {
         set { stateBox.withLock { $0.sessionId = newValue } }
     }
 
+    public var transport: Transport {
+        get { stateBox.withLock { $0.transport } }
+        set { stateBox.withLock { $0.transport = newValue } }
+    }
+
     public var thinkingBudgets: ThinkingBudgets? {
         get { stateBox.withLock { $0.thinkingBudgets } }
         set { stateBox.withLock { $0.thinkingBudgets = newValue } }
@@ -158,6 +167,7 @@ public final class Agent: Sendable {
             followUpMode: options.followUpMode ?? .oneAtATime,
             streamFn: stream,
             sessionId: options.sessionId,
+            transport: options.transport ?? .sse,
             thinkingBudgets: options.thinkingBudgets,
             maxRetryDelayMs: options.maxRetryDelayMs,
             getApiKey: options.getApiKey,
@@ -203,6 +213,10 @@ public final class Agent: Sendable {
 
     public func getFollowUpMode() -> AgentFollowUpMode {
         followUpMode
+    }
+
+    public func setTransport(_ transport: Transport) {
+        self.transport = transport
     }
 
     public func setTools(_ tools: [AgentTool]) {
@@ -377,6 +391,7 @@ public final class Agent: Sendable {
         let config = AgentLoopConfig(
             model: model,
             reasoning: reasoning,
+            transport: transport,
             sessionId: sessionId,
             thinkingBudgets: thinkingBudgets,
             maxRetryDelayMs: maxRetryDelayMs,

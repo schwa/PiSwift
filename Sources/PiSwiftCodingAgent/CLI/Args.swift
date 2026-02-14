@@ -35,6 +35,7 @@ public struct Args: Sendable {
     public var print: Bool?
     public var export: String?
     public var noSkills: Bool?
+    public var noPromptTemplates: Bool?
     public var skills: [String]?
     public var listModels: ListModelsOption?
     public var verbose: Bool?

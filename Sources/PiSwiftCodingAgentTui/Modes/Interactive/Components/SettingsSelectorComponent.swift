@@ -1,6 +1,7 @@
 import Foundation
 import MiniTui
 import PiSwiftAgent
+import PiSwiftAI
 import PiSwiftCodingAgent
 
 private let thinkingDescriptions: [ThinkingLevel: String] = [
@@ -20,6 +21,7 @@ public struct SettingsConfig: Sendable {
     public var enableSkillCommands: Bool
     public var steeringMode: String
     public var followUpMode: String
+    public var transport: Transport
     public var thinkingLevel: ThinkingLevel
     public var availableThinkingLevels: [ThinkingLevel]
     public var currentTheme: String
@@ -38,6 +40,7 @@ public struct SettingsConfig: Sendable {
         enableSkillCommands: Bool,
         steeringMode: String,
         followUpMode: String,
+        transport: Transport,
         thinkingLevel: ThinkingLevel,
         availableThinkingLevels: [ThinkingLevel],
         currentTheme: String,
@@ -55,6 +58,7 @@ public struct SettingsConfig: Sendable {
         self.enableSkillCommands = enableSkillCommands
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
+        self.transport = transport
         self.thinkingLevel = thinkingLevel
         self.availableThinkingLevels = availableThinkingLevels
         self.currentTheme = currentTheme
@@ -75,6 +79,7 @@ public struct SettingsCallbacks {
     public var onEnableSkillCommandsChange: (Bool) -> Void
     public var onSteeringModeChange: (String) -> Void
     public var onFollowUpModeChange: (String) -> Void
+    public var onTransportChange: (Transport) -> Void
     public var onThinkingLevelChange: (ThinkingLevel) -> Void
     public var onThemeChange: (String) -> Void
     public var onThemePreview: ((String) -> Void)?
@@ -93,6 +98,7 @@ public struct SettingsCallbacks {
         onEnableSkillCommandsChange: @escaping (Bool) -> Void,
         onSteeringModeChange: @escaping (String) -> Void,
         onFollowUpModeChange: @escaping (String) -> Void,
+        onTransportChange: @escaping (Transport) -> Void,
         onThinkingLevelChange: @escaping (ThinkingLevel) -> Void,
         onThemeChange: @escaping (String) -> Void,
         onThemePreview: ((String) -> Void)? = nil,
@@ -110,6 +116,7 @@ public struct SettingsCallbacks {
         self.onEnableSkillCommandsChange = onEnableSkillCommandsChange
         self.onSteeringModeChange = onSteeringModeChange
         self.onFollowUpModeChange = onFollowUpModeChange
+        self.onTransportChange = onTransportChange
         self.onThinkingLevelChange = onThinkingLevelChange
         self.onThemeChange = onThemeChange
         self.onThemePreview = onThemePreview
@@ -197,6 +204,13 @@ public final class SettingsSelectorComponent: Container {
                 description: "Alt+Enter queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
                 currentValue: config.followUpMode,
                 values: ["one-at-a-time", "all"]
+            ),
+            SettingItem(
+                id: "transport",
+                label: "Transport",
+                description: "Preferred transport for providers that support multiple transports",
+                currentValue: config.transport.rawValue,
+                values: ["sse", "websocket", "auto"]
             ),
             SettingItem(
                 id: "hide-thinking",
@@ -353,6 +367,10 @@ public final class SettingsSelectorComponent: Container {
                     callbacks.onSteeringModeChange(newValue)
                 case "follow-up-mode":
                     callbacks.onFollowUpModeChange(newValue)
+                case "transport":
+                    if let transport = Transport(rawValue: newValue) {
+                        callbacks.onTransportChange(transport)
+                    }
                 case "hide-thinking":
                     callbacks.onHideThinkingBlockChange(newValue == "true")
                 case "collapse-changelog":

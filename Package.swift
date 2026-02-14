@@ -37,6 +37,10 @@ let package = Package(
             targets: ["PiSwiftSyntaxHighlight"]
         ),
         .library(
+            name: "PiMCPAdapter",
+            targets: ["PiMCPAdapter"]
+        ),
+        .library(
             name: "PiExtensionSDK",
             type: .dynamic,
             targets: ["PiExtensionSDK"]
@@ -98,6 +102,15 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftSyntaxHighlight",
                 .product(name: "MiniTui", package: "MiniTui"),
+            ],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .target(
+            name: "PiMCPAdapter",
+            dependencies: [
+                "PiSwiftCodingAgent",
+                "PiSwiftAI",
+                "PiSwiftAgent",
             ],
             swiftSettings: strictConcurrencySettings
         ),
@@ -165,6 +178,14 @@ let package = Package(
                 "PiSwiftCodingAgent",
                 "PiSwiftCodingAgentTui",
                 .product(name: "MiniTui", package: "MiniTui"),
+            ],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .testTarget(
+            name: "PiMCPAdapterTests",
+            dependencies: [
+                "PiMCPAdapter",
+                "PiSwiftCodingAgent",
             ],
             swiftSettings: strictConcurrencySettings
         ),
