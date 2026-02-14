@@ -120,6 +120,7 @@ public func registerBuiltInProviders() {
                 maxTokens: options?.maxTokens,
                 signal: options?.signal,
                 apiKey: apiKey,
+                metadata: options?.metadata,
                 headers: options?.headers,
                 onPayload: options?.onPayload
             )
@@ -164,6 +165,7 @@ public func registerBuiltInProviders() {
                 apiKey: apiKey,
                 cacheRetention: options?.cacheRetention,
                 sessionId: options?.sessionId,
+                transport: options?.transport,
                 headers: options?.headers,
                 onPayload: options?.onPayload
             )
@@ -186,6 +188,7 @@ public func registerBuiltInProviders() {
                 signal: options?.signal,
                 apiKey: apiKey,
                 sessionId: options?.sessionId,
+                transport: options?.transport,
                 headers: options?.headers,
                 onPayload: options?.onPayload
             )

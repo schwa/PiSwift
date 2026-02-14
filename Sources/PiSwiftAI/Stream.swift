@@ -202,6 +202,7 @@ public func stream(model: Model, context: Context, options: StreamOptions? = nil
             maxTokens: options?.maxTokens,
             signal: options?.signal,
             apiKey: apiKey,
+            metadata: options?.metadata,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -304,6 +305,7 @@ func mapAnthropicSimpleOptions(model: Model, options: SimpleStreamOptions?, apiK
             signal: options?.signal,
             apiKey: apiKey,
             thinkingEnabled: false,
+            metadata: options?.metadata,
             headers: options?.headers,
             onPayload: options?.onPayload
         )
@@ -324,6 +326,7 @@ func mapAnthropicSimpleOptions(model: Model, options: SimpleStreamOptions?, apiK
         apiKey: apiKey,
         thinkingEnabled: true,
         thinkingBudgetTokens: adjusted.thinkingBudget,
+        metadata: options?.metadata,
         headers: options?.headers,
         onPayload: options?.onPayload
     )

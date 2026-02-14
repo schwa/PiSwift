@@ -870,7 +870,8 @@ private func convertToolConfig(
 
 private func buildAdditionalModelRequestFields(model: Model, options: BedrockOptions) -> [String: AnyCodable]? {
     guard let reasoning = options.reasoning, model.reasoning else { return nil }
-    guard model.id.contains("anthropic.claude") else { return nil }
+    let isAnthropicClaude = model.id.hasPrefix("anthropic.claude") || model.id.hasPrefix("anthropic/claude")
+    guard isAnthropicClaude else { return nil }
 
     var result: [String: Any] = [:]
 
@@ -887,13 +888,13 @@ private func buildAdditionalModelRequestFields(model: Model, options: BedrockOpt
         ]
 
         let level = reasoning == .xhigh ? .high : reasoning
-        let budget = options.thinkingBudgets?[level] ?? defaultBudgets[reasoning] ?? 1024
+        let budget = options.thinkingBudgets?[level] ?? defaultBudgets[level] ?? 1024
         result["thinking"] = [
             "type": "enabled",
             "budget_tokens": budget,
         ]
 
-        if options.interleavedThinking == true {
+        if options.interleavedThinking ?? true {
             result["anthropic_beta"] = ["interleaved-thinking-2025-05-14"]
         }
     }

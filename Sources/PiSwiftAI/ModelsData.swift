@@ -309,7 +309,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "claude-haiku-4.5": Model(
             id: "claude-haiku-4.5",
             name: "Claude Haiku 4.5",
-            api: .openAICompletions,
+            api: .anthropicMessages,
             provider: "github-copilot",
             baseUrl: "https://api.individual.githubcopilot.com",
             reasoning: true,
@@ -323,7 +323,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "claude-opus-4.5": Model(
             id: "claude-opus-4.5",
             name: "Claude Opus 4.5",
-            api: .openAICompletions,
+            api: .anthropicMessages,
             provider: "github-copilot",
             baseUrl: "https://api.individual.githubcopilot.com",
             reasoning: true,
@@ -337,7 +337,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "claude-sonnet-4": Model(
             id: "claude-sonnet-4",
             name: "Claude Sonnet 4",
-            api: .openAICompletions,
+            api: .anthropicMessages,
             provider: "github-copilot",
             baseUrl: "https://api.individual.githubcopilot.com",
             reasoning: true,
@@ -351,7 +351,7 @@ internal let ModelsData: [String: [String: Model]] = [
         "claude-sonnet-4.5": Model(
             id: "claude-sonnet-4.5",
             name: "Claude Sonnet 4.5",
-            api: .openAICompletions,
+            api: .anthropicMessages,
             provider: "github-copilot",
             baseUrl: "https://api.individual.githubcopilot.com",
             reasoning: true,

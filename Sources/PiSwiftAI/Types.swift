@@ -73,6 +73,7 @@ public struct StreamOptions: Sendable {
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
     public var maxRetryDelayMs: Int?
+    public var metadata: [String: AnyCodable]?
 
     public init(
         temperature: Double? = nil,
@@ -84,7 +85,8 @@ public struct StreamOptions: Sendable {
         sessionId: String? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil,
-        maxRetryDelayMs: Int? = nil
+        maxRetryDelayMs: Int? = nil,
+        metadata: [String: AnyCodable]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -96,6 +98,7 @@ public struct StreamOptions: Sendable {
         self.headers = headers
         self.onPayload = onPayload
         self.maxRetryDelayMs = maxRetryDelayMs
+        self.metadata = metadata
     }
 }
 
@@ -112,6 +115,7 @@ public struct SimpleStreamOptions: Sendable {
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
     public var maxRetryDelayMs: Int?
+    public var metadata: [String: AnyCodable]?
 
     public init(
         temperature: Double? = nil,
@@ -125,7 +129,8 @@ public struct SimpleStreamOptions: Sendable {
         thinkingBudgets: ThinkingBudgets? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil,
-        maxRetryDelayMs: Int? = nil
+        maxRetryDelayMs: Int? = nil,
+        metadata: [String: AnyCodable]? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -139,6 +144,7 @@ public struct SimpleStreamOptions: Sendable {
         self.headers = headers
         self.onPayload = onPayload
         self.maxRetryDelayMs = maxRetryDelayMs
+        self.metadata = metadata
     }
 }
 
@@ -867,6 +873,7 @@ public struct AnthropicOptions: Sendable {
     public var thinkingBudgetTokens: Int?
     public var interleavedThinking: Bool?
     public var toolChoice: AnthropicToolChoice?
+    public var metadata: [String: AnyCodable]?
     public var headers: [String: String]?
     public var onPayload: PayloadHandler?
 
@@ -879,6 +886,7 @@ public struct AnthropicOptions: Sendable {
         thinkingBudgetTokens: Int? = nil,
         interleavedThinking: Bool? = nil,
         toolChoice: AnthropicToolChoice? = nil,
+        metadata: [String: AnyCodable]? = nil,
         headers: [String: String]? = nil,
         onPayload: PayloadHandler? = nil
     ) {
@@ -890,6 +898,7 @@ public struct AnthropicOptions: Sendable {
         self.thinkingBudgetTokens = thinkingBudgetTokens
         self.interleavedThinking = interleavedThinking
         self.toolChoice = toolChoice
+        self.metadata = metadata
         self.headers = headers
         self.onPayload = onPayload
     }

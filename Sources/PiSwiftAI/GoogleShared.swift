@@ -210,14 +210,19 @@ func convertGoogleMessages(model: Model, context: Context) -> [[String: Any]] {
     return contents
 }
 
-func convertGoogleTools(_ tools: [AITool]) -> [[String: Any]]? {
+func convertGoogleTools(_ tools: [AITool], useParameters: Bool = false) -> [[String: Any]]? {
     guard !tools.isEmpty else { return nil }
-    let declarations = tools.map { tool in
-        [
+    let declarations: [[String: Any]] = tools.map { tool in
+        var declaration: [String: Any] = [
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.parameters.mapValues { $0.jsonValue },
         ]
+        if useParameters {
+            declaration["parameters"] = tool.parameters.mapValues { $0.jsonValue }
+        } else {
+            declaration["parametersJsonSchema"] = tool.parameters.mapValues { $0.jsonValue }
+        }
+        return declaration
     }
     return [["functionDeclarations": declarations]]
 }

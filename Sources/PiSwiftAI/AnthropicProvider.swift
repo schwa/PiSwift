@@ -109,7 +109,8 @@ public func streamAnthropic(
             let httpClient = buildAnthropicHttpClient(
                 isOAuthToken: isOAuthToken,
                 extraHeaders: mergedHeaders,
-                baseUrl: model.baseUrl
+                baseUrl: model.baseUrl,
+                metadataUserId: extractAnthropicMetadataUserId(options.metadata)
             )
             let service = AnthropicServiceFactory.service(
                 apiKey: apiKey,
@@ -523,7 +524,12 @@ func anthropicCacheTtl(baseUrl: String) -> String? {
     return "1h"
 }
 
-private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String: String], baseUrl: String) -> HTTPClient {
+private func buildAnthropicHttpClient(
+    isOAuthToken: Bool,
+    extraHeaders: [String: String],
+    baseUrl: String,
+    metadataUserId: String?
+) -> HTTPClient {
     var merged = extraHeaders
     if isOAuthToken {
         if merged["user-agent"] == nil {
@@ -537,7 +543,8 @@ private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String:
     return AnthropicHeaderInjectingHTTPClient(
         base: HTTPClientFactory.createDefault(),
         extraHeaders: merged,
-        cacheTtl: cacheTtl
+        cacheTtl: cacheTtl,
+        metadataUserId: metadataUserId
     )
 }
 
@@ -555,6 +562,7 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
     let base: HTTPClient
     let extraHeaders: [String: String]
     let cacheTtl: String?
+    let metadataUserId: String?
 
     func data(for request: HTTPRequest) async throws -> (Data, HTTPResponse) {
         let updated = injectingHeaders(request)
@@ -597,12 +605,18 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
         for (key, value) in extraHeaders where headers[key] == nil {
             headers[key] = value
         }
-        let updatedBody = injectCacheControl(body: body, ttl: cacheTtl)
+        let updatedBody = injectAnthropicRequestBody(body: body, ttl: cacheTtl, metadataUserId: metadataUserId)
         return HTTPRequest(url: url, method: method, headers: headers, body: updatedBody ?? body)
     }
 }
 
-func injectCacheControl(body: Data?, ttl: String?) -> Data? {
+private func extractAnthropicMetadataUserId(_ metadata: [String: AnyCodable]?) -> String? {
+    guard let raw = metadata?["user_id"]?.value as? String else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+func injectAnthropicRequestBody(body: Data?, ttl: String?, metadataUserId: String?) -> Data? {
     guard let body,
           var payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
         return nil
@@ -639,7 +653,15 @@ func injectCacheControl(body: Data?, ttl: String?) -> Data? {
         }
     }
 
+    if let metadataUserId {
+        payload["metadata"] = ["user_id": metadataUserId]
+    }
+
     return try? JSONSerialization.data(withJSONObject: payload)
+}
+
+func injectCacheControl(body: Data?, ttl: String?) -> Data? {
+    injectAnthropicRequestBody(body: body, ttl: ttl, metadataUserId: nil)
 }
 
 private func cacheTextObject(text: String, ttl: String?) -> [String: Any] {

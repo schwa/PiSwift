@@ -778,6 +778,51 @@ private func withEnv(_ key: String, value: String?, _ work: @Sendable () async -
     #expect(updatedLongString?.contains("\"ttl\":\"1h\"") == true)
 }
 
+@Test func anthropicMetadataInjection() async throws {
+    let payload: [String: Any] = [
+        "model": "claude-3-5-haiku-20241022",
+        "messages": [
+            ["role": "user", "content": "Hello"],
+        ],
+    ]
+    let body = try JSONSerialization.data(withJSONObject: payload)
+    let updated = injectAnthropicRequestBody(body: body, ttl: nil, metadataUserId: "user-123")
+    let updatedString = updated.flatMap { String(data: $0, encoding: .utf8) }
+    #expect(updatedString?.contains("\"metadata\":{\"user_id\":\"user-123\"}") == true)
+}
+
+@Test func googleToolDeclarationModes() {
+    let tools = [
+        AITool(
+            name: "lookup",
+            description: "Lookup data",
+            parameters: [
+                "type": AnyCodable("object"),
+                "properties": AnyCodable([
+                    "q": AnyCodable(["type": "string"]),
+                ]),
+            ]
+        ),
+    ]
+
+    let jsonSchemaMode = convertGoogleTools(tools, useParameters: false)
+    let parametersMode = convertGoogleTools(tools, useParameters: true)
+
+    let firstJson = jsonSchemaMode?.first?["functionDeclarations"] as? [[String: Any]]
+    let firstParams = parametersMode?.first?["functionDeclarations"] as? [[String: Any]]
+    #expect(firstJson?.first?["parametersJsonSchema"] != nil)
+    #expect(firstJson?.first?["parameters"] == nil)
+    #expect(firstParams?.first?["parameters"] != nil)
+    #expect(firstParams?.first?["parametersJsonSchema"] == nil)
+}
+
+@Test func copilotClaudeModelsUseAnthropicApi() {
+    let sonnet = getModel(provider: .githubCopilot, modelId: "claude-sonnet-4.5")
+    let opus = getModel(provider: .githubCopilot, modelId: "claude-opus-4.5")
+    #expect(sonnet.api == .anthropicMessages)
+    #expect(opus.api == .anthropicMessages)
+}
+
 @Test func supportsXhighModels() async throws {
     let gpt52 = getModel(provider: .openai, modelId: "gpt-5.2")
     #expect(supportsXhigh(model: gpt52))
