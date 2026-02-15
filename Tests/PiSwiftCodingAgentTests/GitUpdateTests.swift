@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 @testable import PiSwiftCodingAgent
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 // MARK: - Git update tests
 
@@ -55,6 +58,23 @@ private func getFileContent(repoDir: String, filename: String) throws -> String 
 
 private enum GitTestError: Error {
     case commandFailed(String)
+}
+
+private final class CommandCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [String] = []
+
+    func append(_ command: String) {
+        lock.lock()
+        commands.append(command)
+        lock.unlock()
+    }
+
+    func snapshot() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return commands
+    }
 }
 
 // MARK: - Test fixture
@@ -154,6 +174,22 @@ private final class GitUpdateTestFixture {
 
     #expect(try getCurrentCommit(repoDir: fixture.installedDir) == latestCommit)
     #expect(try getFileContent(repoDir: fixture.installedDir, filename: "extension.ts") == "// v4")
+}
+
+@Test func gitUpdateHandlesDetachedHeadWithoutUpstream() async throws {
+    let fixture = try GitUpdateTestFixture()
+    try fixture.setupRemoteAndInstall()
+
+    _ = try createCommit(repoDir: fixture.remoteDir, filename: "extension.ts", content: "// v2", message: "Second commit")
+    let latestCommit = try createCommit(repoDir: fixture.remoteDir, filename: "extension.ts", content: "// v3", message: "Third commit")
+
+    let detachedCommit = try getCurrentCommit(repoDir: fixture.installedDir)
+    _ = try git(["checkout", detachedCommit], cwd: fixture.installedDir)
+
+    try await fixture.packageManager.update(nil)
+
+    #expect(try getCurrentCommit(repoDir: fixture.installedDir) == latestCommit)
+    #expect(try getFileContent(repoDir: fixture.installedDir, filename: "extension.ts") == "// v3")
 }
 
 // MARK: - Force-push scenario tests
@@ -256,4 +292,109 @@ private final class GitUpdateTestFixture {
     // Should still be on initial commit
     #expect(try getCurrentCommit(repoDir: fixture.installedDir) == initialCommit)
     #expect(try getFileContent(repoDir: fixture.installedDir, filename: "extension.ts") == "// v1")
+}
+
+@Test func temporaryGitSourcesAreRefreshedOnResolve() async throws {
+    #if canImport(CryptoKit)
+    let fixture = try GitUpdateTestFixture()
+    let gitHost = "github.com"
+    let gitPath = "test/extension-refresh"
+    let gitSource = "git:\(gitHost)/\(gitPath)"
+    let hash = SHA256.hash(data: Data("git-\(gitHost)-\(gitPath)".utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    let cachedDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("pi-extensions")
+        .appendingPathComponent("git-\(gitHost)")
+        .appendingPathComponent(String(hash.prefix(8)))
+        .appendingPathComponent(gitPath).path
+
+    try? FileManager.default.removeItem(atPath: cachedDir)
+    try FileManager.default.createDirectory(
+        at: URL(fileURLWithPath: cachedDir).appendingPathComponent("pi-extensions"),
+        withIntermediateDirectories: true
+    )
+    let manifest = """
+    {
+      "pi": {
+        "extensions": ["./pi-extensions"]
+      }
+    }
+    """
+    try manifest.write(
+        toFile: URL(fileURLWithPath: cachedDir).appendingPathComponent("package.json").path,
+        atomically: true,
+        encoding: .utf8
+    )
+    let extensionPath = URL(fileURLWithPath: cachedDir)
+        .appendingPathComponent("pi-extensions")
+        .appendingPathComponent("session-breakdown.ts").path
+    try "// stale".write(toFile: extensionPath, atomically: true, encoding: .utf8)
+
+    let collector = CommandCollector()
+    fixture.packageManager.setCommandRunnerForTests { command, args, _ in
+        collector.append("\(command) \(args.joined(separator: " "))")
+        if command == "git", args.first == "reset" {
+            try "// fresh".write(toFile: extensionPath, atomically: true, encoding: .utf8)
+        }
+        return ExecResult(stdout: "", stderr: "", code: 0, killed: false)
+    }
+
+    _ = try await fixture.packageManager.resolveExtensionSources([gitSource], options: PackageResolveOptions(temporary: true))
+    #expect(collector.snapshot().contains("git fetch --prune origin"))
+    #expect(try getFileContent(repoDir: cachedDir, filename: "pi-extensions/session-breakdown.ts") == "// fresh")
+    #else
+    Issue.record("CryptoKit unavailable")
+    #endif
+}
+
+@Test func temporaryPinnedGitSourcesAreNotRefreshed() async throws {
+    #if canImport(CryptoKit)
+    let fixture = try GitUpdateTestFixture()
+    let gitHost = "github.com"
+    let gitPath = "test/extension-pinned"
+    let gitSource = "git:\(gitHost)/\(gitPath)"
+    let hash = SHA256.hash(data: Data("git-\(gitHost)-\(gitPath)".utf8))
+        .map { String(format: "%02x", $0) }
+        .joined()
+    let cachedDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("pi-extensions")
+        .appendingPathComponent("git-\(gitHost)")
+        .appendingPathComponent(String(hash.prefix(8)))
+        .appendingPathComponent(gitPath).path
+
+    try? FileManager.default.removeItem(atPath: cachedDir)
+    try FileManager.default.createDirectory(
+        at: URL(fileURLWithPath: cachedDir).appendingPathComponent("pi-extensions"),
+        withIntermediateDirectories: true
+    )
+    let manifest = """
+    {
+      "pi": {
+        "extensions": ["./pi-extensions"]
+      }
+    }
+    """
+    try manifest.write(
+        toFile: URL(fileURLWithPath: cachedDir).appendingPathComponent("package.json").path,
+        atomically: true,
+        encoding: .utf8
+    )
+    let extensionPath = URL(fileURLWithPath: cachedDir)
+        .appendingPathComponent("pi-extensions")
+        .appendingPathComponent("session-breakdown.ts").path
+    try "// pinned".write(toFile: extensionPath, atomically: true, encoding: .utf8)
+
+    let collector = CommandCollector()
+    fixture.packageManager.setCommandRunnerForTests { command, args, _ in
+        collector.append("\(command) \(args.joined(separator: " "))")
+        return ExecResult(stdout: "", stderr: "", code: 0, killed: false)
+    }
+
+    _ = try await fixture.packageManager.resolveExtensionSources(["\(gitSource)@main"], options: PackageResolveOptions(temporary: true))
+    #expect(collector.snapshot().isEmpty)
+    #expect(try getFileContent(repoDir: cachedDir, filename: "pi-extensions/session-breakdown.ts") == "// pinned")
+    #else
+    Issue.record("CryptoKit unavailable")
+    #endif
 }

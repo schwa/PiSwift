@@ -165,6 +165,59 @@ private func mockModels() -> [Model] {
     #expect(trailing.isThinkingExplicit == false)
 }
 
+@Test func resolveCliModelProviderAndIdWithoutExplicitProviderFlag() {
+    let models = mockModels()
+    let result = resolveCliModel(cliModel: "openai/gpt-4o", availableModels: models)
+    #expect(result.error == nil)
+    #expect(result.model?.provider == "openai")
+    #expect(result.model?.id == "gpt-4o")
+}
+
+@Test func resolveCliModelFuzzyWithinExplicitProvider() {
+    let models = mockModels()
+    let result = resolveCliModel(cliProvider: "openai", cliModel: "4o", availableModels: models)
+    #expect(result.error == nil)
+    #expect(result.model?.provider == "openai")
+    #expect(result.model?.id == "gpt-4o")
+}
+
+@Test func resolveCliModelSupportsThinkingSuffixInModelFlag() {
+    let models = mockModels()
+    let result = resolveCliModel(cliModel: "sonnet:high", availableModels: models)
+    #expect(result.error == nil)
+    #expect(result.model?.id == "claude-sonnet-4-5")
+    #expect(result.thinkingLevel == .high)
+}
+
+@Test func resolveCliModelPrefersExactIdOverProviderInference() {
+    let models = mockModels()
+    let result = resolveCliModel(cliModel: "openai/gpt-4o:extended", availableModels: models)
+    #expect(result.error == nil)
+    #expect(result.model?.provider == "openrouter")
+    #expect(result.model?.id == "openai/gpt-4o:extended")
+}
+
+@Test func resolveCliModelTreatsInvalidSuffixAsHardFailure() {
+    let models = mockModels()
+    let result = resolveCliModel(cliProvider: "openai", cliModel: "gpt-4o:extended", availableModels: models)
+    #expect(result.model == nil)
+    #expect(result.error?.contains("not found") == true)
+}
+
+@Test func resolveCliModelReturnsNoModelsError() {
+    let result = resolveCliModel(cliProvider: "openai", cliModel: "gpt-4o", availableModels: [])
+    #expect(result.model == nil)
+    #expect(result.error?.contains("No models available") == true)
+}
+
+@Test func resolveCliModelResolvesProviderPrefixedFuzzyPatterns() {
+    let models = mockModels()
+    let result = resolveCliModel(cliModel: "openrouter/qwen", availableModels: models)
+    #expect(result.error == nil)
+    #expect(result.model?.provider == "openrouter")
+    #expect(result.model?.id == "qwen/qwen3-coder:exacto")
+}
+
 @Test func defaultModelPerProviderVercelAiGateway() {
     // Verify ai-gateway default is opus 4.5
     let aiGatewayDefault = defaultModelPerProvider.first { $0.0 == .vercelAiGateway }

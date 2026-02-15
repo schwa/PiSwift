@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import PiSwiftCodingAgent
 @testable import PiSwiftCodingAgentCLI
+import Darwin
 
 private func readSettingsPackages(_ settingsPath: String) -> [String] {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
@@ -10,6 +11,38 @@ private func readSettingsPackages(_ settingsPath: String) -> [String] {
         return []
     }
     return packages.compactMap { $0 as? String }
+}
+
+@MainActor
+private func captureFD(_ fd: Int32, operation: () async -> Void) async -> String {
+    fflush(fd == STDOUT_FILENO ? stdout : stderr)
+    let pipeFDs = UnsafeMutablePointer<Int32>.allocate(capacity: 2)
+    defer { pipeFDs.deallocate() }
+    guard pipe(pipeFDs) == 0 else { return "" }
+    defer {
+        close(pipeFDs[0])
+        close(pipeFDs[1])
+    }
+
+    let savedFD = dup(fd)
+    guard savedFD >= 0 else { return "" }
+    defer { close(savedFD) }
+
+    guard dup2(pipeFDs[1], fd) >= 0 else { return "" }
+
+    await operation()
+    fflush(fd == STDOUT_FILENO ? stdout : stderr)
+    _ = dup2(savedFD, fd)
+    close(pipeFDs[1])
+
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let count = read(pipeFDs[0], &buffer, buffer.count)
+        if count <= 0 { break }
+        data.append(buffer, count: Int(count))
+    }
+    return String(decoding: data, as: UTF8.self)
 }
 
 @MainActor @Test(.disabled("Flaky: changeCurrentDirectoryPath interferes with parallel tests"))
@@ -84,4 +117,37 @@ func packageCommandsRemoveTrailingSlash() async {
 
     _ = await handlePackageCommand(["remove", "\(packageDir)/"])
     #expect(readSettingsPackages(settingsPath).isEmpty)
+}
+
+@Suite("Package command UX", .serialized)
+struct PackageCommandUxTests {
+    @MainActor @Test
+    func installHelpShowsUsage() async {
+        let stdout = await captureFD(STDOUT_FILENO) {
+            _ = await handlePackageCommand(["install", "--help"])
+        }
+        #expect(stdout.contains("Usage:"))
+        #expect(stdout.contains("pi install <source> [-l]"))
+        #expect(consumePackageCommandExitCode() == nil)
+    }
+
+    @MainActor @Test
+    func unknownInstallOptionShowsFriendlyError() async {
+        let stderr = await captureFD(STDERR_FILENO) {
+            _ = await handlePackageCommand(["install", "--unknown"])
+        }
+        #expect(stderr.contains("Unknown option --unknown for \"install\"."))
+        #expect(stderr.contains("Use \"pi --help\" or \"pi install <source> [-l]\"."))
+        #expect(consumePackageCommandExitCode() == 1)
+    }
+
+    @MainActor @Test
+    func missingInstallSourceShowsUsage() async {
+        let stderr = await captureFD(STDERR_FILENO) {
+            _ = await handlePackageCommand(["install"])
+        }
+        #expect(stderr.contains("Missing install source."))
+        #expect(stderr.contains("Usage: pi install <source> [-l]"))
+        #expect(consumePackageCommandExitCode() == 1)
+    }
 }

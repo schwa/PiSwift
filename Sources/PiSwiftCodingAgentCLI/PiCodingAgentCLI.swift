@@ -22,6 +22,9 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         if cli.rawMessages.first == "package" {
             let args = Array(cli.rawMessages.dropFirst())
             if await handlePackageCommand(args) {
+                if let exitCode = consumePackageCommandExitCode() {
+                    Darwin.exit(exitCode)
+                }
                 return
             }
         }
@@ -155,6 +158,9 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
                 initialThinking = scopedModel.thinkingLevel
             }
         }
+        if let cliThinking = initialSelection.cliThinkingLevel {
+            initialThinking = cliThinking
+        }
 
         if !isInteractive && initialModel == nil {
             fputs("No models available.\n", stderr)
@@ -165,8 +171,8 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
 
         if let apiKey = parsed.apiKey {
             let apiKeyModel: Model? = {
-                if let provider = parsed.provider, let modelId = parsed.model {
-                    return modelRegistry.find(provider, modelId)
+                if parsed.model != nil {
+                    return initialSelection.model
                 }
                 if useScopedModels, let scopedModel = initialSelection.scopedModel {
                     return scopedModel.model
@@ -175,7 +181,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             }()
 
             guard let apiKeyModel else {
-                fputs("--api-key requires a model to be specified via --provider/--model or -m/--models\n", stderr)
+                fputs("--api-key requires a model to be specified via --model, --provider/--model, or --models\n", stderr)
                 Darwin.exit(1)
             }
 
@@ -659,6 +665,7 @@ private func createSessionManager(_ parsed: Args, cwd: String, resumeSession: St
 private struct InitialModelSelection {
     var model: Model?
     var scopedModel: ScopedModel?
+    var cliThinkingLevel: ThinkingLevel?
 }
 
 private func findInitialModelForSession(
@@ -673,11 +680,24 @@ private func findInitialModelForSession(
     let useScopedModels = !scopedModels.isEmpty && parsed.continue != true && parsed.resume != true
     var restoreWarning: String?
 
-    if let provider = parsed.provider, let modelId = parsed.model {
-        if let model = modelRegistry.find(provider, modelId) {
-            return InitialModelSelection(model: model, scopedModel: nil)
+    if parsed.model != nil {
+        let resolved = resolveCliModel(
+            cliProvider: parsed.provider,
+            cliModel: parsed.model,
+            modelRegistry: modelRegistry
+        )
+        if let warning = resolved.warning {
+            fputs("Warning: \(warning)\n", stderr)
         }
-        fputs("Model \(provider)/\(modelId) not found\n", stderr)
+        if let error = resolved.error {
+            fputs("\(error)\n", stderr)
+            Darwin.exit(1)
+        }
+        if let model = resolved.model {
+            return InitialModelSelection(model: model, scopedModel: nil, cliThinkingLevel: resolved.thinkingLevel)
+        }
+        let display = parsed.provider != nil ? "\(parsed.provider!)/\(parsed.model ?? "")" : (parsed.model ?? "")
+        fputs("Model \(display) not found\n", stderr)
         Darwin.exit(1)
     }
 
@@ -686,9 +706,9 @@ private func findInitialModelForSession(
            let modelId = settingsManager.getDefaultModel(),
            let savedModel = modelRegistry.find(provider, modelId),
            let savedInScope = scopedModels.first(where: { modelsAreEqual($0.model, savedModel) }) {
-            return InitialModelSelection(model: savedInScope.model, scopedModel: savedInScope)
+            return InitialModelSelection(model: savedInScope.model, scopedModel: savedInScope, cliThinkingLevel: nil)
         }
-        return InitialModelSelection(model: scopedModels[0].model, scopedModel: scopedModels[0])
+        return InitialModelSelection(model: scopedModels[0].model, scopedModel: scopedModels[0], cliThinkingLevel: nil)
     }
 
     if hasExistingSession, let modelInfo = sessionContext.model {
@@ -701,7 +721,7 @@ private func findInitialModelForSession(
             if shouldPrintMessages {
                 print("Restored model: \(modelInfo.provider)/\(modelInfo.modelId)")
             }
-            return InitialModelSelection(model: restored, scopedModel: nil)
+            return InitialModelSelection(model: restored, scopedModel: nil, cliThinkingLevel: nil)
         }
 
         let reason = restored == nil ? "model no longer exists" : "no API key available"
@@ -714,7 +734,7 @@ private func findInitialModelForSession(
     if let provider = settingsManager.getDefaultProvider(),
        let modelId = settingsManager.getDefaultModel(),
        let model = modelRegistry.find(provider, modelId) {
-        return InitialModelSelection(model: model, scopedModel: nil)
+        return InitialModelSelection(model: model, scopedModel: nil, cliThinkingLevel: nil)
     }
 
     let available = await modelRegistry.getAvailable()
@@ -722,18 +742,18 @@ private func findInitialModelForSession(
         if restoreWarning != nil && shouldPrintMessages {
             print("Falling back to: \(preferred.provider)/\(preferred.id)")
         }
-        return InitialModelSelection(model: preferred, scopedModel: nil)
+        return InitialModelSelection(model: preferred, scopedModel: nil, cliThinkingLevel: nil)
     }
     if let fallback = available.first {
         if restoreWarning != nil && shouldPrintMessages {
             print("Falling back to: \(fallback.provider)/\(fallback.id)")
         }
-        return InitialModelSelection(model: fallback, scopedModel: nil)
+        return InitialModelSelection(model: fallback, scopedModel: nil, cliThinkingLevel: nil)
     }
     if restoreWarning != nil, shouldPrintMessages {
         print("No fallback model available.")
     }
-    return InitialModelSelection(model: nil, scopedModel: nil)
+    return InitialModelSelection(model: nil, scopedModel: nil, cliThinkingLevel: nil)
 }
 
 private func runSimpleInteractiveLoop(

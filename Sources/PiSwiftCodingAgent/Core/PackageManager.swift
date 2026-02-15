@@ -171,6 +171,7 @@ public final class DefaultPackageManager: PackageManager {
         var progressCallback: ProgressCallback?
     }
     private let state = LockedState(State())
+    private let commandRunnerOverride = LockedState<(@Sendable (String, [String], String) async throws -> ExecResult)?>(nil)
 
     private var globalNpmRoot: String? {
         get { state.withLock { $0.globalNpmRoot } }
@@ -190,6 +191,12 @@ public final class DefaultPackageManager: PackageManager {
 
     public func setProgressCallback(_ callback: ProgressCallback?) {
         self.progressCallback = callback
+    }
+
+    func setCommandRunnerForTests(_ runner: (@Sendable (String, [String], String) async throws -> ExecResult)?) {
+        commandRunnerOverride.withLock { state in
+            state = runner
+        }
     }
 
     public func getInstalledPath(_ source: String, scope: String) -> String? {
@@ -407,6 +414,8 @@ public final class DefaultPackageManager: PackageManager {
                 if !FileManager.default.fileExists(atPath: installedPath) {
                     let installed = try await installMissing()
                     if !installed { continue }
+                } else if scope == "temporary" && !git.pinned {
+                    await refreshTemporaryGitSource(git, source: sourceStr)
                 }
                 metadata.baseDir = installedPath
                 _ = collectPackageResources(packageRoot: installedPath, accumulator: accumulator, filter: filter, metadata: metadata)
@@ -573,6 +582,16 @@ public final class DefaultPackageManager: PackageManager {
             _ = try await runCommand("npm", ["install"], cwd: targetDir)
         }
         #endif
+    }
+
+    private func refreshTemporaryGitSource(_ source: GitSource, source sourceStr: String) async {
+        do {
+            try await withProgress(action: "pull", source: sourceStr, message: "Refreshing \(sourceStr)...") {
+                try await self.updateGit(source, scope: "temporary")
+            }
+        } catch {
+            // Keep cached temporary checkout if refresh fails.
+        }
     }
 
     private func removeGit(_ source: GitSource, scope: String) async throws {
@@ -1048,7 +1067,7 @@ public final class DefaultPackageManager: PackageManager {
         if trimmed == "~" || trimmed.hasPrefix("~/") || trimmed.hasPrefix("~") {
             return true
         }
-        if trimmed.hasPrefix("./") || trimmed.hasPrefix("../") || trimmed.hasPrefix("/") {
+        if trimmed.hasPrefix(".") || trimmed.hasPrefix("/") {
             return true
         }
         // Windows-style absolute paths (best-effort)
@@ -1306,6 +1325,9 @@ public final class DefaultPackageManager: PackageManager {
     // MARK: - Helpers
 
     private func runCommand(_ command: String, _ args: [String], cwd: String) async throws -> ExecResult {
+        if let override = commandRunnerOverride.withLock({ $0 }) {
+            return try await override(command, args, cwd)
+        }
         #if canImport(UIKit)
         throw PackageManagerError.unsupported("Command execution not available")
         #else

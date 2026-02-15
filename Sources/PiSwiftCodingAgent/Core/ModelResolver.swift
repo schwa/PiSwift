@@ -21,6 +21,13 @@ public struct ParsedModelResult: Sendable {
     public var warning: String?
 }
 
+public struct ResolveCliModelResult: Sendable {
+    public var model: Model?
+    public var thinkingLevel: ThinkingLevel?
+    public var warning: String?
+    public var error: String?
+}
+
 private func isAlias(_ id: String) -> Bool {
     if id.hasSuffix("-latest") { return true }
     let pattern = try? NSRegularExpression(pattern: "-\\d{8}$", options: [])
@@ -67,7 +74,11 @@ private func tryMatchModel(_ modelPattern: String, availableModels: [Model]) -> 
     return dated.first
 }
 
-public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> ParsedModelResult {
+public func parseModelPattern(
+    _ pattern: String,
+    _ availableModels: [Model],
+    allowInvalidThinkingLevelFallback: Bool = true
+) -> ParsedModelResult {
     if let exact = tryMatchModel(pattern, availableModels: availableModels) {
         return ParsedModelResult(model: exact, thinkingLevel: .off, isThinkingExplicit: false, warning: nil)
     }
@@ -80,7 +91,7 @@ public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> 
     let suffix = String(pattern[pattern.index(after: lastColon)...])
 
     if isValidThinkingLevel(suffix) {
-        let result = parseModelPattern(prefix, availableModels)
+        let result = parseModelPattern(prefix, availableModels, allowInvalidThinkingLevelFallback: allowInvalidThinkingLevelFallback)
         if let model = result.model {
             let level = ThinkingLevel(rawValue: suffix) ?? .off
             if result.warning == nil {
@@ -90,7 +101,11 @@ public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> 
         }
         return result
     } else {
-        let result = parseModelPattern(prefix, availableModels)
+        if !allowInvalidThinkingLevelFallback {
+            return ParsedModelResult(model: nil, thinkingLevel: .off, isThinkingExplicit: false, warning: nil)
+        }
+
+        let result = parseModelPattern(prefix, availableModels, allowInvalidThinkingLevelFallback: allowInvalidThinkingLevelFallback)
         if let model = result.model {
             return ParsedModelResult(
                 model: model,
@@ -101,6 +116,100 @@ public func parseModelPattern(_ pattern: String, _ availableModels: [Model]) -> 
         }
         return result
     }
+}
+
+public func resolveCliModel(
+    cliProvider: String? = nil,
+    cliModel: String? = nil,
+    modelRegistry: ModelRegistry
+) -> ResolveCliModelResult {
+    resolveCliModel(cliProvider: cliProvider, cliModel: cliModel, availableModels: modelRegistry.getAll())
+}
+
+public func resolveCliModel(
+    cliProvider: String? = nil,
+    cliModel: String? = nil,
+    availableModels: [Model]
+) -> ResolveCliModelResult {
+    guard let cliModel, !cliModel.isEmpty else {
+        return ResolveCliModelResult(model: nil, thinkingLevel: nil, warning: nil, error: nil)
+    }
+
+    if availableModels.isEmpty {
+        return ResolveCliModelResult(
+            model: nil,
+            thinkingLevel: nil,
+            warning: nil,
+            error: "No models available. Check your installation or add models to models.json."
+        )
+    }
+
+    var providerLookup: [String: String] = [:]
+    for model in availableModels {
+        providerLookup[model.provider.lowercased()] = model.provider
+    }
+
+    var provider: String?
+    if let cliProvider, !cliProvider.isEmpty {
+        guard let canonicalProvider = providerLookup[cliProvider.lowercased()] else {
+            return ResolveCliModelResult(
+                model: nil,
+                thinkingLevel: nil,
+                warning: nil,
+                error: "Unknown provider \"\(cliProvider)\". Use --list-models to see available providers/models."
+            )
+        }
+        provider = canonicalProvider
+    }
+
+    if provider == nil {
+        let lower = cliModel.lowercased()
+        if let exact = availableModels.first(where: {
+            $0.id.lowercased() == lower || "\($0.provider)/\($0.id)".lowercased() == lower
+        }) {
+            return ResolveCliModelResult(model: exact, thinkingLevel: nil, warning: nil, error: nil)
+        }
+    }
+
+    var pattern = cliModel
+    if provider == nil, let slashIndex = cliModel.firstIndex(of: "/") {
+        let maybeProvider = String(cliModel[..<slashIndex])
+        if let canonicalProvider = providerLookup[maybeProvider.lowercased()] {
+            provider = canonicalProvider
+            pattern = String(cliModel[cliModel.index(after: slashIndex)...])
+        }
+    } else if let provider {
+        let prefix = "\(provider)/"
+        if cliModel.lowercased().hasPrefix(prefix.lowercased()) {
+            pattern = String(cliModel.dropFirst(prefix.count))
+        }
+    }
+
+    let candidates: [Model]
+    if let provider {
+        candidates = availableModels.filter { $0.provider == provider }
+    } else {
+        candidates = availableModels
+    }
+
+    let parsed = parseModelPattern(
+        pattern,
+        candidates,
+        allowInvalidThinkingLevelFallback: false
+    )
+
+    guard let model = parsed.model else {
+        let display = provider.map { "\($0)/\(pattern)" } ?? cliModel
+        return ResolveCliModelResult(
+            model: nil,
+            thinkingLevel: nil,
+            warning: parsed.warning,
+            error: "Model \"\(display)\" not found. Use --list-models to see available models."
+        )
+    }
+
+    let thinking = parsed.isThinkingExplicit ? parsed.thinkingLevel : nil
+    return ResolveCliModelResult(model: model, thinkingLevel: thinking, warning: parsed.warning, error: nil)
 }
 
 public func resolveModelScope(_ patterns: [String], _ modelRegistry: ModelRegistry) async -> [ScopedModel] {

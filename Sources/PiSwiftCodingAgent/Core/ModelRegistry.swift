@@ -222,6 +222,10 @@ public final class ModelRegistry: Sendable {
         return models.filter { authStorage.hasAuth($0.provider) }
     }
 
+    public func getAll() -> [Model] {
+        state.withLock { $0.models }
+    }
+
     public func getApiKey(_ provider: String) async -> String? {
         await authStorage.getApiKey(provider)
     }

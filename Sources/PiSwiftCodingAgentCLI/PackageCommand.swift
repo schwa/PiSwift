@@ -12,10 +12,80 @@ private struct PackageCommandOptions {
     var command: PackageCommand
     var source: String?
     var local: Bool
+    var help: Bool
+    var invalidOption: String?
+}
+
+private final class PackageCommandExitCodeStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var code: Int32?
+
+    func consume() -> Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        defer { code = nil }
+        return code
+    }
+
+    func set(_ value: Int32) {
+        lock.lock()
+        code = value
+        lock.unlock()
+    }
+}
+
+private let packageCommandExitCodeStore = PackageCommandExitCodeStore()
+
+@discardableResult
+func consumePackageCommandExitCode() -> Int32? {
+    packageCommandExitCodeStore.consume()
+}
+
+private func setPackageCommandExitCode(_ code: Int32) {
+    packageCommandExitCodeStore.set(code)
+}
+
+private func packageCommandUsage(_ command: PackageCommand) -> String {
+    switch command {
+    case .install:
+        return "\(APP_NAME) install <source> [-l]"
+    case .remove:
+        return "\(APP_NAME) remove <source> [-l]"
+    case .update:
+        return "\(APP_NAME) update [source]"
+    case .list:
+        return "\(APP_NAME) list"
+    }
+}
+
+private func printPackageCommandHelp(_ command: PackageCommand) {
+    print("Usage:")
+    print("  \(packageCommandUsage(command))")
 }
 
 func handlePackageCommand(_ args: [String]) async -> Bool {
+    _ = consumePackageCommandExitCode()
     guard let options = parsePackageCommand(args) else { return false }
+
+    if options.help {
+        printPackageCommandHelp(options.command)
+        return true
+    }
+
+    if let invalidOption = options.invalidOption {
+        fputs("Unknown option \(invalidOption) for \"\(options.command.rawValue)\".\n", stderr)
+        fputs("Use \"\(APP_NAME) --help\" or \"\(packageCommandUsage(options.command))\".\n", stderr)
+        setPackageCommandExitCode(1)
+        return true
+    }
+
+    if (options.command == .install || options.command == .remove),
+       options.source == nil || options.source?.isEmpty == true {
+        fputs("Missing \(options.command.rawValue) source.\n", stderr)
+        fputs("Usage: \(packageCommandUsage(options.command))\n", stderr)
+        setPackageCommandExitCode(1)
+        return true
+    }
 
     let cwd = FileManager.default.currentDirectoryPath
     let agentDir = getAgentDir()
@@ -42,6 +112,7 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
         case .install:
             guard let source = options.source, !source.isEmpty else {
                 fputs("Missing install source.\n", stderr)
+                setPackageCommandExitCode(1)
                 return true
             }
             try await packageManager.install(source, options: PackageResolveOptions(local: options.local))
@@ -50,12 +121,14 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
         case .remove:
             guard let source = options.source, !source.isEmpty else {
                 fputs("Missing remove source.\n", stderr)
+                setPackageCommandExitCode(1)
                 return true
             }
             try await packageManager.remove(source, options: PackageResolveOptions(local: options.local))
             let removed = packageManager.removeSourceFromSettings(source, local: options.local)
             if !removed {
                 fputs("No matching package found for \(source).\n", stderr)
+                setPackageCommandExitCode(1)
                 return true
             }
             print("Removed \(source)")
@@ -100,6 +173,7 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
         }
     } catch {
         fputs("Error: \(error.localizedDescription)\n", stderr)
+        setPackageCommandExitCode(1)
     }
 
     return true
@@ -111,16 +185,40 @@ private func parsePackageCommand(_ args: [String]) -> PackageCommandOptions? {
     }
 
     var local = false
-    var sources: [String] = []
+    var help = false
+    var invalidOption: String?
+    var source: String?
     for arg in args.dropFirst() {
-        if arg == "-l" || arg == "--local" {
-            local = true
+        if arg == "-h" || arg == "--help" {
+            help = true
             continue
         }
-        sources.append(arg)
+        if arg == "-l" || arg == "--local" {
+            if parsed == .install || parsed == .remove {
+                local = true
+            } else if invalidOption == nil {
+                invalidOption = arg
+            }
+            continue
+        }
+        if arg.hasPrefix("-") {
+            if invalidOption == nil {
+                invalidOption = arg
+            }
+            continue
+        }
+        if source == nil {
+            source = arg
+        }
     }
 
-    return PackageCommandOptions(command: parsed, source: sources.first, local: local)
+    return PackageCommandOptions(
+        command: parsed,
+        source: source,
+        local: local,
+        help: help,
+        invalidOption: invalidOption
+    )
 }
 
 private enum PackageSourceAction {
