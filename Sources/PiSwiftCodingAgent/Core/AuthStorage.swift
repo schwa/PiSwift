@@ -59,6 +59,8 @@ public final class AuthStorage: Sendable {
         var fallbackResolver: (@Sendable (String) -> String?)?
         var lockOptionsOverride: AuthLockOptions?
         var oauthOverrides: OAuthOverrides?
+        var loadError: String?
+        var errors: [String] = []
     }
 
     private let state = LockedState(State())
@@ -67,6 +69,20 @@ public final class AuthStorage: Sendable {
     public init(_ authPath: String) {
         self.authPath = authPath
         reload()
+    }
+
+    public static func create(_ authPath: String? = nil) -> AuthStorage {
+        AuthStorage(authPath ?? getAuthPath())
+    }
+
+    public static func inMemory(_ data: [String: AuthCredential] = [:]) -> AuthStorage {
+        let storage = AuthStorage(":memory:")
+        storage.state.withLock { state in
+            state.data = data
+            state.loadError = nil
+            state.errors = []
+        }
+        return storage
     }
 
     public func setRuntimeApiKey(_ provider: String, _ apiKey: String) {
@@ -90,39 +106,26 @@ public final class AuthStorage: Sendable {
     }
 
     public func reload() {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: authPath)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            state.withLock { $0.data = [:] }
+        guard authPath != ":memory:" else { return }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: authPath)) else {
+            state.withLock {
+                $0.data = [:]
+                $0.loadError = nil
+            }
             return
         }
-
-        var loaded: [String: AuthCredential] = [:]
-        for (provider, value) in json {
-            guard let dict = value as? [String: Any],
-                  let type = dict["type"] as? String else { continue }
-            if type == "api_key", let key = dict["key"] as? String {
-                loaded[provider] = .apiKey(ApiKeyCredential(key: key))
-            } else if type == "oauth" {
-                let access = (dict["access"] as? String) ?? (dict["accessToken"] as? String)
-                guard let access else { continue }
-                let refresh = (dict["refresh"] as? String) ?? (dict["refreshToken"] as? String)
-                let expires = (dict["expires"] as? Double) ?? (dict["expiresAt"] as? Double)
-                let enterpriseUrl = dict["enterpriseUrl"] as? String
-                let projectId = dict["projectId"] as? String
-                let email = dict["email"] as? String
-                let accountId = dict["accountId"] as? String
-                loaded[provider] = .oauth(OAuthCredential(
-                    access: access,
-                    refresh: refresh,
-                    expires: expires,
-                    enterpriseUrl: enterpriseUrl,
-                    projectId: projectId,
-                    email: email,
-                    accountId: accountId
-                ))
+        do {
+            let loaded = try parseAuthData(data)
+            state.withLock {
+                $0.data = loaded
+                $0.loadError = nil
+            }
+        } catch {
+            state.withLock { state in
+                state.errors.append(error.localizedDescription)
+                state.loadError = error.localizedDescription
             }
         }
-        state.withLock { $0.data = loaded }
     }
 
     public func get(_ provider: String) -> AuthCredential? {
@@ -131,12 +134,12 @@ public final class AuthStorage: Sendable {
 
     public func set(_ provider: String, credential: AuthCredential) {
         state.withLock { $0.data[provider] = credential }
-        save()
+        persistProviderChange(provider: provider, credential: credential)
     }
 
     public func remove(_ provider: String) {
         state.withLock { $0.data.removeValue(forKey: provider) }
-        save()
+        persistProviderChange(provider: provider, credential: nil)
     }
 
     public func list() -> [String] {
@@ -170,6 +173,14 @@ public final class AuthStorage: Sendable {
 
     public func getAll() -> [String: AuthCredential] {
         state.withLock { $0.data }
+    }
+
+    public func drainErrors() -> [String] {
+        state.withLock { state in
+            let drained = state.errors
+            state.errors = []
+            return drained
+        }
     }
 
     public func login(_ provider: OAuthProvider, callbacks: OAuthLoginCallbacks) async throws {
@@ -251,6 +262,7 @@ public final class AuthStorage: Sendable {
     }
 
     private func save() {
+        if authPath == ":memory:" { return }
         var json: [String: Any] = [:]
         let credentials = state.withLock { $0.data }
         for (provider, credential) in credentials {
@@ -279,6 +291,95 @@ public final class AuthStorage: Sendable {
             try? data.write(to: URL(fileURLWithPath: authPath))
             chmod(authPath, 0o600)
         }
+    }
+
+    private func persistProviderChange(provider: String, credential: AuthCredential?) {
+        if authPath == ":memory:" { return }
+        let blockedByLoadError = state.withLock { $0.loadError != nil }
+        if blockedByLoadError {
+            return
+        }
+
+        do {
+            let url = URL(fileURLWithPath: authPath)
+            let dir = url.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(
+                at: dir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+
+            var merged: [String: AuthCredential] = [:]
+            if let data = try? Data(contentsOf: url) {
+                merged = try parseAuthData(data)
+            }
+            if let credential {
+                merged[provider] = credential
+            } else {
+                merged.removeValue(forKey: provider)
+            }
+
+            var json: [String: Any] = [:]
+            for (providerName, value) in merged {
+                switch value {
+                case .apiKey(let apiKey):
+                    json[providerName] = ["type": "api_key", "key": apiKey.key]
+                case .oauth(let oauth):
+                    var entry: [String: Any] = ["type": "oauth", "access": oauth.access]
+                    if let refresh = oauth.refresh { entry["refresh"] = refresh }
+                    if let expires = oauth.expires { entry["expires"] = expires }
+                    if let enterpriseUrl = oauth.enterpriseUrl { entry["enterpriseUrl"] = enterpriseUrl }
+                    if let projectId = oauth.projectId { entry["projectId"] = projectId }
+                    if let email = oauth.email { entry["email"] = email }
+                    if let accountId = oauth.accountId { entry["accountId"] = accountId }
+                    json[providerName] = entry
+                }
+            }
+
+            if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
+                try? data.write(to: url)
+                chmod(authPath, 0o600)
+            }
+        } catch {
+            state.withLock { state in
+                state.errors.append(error.localizedDescription)
+            }
+        }
+    }
+
+    private func parseAuthData(_ data: Data) throws -> [String: AuthCredential] {
+        let raw = try JSONSerialization.jsonObject(with: data)
+        guard let json = raw as? [String: Any] else {
+            throw NSError(domain: "AuthStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid auth storage format"])
+        }
+
+        var loaded: [String: AuthCredential] = [:]
+        for (provider, value) in json {
+            guard let dict = value as? [String: Any],
+                  let type = dict["type"] as? String else { continue }
+            if type == "api_key", let key = dict["key"] as? String {
+                loaded[provider] = .apiKey(ApiKeyCredential(key: key))
+            } else if type == "oauth" {
+                let access = (dict["access"] as? String) ?? (dict["accessToken"] as? String)
+                guard let access else { continue }
+                let refresh = (dict["refresh"] as? String) ?? (dict["refreshToken"] as? String)
+                let expires = (dict["expires"] as? Double) ?? (dict["expiresAt"] as? Double)
+                let enterpriseUrl = dict["enterpriseUrl"] as? String
+                let projectId = dict["projectId"] as? String
+                let email = dict["email"] as? String
+                let accountId = dict["accountId"] as? String
+                loaded[provider] = .oauth(OAuthCredential(
+                    access: access,
+                    refresh: refresh,
+                    expires: expires,
+                    enterpriseUrl: enterpriseUrl,
+                    projectId: projectId,
+                    email: email,
+                    accountId: accountId
+                ))
+            }
+        }
+        return loaded
     }
 
     private func refreshOAuthTokenWithLock(_ provider: OAuthProvider) async throws -> (apiKey: String, newCredentials: OAuthCredentials)? {

@@ -32,6 +32,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
             let cwd = FileManager.default.currentDirectoryPath
             let agentDir = getAgentDir()
             let settingsManager = SettingsManager.create(cwd, agentDir)
+            reportSettingsErrors(settingsManager, context: "config command")
             let packageManager = DefaultPackageManager(cwd: cwd, agentDir: agentDir, settingsManager: settingsManager)
             let resolvedPaths = try await packageManager.resolve()
             await selectConfig(
@@ -51,7 +52,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         time("parseArgs")
 
         let cwd = FileManager.default.currentDirectoryPath
-        let authStorage = AuthStorage(getAuthPath())
+        let authStorage = AuthStorage.create(getAuthPath())
         let modelRegistry = ModelRegistry(authStorage, getAgentDir())
         time("discoverModels")
 
@@ -84,6 +85,7 @@ struct PiCodingAgentCLI: AsyncParsableCommand {
         }
 
         let settingsManager = SettingsManager.create(cwd, getAgentDir())
+        reportSettingsErrors(settingsManager, context: "startup")
         time("SettingsManager.create")
         let themeName = settingsManager.getTheme()
         initTheme(themeName, enableWatcher: parsed.print != true && parsed.mode == nil)
@@ -587,6 +589,13 @@ Available Tools (default: read, bash, edit, write):
             i += 1
         }
         return result
+    }
+}
+
+private func reportSettingsErrors(_ settingsManager: SettingsManager, context: String) {
+    let errors = settingsManager.drainErrors()
+    for error in errors {
+        fputs("Warning (\(context), \(error.scope) settings): \(error.message)\n", stderr)
     }
 }
 

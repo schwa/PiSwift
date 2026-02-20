@@ -955,6 +955,8 @@ public final class DefaultPackageManager: PackageManager {
             prompts: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("prompts").path],
             themes: [URL(fileURLWithPath: standardProjectBaseDir).appendingPathComponent("themes").path]
         )
+        let userAgentsSkillsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".agents").appendingPathComponent("skills").path
+        let projectAgentsSkillDirs = collectAncestorAgentsSkillDirs(startDir: cwd)
 
         func addResources(
             resourceType: ResourceType,
@@ -978,7 +980,7 @@ public final class DefaultPackageManager: PackageManager {
         )
         addResources(
             resourceType: .skills,
-            paths: collectAutoSkillEntries(dir: userDirs.skills.first ?? ""),
+            paths: collectAutoSkillEntries(dir: userDirs.skills.first ?? "") + collectAutoSkillEntries(dir: userAgentsSkillsDir),
             metadata: userMetadata,
             overrides: userOverrides.skills,
             baseDir: standardGlobalBaseDir
@@ -1007,7 +1009,7 @@ public final class DefaultPackageManager: PackageManager {
         )
         addResources(
             resourceType: .skills,
-            paths: collectAutoSkillEntries(dir: projectDirs.skills.first ?? ""),
+            paths: collectAutoSkillEntries(dir: projectDirs.skills.first ?? "") + projectAgentsSkillDirs.flatMap { collectAutoSkillEntries(dir: $0) },
             metadata: projectMetadata,
             overrides: projectOverrides.skills,
             baseDir: standardProjectBaseDir
@@ -1696,6 +1698,38 @@ private func collectSkillEntries(
 
 private func collectAutoSkillEntries(dir: String) -> [String] {
     collectSkillEntries(dir: dir)
+}
+
+private func findGitRepoRoot(startDir: String) -> String? {
+    var dir = URL(fileURLWithPath: startDir).resolvingSymlinksInPath().path
+    while true {
+        if FileManager.default.fileExists(atPath: URL(fileURLWithPath: dir).appendingPathComponent(".git").path) {
+            return dir
+        }
+        let parent = URL(fileURLWithPath: dir).deletingLastPathComponent().path
+        if parent == dir {
+            return nil
+        }
+        dir = parent
+    }
+}
+
+private func collectAncestorAgentsSkillDirs(startDir: String) -> [String] {
+    var result: [String] = []
+    var dir = URL(fileURLWithPath: startDir).resolvingSymlinksInPath().path
+    let gitRoot = findGitRepoRoot(startDir: dir)
+    while true {
+        result.append(URL(fileURLWithPath: dir).appendingPathComponent(".agents").appendingPathComponent("skills").path)
+        if let gitRoot, dir == gitRoot {
+            break
+        }
+        let parent = URL(fileURLWithPath: dir).deletingLastPathComponent().path
+        if parent == dir {
+            break
+        }
+        dir = parent
+    }
+    return result
 }
 
 private func collectAutoPromptEntries(dir: String) -> [String] {

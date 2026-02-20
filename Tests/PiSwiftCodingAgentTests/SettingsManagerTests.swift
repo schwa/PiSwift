@@ -248,3 +248,102 @@ import PiSwiftAI
     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     #expect(json?["shellCommandPrefix"] as? String == "source ~/.bashrc")
 }
+
+@Test func settingsDrainErrorsIncludesGlobalAndProjectParseErrors() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-errors-\(UUID().uuidString)")
+        .path
+    let projectDir = URL(fileURLWithPath: tempDir).appendingPathComponent("project").path
+    let agentDir = URL(fileURLWithPath: tempDir).appendingPathComponent("agent").path
+    try? FileManager.default.createDirectory(atPath: projectDir, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let globalPath = URL(fileURLWithPath: agentDir).appendingPathComponent("settings.json").path
+    let projectPath = URL(fileURLWithPath: projectDir).appendingPathComponent(".pi").appendingPathComponent("settings.json").path
+    try? FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: projectPath).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "{invalid-global".write(toFile: globalPath, atomically: true, encoding: .utf8)
+    try "{invalid-project".write(toFile: projectPath, atomically: true, encoding: .utf8)
+
+    let manager = SettingsManager.create(projectDir, agentDir)
+    let errors = manager.drainErrors()
+    #expect(errors.count == 2)
+    #expect(Set(errors.map { $0.scope }) == Set(["global", "project"]))
+    #expect(manager.drainErrors().isEmpty)
+}
+
+@Test func settingsPreserveExternalProjectEditWhenChangingUnrelatedProjectField() async throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-project-preserve-\(UUID().uuidString)")
+        .path
+    let projectDir = URL(fileURLWithPath: tempDir).appendingPathComponent("project").path
+    let agentDir = URL(fileURLWithPath: tempDir).appendingPathComponent("agent").path
+    try? FileManager.default.createDirectory(atPath: projectDir, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let projectSettingsPath = URL(fileURLWithPath: projectDir).appendingPathComponent(".pi").appendingPathComponent("settings.json").path
+    try? FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: projectSettingsPath).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    let initial = """
+    {"extensions":["./old-extension.ts"],"prompts":["./old-prompt.md"]}
+    """
+    try initial.write(toFile: projectSettingsPath, atomically: true, encoding: .utf8)
+
+    let manager = SettingsManager.create(projectDir, agentDir)
+
+    let external = """
+    {"extensions":["./old-extension.ts"],"prompts":["./new-prompt.md"]}
+    """
+    try external.write(toFile: projectSettingsPath, atomically: true, encoding: .utf8)
+
+    manager.setProjectExtensionPaths(["./updated-extension.ts"])
+    await manager.flush()
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: projectSettingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["prompts"] as? [String] == ["./new-prompt.md"])
+    #expect(json?["extensions"] as? [String] == ["./updated-extension.ts"])
+}
+
+@Test func settingsProjectInMemoryChangeOverridesExternalChangeForSameField() async throws {
+    let tempDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pi-settings-project-override-\(UUID().uuidString)")
+        .path
+    let projectDir = URL(fileURLWithPath: tempDir).appendingPathComponent("project").path
+    let agentDir = URL(fileURLWithPath: tempDir).appendingPathComponent("agent").path
+    try? FileManager.default.createDirectory(atPath: projectDir, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(atPath: agentDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let projectSettingsPath = URL(fileURLWithPath: projectDir).appendingPathComponent(".pi").appendingPathComponent("settings.json").path
+    try? FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: projectSettingsPath).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try #"{"extensions":["./initial-extension.ts"]}"#.write(
+        toFile: projectSettingsPath,
+        atomically: true,
+        encoding: .utf8
+    )
+
+    let manager = SettingsManager.create(projectDir, agentDir)
+
+    try #"{"extensions":["./external-extension.ts"]}"#.write(
+        toFile: projectSettingsPath,
+        atomically: true,
+        encoding: .utf8
+    )
+
+    manager.setProjectExtensionPaths(["./in-memory-extension.ts"])
+    await manager.flush()
+
+    let data = try Data(contentsOf: URL(fileURLWithPath: projectSettingsPath))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["extensions"] as? [String] == ["./in-memory-extension.ts"])
+}

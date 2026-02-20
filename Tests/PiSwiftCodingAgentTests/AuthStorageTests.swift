@@ -362,3 +362,92 @@ private func writeAuthJson(_ path: String, data: [String: Any]) {
     let apiKey = await storage.getApiKey("anthropic")
     #expect(apiKey == "stored-key")
 }
+
+@Test func authStorageSetPreservesUnrelatedExternalEdits() async {
+    let tempDir = makeTempDir("auth-storage-preserve-set")
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+    defer { clearConfigValueCache() }
+
+    let authPath = URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path
+    writeAuthJson(authPath, data: [
+        "anthropic": ["type": "api_key", "key": "old-anthropic"],
+        "openai": ["type": "api_key", "key": "openai-key"],
+    ])
+
+    let storage = AuthStorage.create(authPath)
+    writeAuthJson(authPath, data: [
+        "anthropic": ["type": "api_key", "key": "old-anthropic"],
+        "openai": ["type": "api_key", "key": "openai-key"],
+        "google": ["type": "api_key", "key": "google-key"],
+    ])
+
+    storage.set("anthropic", credential: .apiKey(ApiKeyCredential(key: "new-anthropic")))
+    let data = try? Data(contentsOf: URL(fileURLWithPath: authPath))
+    let json = (try? JSONSerialization.jsonObject(with: data ?? Data())) as? [String: Any]
+    let anth = json?["anthropic"] as? [String: Any]
+    let openai = json?["openai"] as? [String: Any]
+    let google = json?["google"] as? [String: Any]
+    #expect(anth?["key"] as? String == "new-anthropic")
+    #expect(openai?["key"] as? String == "openai-key")
+    #expect(google?["key"] as? String == "google-key")
+}
+
+@Test func authStorageRemovePreservesUnrelatedExternalEdits() async {
+    let tempDir = makeTempDir("auth-storage-preserve-remove")
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+    defer { clearConfigValueCache() }
+
+    let authPath = URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path
+    writeAuthJson(authPath, data: [
+        "anthropic": ["type": "api_key", "key": "anthropic-key"],
+        "openai": ["type": "api_key", "key": "openai-key"],
+    ])
+
+    let storage = AuthStorage.create(authPath)
+    writeAuthJson(authPath, data: [
+        "anthropic": ["type": "api_key", "key": "anthropic-key"],
+        "openai": ["type": "api_key", "key": "openai-key"],
+        "google": ["type": "api_key", "key": "google-key"],
+    ])
+
+    storage.remove("anthropic")
+    let data = try? Data(contentsOf: URL(fileURLWithPath: authPath))
+    let json = (try? JSONSerialization.jsonObject(with: data ?? Data())) as? [String: Any]
+    #expect((json?["anthropic"] as? [String: Any]) == nil)
+    #expect((json?["openai"] as? [String: Any])?["key"] as? String == "openai-key")
+    #expect((json?["google"] as? [String: Any])?["key"] as? String == "google-key")
+}
+
+@Test func authStorageDoesNotOverwriteMalformedFileAfterReloadError() async throws {
+    let tempDir = makeTempDir("auth-storage-malformed")
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+    defer { clearConfigValueCache() }
+
+    let authPath = URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path
+    writeAuthJson(authPath, data: ["anthropic": ["type": "api_key", "key": "anthropic-key"]])
+    let storage = AuthStorage.create(authPath)
+
+    try "{invalid-json".write(toFile: authPath, atomically: true, encoding: .utf8)
+    storage.reload()
+    storage.set("openai", credential: .apiKey(ApiKeyCredential(key: "openai-key")))
+
+    let raw = try String(contentsOfFile: authPath, encoding: .utf8)
+    #expect(raw == "{invalid-json")
+}
+
+@Test func authStorageDrainErrorsClearsAfterRead() async throws {
+    let tempDir = makeTempDir("auth-storage-errors")
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+    defer { clearConfigValueCache() }
+
+    let authPath = URL(fileURLWithPath: tempDir).appendingPathComponent("auth.json").path
+    writeAuthJson(authPath, data: ["anthropic": ["type": "api_key", "key": "anthropic-key"]])
+    let storage = AuthStorage.create(authPath)
+
+    try "{invalid-json".write(toFile: authPath, atomically: true, encoding: .utf8)
+    storage.reload()
+    let first = storage.drainErrors()
+    #expect(!first.isEmpty)
+    let second = storage.drainErrors()
+    #expect(second.isEmpty)
+}

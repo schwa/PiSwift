@@ -125,16 +125,31 @@ public struct Settings: Sendable {
     public init() {}
 }
 
+public struct SettingsError: Sendable {
+    public var scope: String
+    public var message: String
+
+    public init(scope: String, message: String) {
+        self.scope = scope
+        self.message = message
+    }
+}
+
 public final class SettingsManager: Sendable {
     private struct State: Sendable {
         var settingsPath: String?
         var projectSettingsPath: String?
         var globalSettings: Settings
+        var projectSettings: Settings
         var settings: Settings
         var inMemoryProjectSettings: Settings
         var modifiedFields: Set<String>
         var modifiedNestedFields: [String: Set<String>]
+        var modifiedProjectFields: Set<String>
+        var modifiedProjectNestedFields: [String: Set<String>]
         var globalSettingsLoadError: String?
+        var projectSettingsLoadError: String?
+        var errors: [SettingsError]
     }
 
     private let state: LockedState<State>
@@ -175,45 +190,101 @@ public final class SettingsManager: Sendable {
         set { state.withLock { $0.modifiedNestedFields = newValue } }
     }
 
+    private var modifiedProjectFields: Set<String> {
+        get { state.withLock { $0.modifiedProjectFields } }
+        set { state.withLock { $0.modifiedProjectFields = newValue } }
+    }
+
+    private var modifiedProjectNestedFields: [String: Set<String>] {
+        get { state.withLock { $0.modifiedProjectNestedFields } }
+        set { state.withLock { $0.modifiedProjectNestedFields = newValue } }
+    }
+
     private var globalSettingsLoadError: String? {
         get { state.withLock { $0.globalSettingsLoadError } }
         set { state.withLock { $0.globalSettingsLoadError = newValue } }
     }
 
-    private init(settingsPath: String?, projectSettingsPath: String?, initial: Settings, persist: Bool, loadError: String? = nil) {
+    private var projectSettingsLoadError: String? {
+        get { state.withLock { $0.projectSettingsLoadError } }
+        set { state.withLock { $0.projectSettingsLoadError = newValue } }
+    }
+
+    private var errors: [SettingsError] {
+        get { state.withLock { $0.errors } }
+        set { state.withLock { $0.errors = newValue } }
+    }
+
+    private var projectSettings: Settings {
+        get { state.withLock { $0.projectSettings } }
+        set { state.withLock { $0.projectSettings = newValue } }
+    }
+
+    private init(
+        settingsPath: String?,
+        projectSettingsPath: String?,
+        initial: Settings,
+        initialProject: Settings,
+        persist: Bool,
+        loadError: String? = nil,
+        projectLoadError: String? = nil,
+        initialErrors: [SettingsError] = []
+    ) {
         self.persist = persist
         self.state = LockedState(State(
             settingsPath: settingsPath,
             projectSettingsPath: projectSettingsPath,
             globalSettings: initial,
+            projectSettings: initialProject,
             settings: initial,
             inMemoryProjectSettings: Settings(),
             modifiedFields: Set<String>(),
             modifiedNestedFields: [:],
-            globalSettingsLoadError: loadError
+            modifiedProjectFields: Set<String>(),
+            modifiedProjectNestedFields: [:],
+            globalSettingsLoadError: loadError,
+            projectSettingsLoadError: projectLoadError,
+            errors: initialErrors
         ))
-        let projectSettings = loadProjectSettings()
-        self.settings = mergeSettings(globalSettings, projectSettings)
+        self.settings = mergeSettings(globalSettings, initialProject)
     }
 
     public static func create(_ cwd: String = FileManager.default.currentDirectoryPath, _ agentDir: String = getAgentDir()) -> SettingsManager {
         let settingsPath = URL(fileURLWithPath: agentDir).appendingPathComponent("settings.json").path
         let projectSettingsPath = URL(fileURLWithPath: cwd).appendingPathComponent(CONFIG_DIR_NAME).appendingPathComponent("settings.json").path
         var loadError: String?
+        var projectLoadError: String?
+        var errors: [SettingsError] = []
         let globalSettings: Settings
         do {
             globalSettings = try loadFromFile(settingsPath)
         } catch {
             loadError = error.localizedDescription
-            print("Warning: Invalid JSON in \(settingsPath): \(error.localizedDescription)")
-            print("Fix the syntax error to enable settings persistence.")
+            errors.append(SettingsError(scope: "global", message: error.localizedDescription))
             globalSettings = Settings()
         }
-        return SettingsManager(settingsPath: settingsPath, projectSettingsPath: projectSettingsPath, initial: globalSettings, persist: true, loadError: loadError)
+        let projectSettings: Settings
+        do {
+            projectSettings = try loadFromFile(projectSettingsPath)
+        } catch {
+            projectLoadError = error.localizedDescription
+            errors.append(SettingsError(scope: "project", message: error.localizedDescription))
+            projectSettings = Settings()
+        }
+        return SettingsManager(
+            settingsPath: settingsPath,
+            projectSettingsPath: projectSettingsPath,
+            initial: globalSettings,
+            initialProject: projectSettings,
+            persist: true,
+            loadError: loadError,
+            projectLoadError: projectLoadError,
+            initialErrors: errors
+        )
     }
 
     public static func inMemory(_ settings: Settings = Settings()) -> SettingsManager {
-        SettingsManager(settingsPath: nil, projectSettingsPath: nil, initial: settings, persist: false)
+        SettingsManager(settingsPath: nil, projectSettingsPath: nil, initial: settings, initialProject: Settings(), persist: false)
     }
 
     public func applyOverrides(_ overrides: Settings) {
@@ -231,12 +302,23 @@ public final class SettingsManager: Sendable {
         }
     }
 
+    private func markProjectModified(_ field: String, _ nestedKey: String? = nil) {
+        state.withLock { state in
+            state.modifiedProjectFields.insert(field)
+            if let nestedKey {
+                var nested = state.modifiedProjectNestedFields[field] ?? Set<String>()
+                nested.insert(nestedKey)
+                state.modifiedProjectNestedFields[field] = nested
+            }
+        }
+    }
+
     public func getGlobalSettings() -> Settings {
         globalSettings
     }
 
     public func getProjectSettings() -> Settings {
-        loadProjectSettings()
+        projectSettings
     }
 
     public func getLastChangelogVersion() -> String? {
@@ -458,10 +540,10 @@ public final class SettingsManager: Sendable {
     }
 
     public func setProjectPackages(_ packages: [PackageSource]) {
-        var projectSettings = loadProjectSettings()
+        var projectSettings = self.projectSettings
         projectSettings.packages = packages
+        markProjectModified("packages")
         saveProjectSettings(projectSettings)
-        settings = mergeSettings(globalSettings, projectSettings)
     }
 
     public func getExtensionPaths() -> [String] {
@@ -475,10 +557,10 @@ public final class SettingsManager: Sendable {
     }
 
     public func setProjectExtensionPaths(_ paths: [String]) {
-        var projectSettings = loadProjectSettings()
+        var projectSettings = self.projectSettings
         projectSettings.extensions = paths
+        markProjectModified("extensions")
         saveProjectSettings(projectSettings)
-        settings = mergeSettings(globalSettings, projectSettings)
     }
 
     public func getSkillPaths() -> [String] {
@@ -492,10 +574,10 @@ public final class SettingsManager: Sendable {
     }
 
     public func setProjectSkillPaths(_ paths: [String]) {
-        var projectSettings = loadProjectSettings()
+        var projectSettings = self.projectSettings
         projectSettings.skillPaths = paths
+        markProjectModified("skills")
         saveProjectSettings(projectSettings)
-        settings = mergeSettings(globalSettings, projectSettings)
     }
 
     public func getPromptTemplatePaths() -> [String] {
@@ -509,10 +591,10 @@ public final class SettingsManager: Sendable {
     }
 
     public func setProjectPromptTemplatePaths(_ paths: [String]) {
-        var projectSettings = loadProjectSettings()
+        var projectSettings = self.projectSettings
         projectSettings.prompts = paths
+        markProjectModified("prompts")
         saveProjectSettings(projectSettings)
-        settings = mergeSettings(globalSettings, projectSettings)
     }
 
     public func getThemePaths() -> [String] {
@@ -526,10 +608,10 @@ public final class SettingsManager: Sendable {
     }
 
     public func setProjectThemePaths(_ paths: [String]) {
-        var projectSettings = loadProjectSettings()
+        var projectSettings = self.projectSettings
         projectSettings.themes = paths
+        markProjectModified("themes")
         saveProjectSettings(projectSettings)
-        settings = mergeSettings(globalSettings, projectSettings)
     }
 
     public func getSkillsSettings() -> SkillsSettings {
@@ -673,7 +755,7 @@ public final class SettingsManager: Sendable {
             }
             return SettingsManager.decodeSettings(dict)
         } catch {
-            print("Warning: Could not read project settings file: \(error.localizedDescription)")
+            errors.append(SettingsError(scope: "project", message: error.localizedDescription))
             return Settings()
         }
     }
@@ -681,100 +763,55 @@ public final class SettingsManager: Sendable {
     private func saveProjectSettings(_ settings: Settings) {
         if !persist {
             inMemoryProjectSettings = settings
+            projectSettings = settings
+            self.settings = mergeSettings(globalSettings, settings)
+            return
+        }
+        if projectSettingsLoadError != nil {
+            projectSettings = settings
+            self.settings = mergeSettings(globalSettings, settings)
             return
         }
         guard let projectPath = projectSettingsPath else { return }
         let dir = URL(fileURLWithPath: projectPath).deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            let currentJson = try SettingsManager.loadRawJson(projectPath)
+            let encoded = encodeSettingsToJson(settings)
+            var merged = currentJson
 
-        var json: [String: Any] = [:]
-        json["lastChangelogVersion"] = settings.lastChangelogVersion
-        json["defaultProvider"] = settings.defaultProvider
-        json["defaultModel"] = settings.defaultModel
-        json["defaultThinkingLevel"] = settings.defaultThinkingLevel
-        json["transport"] = settings.transport?.rawValue
-        json["steeringMode"] = settings.steeringMode
-        json["followUpMode"] = settings.followUpMode
-        json["theme"] = settings.theme
-        json["hideThinkingBlock"] = settings.hideThinkingBlock
-        json["shellPath"] = settings.shellPath
-        json["shellCommandPrefix"] = settings.shellCommandPrefix
-        json["quietStartup"] = settings.quietStartup
-        json["collapseChangelog"] = settings.collapseChangelog
-        if let packages = settings.packages {
-            json["packages"] = encodePackageSources(packages)
-        }
-        json["extensions"] = settings.extensions
-        if let skillPaths = settings.skillPaths {
-            json["skills"] = skillPaths
-        }
-        json["prompts"] = settings.prompts
-        json["themes"] = settings.themes
-        json["enableSkillCommands"] = settings.enableSkillCommands
-        json["hooks"] = settings.hooks
-        json["customTools"] = settings.customTools
-        json["enabledModels"] = settings.enabledModels
-        json["doubleEscapeAction"] = settings.doubleEscapeAction
-        json["autocompleteMaxVisible"] = settings.autocompleteMaxVisible
+            for field in modifiedProjectFields {
+                if let nestedKeys = modifiedProjectNestedFields[field] {
+                    let baseNested = merged[field] as? [String: Any] ?? [:]
+                    let nextNested = encoded[field] as? [String: Any] ?? [:]
+                    var updated = baseNested
+                    for nestedKey in nestedKeys {
+                        if let value = nextNested[nestedKey] {
+                            updated[nestedKey] = value
+                        } else {
+                            updated.removeValue(forKey: nestedKey)
+                        }
+                    }
+                    if updated.isEmpty {
+                        merged.removeValue(forKey: field)
+                    } else {
+                        merged[field] = updated
+                    }
+                } else if encoded.keys.contains(field) {
+                    merged[field] = encoded[field]
+                } else {
+                    merged.removeValue(forKey: field)
+                }
+            }
 
-        if let compaction = settings.compaction {
-            json["compaction"] = [
-                "enabled": compaction.enabled as Any,
-                "reserveTokens": compaction.reserveTokens as Any,
-                "keepRecentTokens": compaction.keepRecentTokens as Any,
-            ]
+            projectSettings = SettingsManager.decodeSettings(merged)
+            if let data = try? JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted]) {
+                try? data.write(to: URL(fileURLWithPath: projectPath))
+            }
+        } catch {
+            errors.append(SettingsError(scope: "project", message: error.localizedDescription))
         }
-
-        if let branch = settings.branchSummary {
-            json["branchSummary"] = ["reserveTokens": branch.reserveTokens as Any]
-        }
-
-        if let retry = settings.retry {
-            json["retry"] = [
-                "enabled": retry.enabled as Any,
-                "maxRetries": retry.maxRetries as Any,
-                "baseDelayMs": retry.baseDelayMs as Any,
-            ]
-        }
-
-        if settings.skillPaths == nil, let skills = settings.skills {
-            json["skills"] = [
-                "enabled": skills.enabled as Any,
-                "enableCodexUser": skills.enableCodexUser as Any,
-                "enableClaudeUser": skills.enableClaudeUser as Any,
-                "enableClaudeProject": skills.enableClaudeProject as Any,
-                "enablePiUser": skills.enablePiUser as Any,
-                "enablePiProject": skills.enablePiProject as Any,
-                "enableSkillCommands": skills.enableSkillCommands as Any,
-                "customDirectories": skills.customDirectories as Any,
-                "ignoredSkills": skills.ignoredSkills as Any,
-                "includeSkills": skills.includeSkills as Any,
-            ]
-        }
-
-        if let terminal = settings.terminal {
-            json["terminal"] = ["showImages": terminal.showImages as Any]
-        }
-
-        if let images = settings.images {
-            json["images"] = [
-                "autoResize": images.autoResize as Any,
-                "blockImages": images.blockImages as Any,
-            ]
-        }
-
-        if let budgets = settings.thinkingBudgets {
-            json["thinkingBudgets"] = [
-                "minimal": budgets.minimal as Any,
-                "low": budgets.low as Any,
-                "medium": budgets.medium as Any,
-                "high": budgets.high as Any,
-            ]
-        }
-
-        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
-            try? data.write(to: URL(fileURLWithPath: projectPath))
-        }
+        self.settings = mergeSettings(globalSettings, projectSettings)
     }
 
     private static func decodeSettings(_ json: [String: Any]) -> Settings {
@@ -902,7 +939,6 @@ public final class SettingsManager: Sendable {
     private func save() {
         if persist, let settingsPath {
             if globalSettingsLoadError != nil {
-                let projectSettings = loadProjectSettings()
                 settings = mergeSettings(globalSettings, projectSettings)
                 return
             }
@@ -946,13 +982,19 @@ public final class SettingsManager: Sendable {
                     try? data.write(to: URL(fileURLWithPath: settingsPath))
                 }
             } catch {
-                print("Warning: Could not save settings file: \(error.localizedDescription)")
+                errors.append(SettingsError(scope: "global", message: error.localizedDescription))
             }
         }
-
-        let projectSettings = loadProjectSettings()
         settings = mergeSettings(globalSettings, projectSettings)
     }
+
+    public func drainErrors() -> [SettingsError] {
+        let drained = errors
+        errors = []
+        return drained
+    }
+
+    public func flush() async {}
 
     private func encodeSettingsToJson(_ settings: Settings) -> [String: Any] {
         var json: [String: Any] = [:]

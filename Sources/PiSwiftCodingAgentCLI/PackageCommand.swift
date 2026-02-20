@@ -90,6 +90,9 @@ func handlePackageCommand(_ args: [String]) async -> Bool {
     let cwd = FileManager.default.currentDirectoryPath
     let agentDir = getAgentDir()
     let settingsManager = SettingsManager.create(cwd, agentDir)
+    for error in settingsManager.drainErrors() {
+        fputs("Warning (package command, \(error.scope) settings): \(error.message)\n", stderr)
+    }
     let packageManager = DefaultPackageManager(cwd: cwd, agentDir: agentDir, settingsManager: settingsManager)
 
     packageManager.setProgressCallback { event in

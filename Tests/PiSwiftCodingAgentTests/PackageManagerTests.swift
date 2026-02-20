@@ -179,6 +179,78 @@ private final class EventCollector: @unchecked Sendable {
     #expect(result.themes.contains { $0.path.hasSuffix("dark.json") && $0.enabled })
 }
 
+@Test func autoDiscoveryScansAncestorAgentsSkillsUpToGitRoot() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let repoRoot = URL(fileURLWithPath: fixture.tempDir).appendingPathComponent("repo").path
+    let nestedCwd = URL(fileURLWithPath: repoRoot).appendingPathComponent("packages").appendingPathComponent("feature").path
+    try FileManager.default.createDirectory(atPath: nestedCwd, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(atPath: URL(fileURLWithPath: repoRoot).appendingPathComponent(".git").path, withIntermediateDirectories: true)
+
+    let aboveRepoSkill = URL(fileURLWithPath: fixture.tempDir)
+        .appendingPathComponent(".agents").appendingPathComponent("skills").appendingPathComponent("above-repo").appendingPathComponent("SKILL.md").path
+    try FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: aboveRepoSkill).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "---\nname: above-repo\ndescription: above\n---\n".write(toFile: aboveRepoSkill, atomically: true, encoding: .utf8)
+
+    let repoRootSkill = URL(fileURLWithPath: repoRoot)
+        .appendingPathComponent(".agents").appendingPathComponent("skills").appendingPathComponent("repo-root").appendingPathComponent("SKILL.md").path
+    try FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: repoRootSkill).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "---\nname: repo-root\ndescription: repo\n---\n".write(toFile: repoRootSkill, atomically: true, encoding: .utf8)
+
+    let nestedSkill = URL(fileURLWithPath: repoRoot)
+        .appendingPathComponent("packages").appendingPathComponent(".agents").appendingPathComponent("skills").appendingPathComponent("nested").appendingPathComponent("SKILL.md").path
+    try FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: nestedSkill).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "---\nname: nested\ndescription: nested\n---\n".write(toFile: nestedSkill, atomically: true, encoding: .utf8)
+
+    let manager = DefaultPackageManager(cwd: nestedCwd, agentDir: fixture.agentDir, settingsManager: fixture.settingsManager)
+    let result = try await manager.resolve()
+
+    let repoRootSkillResolved = URL(fileURLWithPath: repoRootSkill).resolvingSymlinksInPath().path
+    let nestedSkillResolved = URL(fileURLWithPath: nestedSkill).resolvingSymlinksInPath().path
+    let aboveRepoSkillResolved = URL(fileURLWithPath: aboveRepoSkill).resolvingSymlinksInPath().path
+    #expect(result.skills.contains { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == repoRootSkillResolved && $0.enabled })
+    #expect(result.skills.contains { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == nestedSkillResolved && $0.enabled })
+    #expect(!result.skills.contains { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == aboveRepoSkillResolved })
+}
+
+@Test func autoDiscoveryScansAncestorAgentsSkillsWithoutGitRepo() async throws {
+    let fixture = try PackageManagerTestFixture()
+    let nonRepoRoot = URL(fileURLWithPath: fixture.tempDir).appendingPathComponent("non-repo").path
+    let nestedCwd = URL(fileURLWithPath: nonRepoRoot).appendingPathComponent("a").appendingPathComponent("b").path
+    try FileManager.default.createDirectory(atPath: nestedCwd, withIntermediateDirectories: true)
+
+    let rootSkill = URL(fileURLWithPath: nonRepoRoot)
+        .appendingPathComponent(".agents").appendingPathComponent("skills").appendingPathComponent("root").appendingPathComponent("SKILL.md").path
+    try FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: rootSkill).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "---\nname: root\ndescription: root\n---\n".write(toFile: rootSkill, atomically: true, encoding: .utf8)
+
+    let middleSkill = URL(fileURLWithPath: nonRepoRoot)
+        .appendingPathComponent("a").appendingPathComponent(".agents").appendingPathComponent("skills").appendingPathComponent("middle").appendingPathComponent("SKILL.md").path
+    try FileManager.default.createDirectory(
+        atPath: URL(fileURLWithPath: middleSkill).deletingLastPathComponent().path,
+        withIntermediateDirectories: true
+    )
+    try "---\nname: middle\ndescription: middle\n---\n".write(toFile: middleSkill, atomically: true, encoding: .utf8)
+
+    let manager = DefaultPackageManager(cwd: nestedCwd, agentDir: fixture.agentDir, settingsManager: fixture.settingsManager)
+    let result = try await manager.resolve()
+    let rootSkillResolved = URL(fileURLWithPath: rootSkill).resolvingSymlinksInPath().path
+    let middleSkillResolved = URL(fileURLWithPath: middleSkill).resolvingSymlinksInPath().path
+    #expect(result.skills.contains { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == rootSkillResolved && $0.enabled })
+    #expect(result.skills.contains { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == middleSkillResolved && $0.enabled })
+}
+
 // MARK: - progress callback tests
 
 @Test func progressCallbackEmitsEvents() async throws {

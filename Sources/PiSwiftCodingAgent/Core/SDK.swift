@@ -214,7 +214,7 @@ package func selectDefaultModel(available: [Model], registry: ModelRegistry) asy
 }
 
 public func discoverAuthStorage(agentDir: String = getAgentDir()) -> AuthStorage {
-    AuthStorage((agentDir as NSString).appendingPathComponent("auth.json"))
+    AuthStorage.create((agentDir as NSString).appendingPathComponent("auth.json"))
 }
 
 public func discoverModels(authStorage: AuthStorage, agentDir: String = getAgentDir()) -> ModelRegistry {
