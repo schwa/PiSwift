@@ -114,7 +114,8 @@ public func streamAnthropic(
                 isOAuthToken: isOAuthToken,
                 extraHeaders: mergedHeaders,
                 baseUrl: model.baseUrl,
-                metadataUserId: extractAnthropicMetadataUserId(options.metadata)
+                metadataUserId: extractAnthropicMetadataUserId(options.metadata),
+                apiKey: apiKey
             )
             let service = AnthropicServiceFactory.service(
                 apiKey: apiKey,
@@ -534,8 +535,7 @@ func anthropicCacheTtl(baseUrl: String) -> String? {
     guard baseUrl.contains("api.anthropic.com") else { return nil }
     return "1h"
 }
-
-private func buildAnthropicHttpClient(
+private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String: String], baseUrl: String, apiKey: String?) -> HTTPClient {
     isOAuthToken: Bool,
     extraHeaders: [String: String],
     baseUrl: String,
@@ -556,6 +556,8 @@ private func buildAnthropicHttpClient(
         extraHeaders: merged,
         cacheTtl: cacheTtl,
         metadataUserId: metadataUserId
+        isOAuthToken: isOAuthToken,
+        oauthApiKey: isOAuthToken ? apiKey : nil
     )
 }
 
@@ -573,7 +575,9 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
     let base: HTTPClient
     let extraHeaders: [String: String]
     let cacheTtl: String?
+    let isOAuthToken: Bool
     let metadataUserId: String?
+    let oauthApiKey: String?
 
     func data(for request: HTTPRequest) async throws -> (Data, HTTPResponse) {
         let updated = injectingHeaders(request)
@@ -613,6 +617,13 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
         }
 
         guard let url, let method, var headers else { return request }
+        
+        // For OAuth tokens, replace x-api-key with Authorization: Bearer
+        if isOAuthToken, let apiKey = oauthApiKey {
+            headers.removeValue(forKey: "x-api-key")
+            headers["Authorization"] = "Bearer \(apiKey)"
+        }
+        
         for (key, value) in extraHeaders where headers[key] == nil {
             headers[key] = value
         }
