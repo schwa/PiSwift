@@ -58,7 +58,7 @@ let package = Package(
         .package(url: "https://github.com/MacPaw/OpenAI.git", branch: "main"),
         .package(url: "https://github.com/jamesrochabrun/SwiftAnthropic.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
-        .package(path: "../MiniTui"),
+        .package(url: "https://github.com/xibbon/MiniTUI.git", branch: "main"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.

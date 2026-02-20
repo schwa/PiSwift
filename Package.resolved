@@ -11,6 +11,15 @@
       }
     },
     {
+      "identity" : "minitui",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xibbon/MiniTUI.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "c77e993d1161cff68cfd3c17f3557e0e80ca2d47"
+      }
+    },
+    {
       "identity" : "openai",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/MacPaw/OpenAI.git",
