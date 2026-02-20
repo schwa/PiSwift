@@ -290,6 +290,7 @@ private func vertexStreamUrl(model: Model, project: String, location: String) th
 }
 
 private func runCommandCapture(_ command: String, _ args: [String]) -> String? {
+    #if os(macOS)
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [command] + args
@@ -309,6 +310,10 @@ private func runCommandCapture(_ command: String, _ args: [String]) -> String? {
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     return output?.isEmpty == false ? output : nil
+    #else
+    // Process execution is not available on iOS/tvOS/watchOS
+    return nil
+    #endif
 }
 
 private enum GoogleVertexError: LocalizedError {

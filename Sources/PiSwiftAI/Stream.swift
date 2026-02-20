@@ -113,10 +113,15 @@ private func hasGoogleVertexCredentials(env: [String: String]) -> Bool {
         return true
     }
 
+    #if os(macOS)
     let defaultPath = fileManager.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/gcloud/application_default_credentials.json")
         .path
     return fileManager.fileExists(atPath: defaultPath)
+    #else
+    // Google Cloud default credentials file is not accessible on iOS/tvOS/watchOS
+    return false
+    #endif
 }
 
 public func stream(model: Model, context: Context, options: StreamOptions? = nil) throws -> AssistantMessageEventStream {

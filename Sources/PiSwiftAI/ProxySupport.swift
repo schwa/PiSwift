@@ -21,6 +21,7 @@ func proxySession(for url: URL?) -> URLSession {
 }
 
 private func buildProxyConfig(env: [String: String]) -> [AnyHashable: Any]? {
+    #if os(macOS)
     let allProxy = env["ALL_PROXY"] ?? env["all_proxy"]
     let httpProxy = env["HTTP_PROXY"] ?? env["http_proxy"] ?? allProxy
     let httpsProxy = env["HTTPS_PROXY"] ?? env["https_proxy"] ?? httpProxy ?? allProxy
@@ -38,6 +39,10 @@ private func buildProxyConfig(env: [String: String]) -> [AnyHashable: Any]? {
         config[kCFNetworkProxiesHTTPSPort as String] = parsed.port
     }
     return config.isEmpty ? nil : config
+    #else
+    // Proxy configuration via environment variables is not supported on iOS/tvOS/watchOS
+    return nil
+    #endif
 }
 
 private func parseProxy(_ value: String) -> (host: String, port: Int)? {
