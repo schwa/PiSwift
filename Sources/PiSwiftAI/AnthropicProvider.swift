@@ -535,11 +535,13 @@ func anthropicCacheTtl(baseUrl: String) -> String? {
     guard baseUrl.contains("api.anthropic.com") else { return nil }
     return "1h"
 }
-private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String: String], baseUrl: String, apiKey: String?) -> HTTPClient {
+
+private func buildAnthropicHttpClient(
     isOAuthToken: Bool,
     extraHeaders: [String: String],
     baseUrl: String,
-    metadataUserId: String?
+    metadataUserId: String?,
+    apiKey: String?
 ) -> HTTPClient {
     var merged = extraHeaders
     if isOAuthToken {
@@ -555,7 +557,7 @@ private func buildAnthropicHttpClient(isOAuthToken: Bool, extraHeaders: [String:
         base: HTTPClientFactory.createDefault(),
         extraHeaders: merged,
         cacheTtl: cacheTtl,
-        metadataUserId: metadataUserId
+        metadataUserId: metadataUserId,
         isOAuthToken: isOAuthToken,
         oauthApiKey: isOAuthToken ? apiKey : nil
     )
@@ -575,8 +577,8 @@ private struct AnthropicHeaderInjectingHTTPClient: HTTPClient {
     let base: HTTPClient
     let extraHeaders: [String: String]
     let cacheTtl: String?
-    let isOAuthToken: Bool
     let metadataUserId: String?
+    let isOAuthToken: Bool
     let oauthApiKey: String?
 
     func data(for request: HTTPRequest) async throws -> (Data, HTTPResponse) {

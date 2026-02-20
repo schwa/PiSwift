@@ -1,5 +1,5 @@
 {
-  "originHash" : "f7438ec27b578922f5969368e6a93a7cf9d82dc3cb6b5cb8fc244ac00cfbe56b",
+  "originHash" : "d1f10979d9e6dd38b289e27136f3f3337559caffaa2c3d5c9876fc44ab9b6245",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "5dd84c7bb48b348751d7bbe7ba94a17bafdcef37",
         "version" : "1.30.2"
+      }
+    },
+    {
+      "identity" : "minitui",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xibbon/MiniTUI",
+      "state" : {
+        "branch" : "main",
+        "revision" : "e0b3894cb07f75cf7701d93428d479d43feec937"
       }
     },
     {
