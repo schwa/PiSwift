@@ -1,5 +1,6 @@
 import Foundation
 
+#if os(macOS)
 /// Result from loading a single extension.
 public struct LoadExtensionResult: Sendable {
     public let hook: LoadedHook?
@@ -212,3 +213,4 @@ public func discoverAndLoadExtensions(
 
     return await loadExtensions(allPaths, cwd: cwd, eventBus: eventBus, cacheDir: cacheDir, sdkPaths: sdkPaths)
 }
+#endif

@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 
+#if os(macOS)
 /// Compiles `.swift` extension files and SPM package directories into loadable dylibs.
 public struct ExtensionCompiler {
 
@@ -223,3 +224,4 @@ public struct ExtensionCompiler {
         return nil
     }
 }
+#endif

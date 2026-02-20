@@ -533,6 +533,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
     }
 
     // Load extensions (plain .swift files) and merge into hooks
+    #if os(macOS)
     let extensionPaths = settingsManager.getExtensionPaths() + (options.additionalExtensionPaths ?? [])
     let extensionResult = await discoverAndLoadExtensions(extensionPaths, cwd, agentDir, eventBus)
     time("discoverAndLoadExtensions")
@@ -540,6 +541,7 @@ public func createAgentSession(_ options: CreateAgentSessionOptions = CreateAgen
         writeStderr("Failed to load extension: \(error.localizedDescription)\n")
     }
     allLoadedHooks += extensionResult.hooks
+    #endif
 
     var hookRunner: HookRunner? = nil
     if !allLoadedHooks.isEmpty {

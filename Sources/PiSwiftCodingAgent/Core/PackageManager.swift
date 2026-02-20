@@ -1342,6 +1342,7 @@ public final class DefaultPackageManager: PackageManager {
     }
 
     private func runCommandSync(_ command: String, _ args: [String]) -> String {
+        #if os(macOS)
         let process = Process()
         if command.contains("/") {
             process.executableURL = URL(fileURLWithPath: command)
@@ -1361,6 +1362,10 @@ public final class DefaultPackageManager: PackageManager {
         process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return String(decoding: data, as: UTF8.self)
+        #else
+        // Process execution is not available on iOS/tvOS/watchOS
+        return ""
+        #endif
     }
 
     private func sha256(_ input: String) -> String {

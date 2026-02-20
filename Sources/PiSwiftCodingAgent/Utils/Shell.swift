@@ -134,7 +134,7 @@ private func findBashOnPath() -> String? {
     }
     return nil
 }
-#else
+#elseif os(macOS)
 private func findBashOnPath() -> String? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -157,6 +157,11 @@ private func findBashOnPath() -> String? {
         let path = String(match)
         return path.isEmpty ? nil : path
     }
+    return nil
+}
+#else
+private func findBashOnPath() -> String? {
+    // Process is not available on iOS/tvOS/watchOS
     return nil
 }
 #endif
@@ -191,9 +196,10 @@ public func killProcessTree(_ pid: pid_t) {
     process.standardOutput = Pipe()
     process.standardError = Pipe()
     try? process.run()
-    #else
+    #elseif os(macOS)
     if kill(-pid, SIGKILL) != 0 {
         _ = kill(pid, SIGKILL)
     }
     #endif
+    // No-op on iOS/tvOS/watchOS - process management not available
 }

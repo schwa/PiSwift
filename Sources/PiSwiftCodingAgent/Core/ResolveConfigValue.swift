@@ -30,6 +30,7 @@ public func resolveHeaders(_ headers: [String: String]?) -> [String: String]? {
 }
 
 private func executeCommand(_ commandConfig: String) -> String? {
+    #if os(macOS)
     if let cached = commandResultCache.withLock({ $0[commandConfig] }) {
         return cached
     }
@@ -69,4 +70,8 @@ private func executeCommand(_ commandConfig: String) -> String? {
 
     commandResultCache.withLock { $0[commandConfig] = result }
     return result
+    #else
+    // Command execution is not available on iOS/tvOS/watchOS
+    return nil
+    #endif
 }
